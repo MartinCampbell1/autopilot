@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import subprocess
+import sys
 import time
 import webbrowser
 
@@ -21,7 +22,7 @@ def dashboard(
 
     try:
         process = subprocess.Popen(
-            ["uvicorn", "autopilot.api.main:app", "--port", str(port), "--host", "0.0.0.0"],
+            [sys.executable, "-m", "uvicorn", "autopilot.api.main:app", "--port", str(port), "--host", "0.0.0.0"],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
