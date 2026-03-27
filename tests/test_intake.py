@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from autopilot.core.intake import IntakeSession, run_intake_turn, save_prd
+from autopilot.core.intake import IntakeSession, generate_prd_from_spec, run_intake_turn, save_prd
 
 
 class TestIntake:
@@ -78,3 +78,29 @@ class TestIntake:
         )
 
         assert response == "Not inside a trusted directory"
+
+    @patch("autopilot.core.intake.subprocess.run")
+    def test_generate_prd_from_spec_uses_existing_json(self, mock_run: MagicMock) -> None:
+        prd = {
+            "title": "Bug Tracker",
+            "description": "Track bugs",
+            "stories": [{"id": 1, "title": "Create project", "description": "Init", "status": "open"}],
+        }
+
+        parsed = generate_prd_from_spec(json.dumps(prd), provider="codex", env={"PATH": "/usr/bin"})
+
+        assert parsed["title"] == "Bug Tracker"
+        mock_run.assert_not_called()
+
+    @patch("autopilot.core.intake.subprocess.run")
+    def test_generate_prd_from_spec_parses_model_json(self, mock_run: MagicMock) -> None:
+        prd = {
+            "title": "Spec Import",
+            "description": "Convert spec",
+            "stories": [{"id": 1, "title": "Plan", "description": "Plan it", "status": "open"}],
+        }
+        mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps(prd), stderr="")
+
+        parsed = generate_prd_from_spec("A markdown spec", provider="codex", env={"PATH": "/usr/bin"})
+
+        assert parsed["title"] == "Spec Import"

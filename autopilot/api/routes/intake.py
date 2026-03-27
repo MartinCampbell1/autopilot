@@ -8,7 +8,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from autopilot.api.deps import get_account_manager
-from autopilot.core.intake import IntakeSession, run_intake_turn
+from autopilot.core.intake import IntakeSession, generate_prd_from_spec, run_intake_turn
 
 router = APIRouter()
 
@@ -25,6 +25,14 @@ class ChatResponse(BaseModel):
     response: str
     prd_ready: bool
     prd: dict | None = None
+
+
+class SpecImportRequest(BaseModel):
+    spec: str
+
+
+class SpecImportResponse(BaseModel):
+    prd: dict
 
 
 @router.post("/message", response_model=ChatResponse)
@@ -69,3 +77,19 @@ async def list_sessions() -> dict[str, list[dict]]:
             for session in sessions.values()
         ]
     }
+
+
+@router.post("/spec", response_model=SpecImportResponse)
+async def import_spec(req: SpecImportRequest) -> SpecImportResponse:
+    manager = get_account_manager()
+    profile = manager.get_next("codex")
+    if profile is None:
+        raise HTTPException(503, "No available accounts for intake")
+
+    env = manager.build_env(profile)
+    try:
+        prd = generate_prd_from_spec(req.spec, provider="codex", env=env)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+    return SpecImportResponse(prd=prd)

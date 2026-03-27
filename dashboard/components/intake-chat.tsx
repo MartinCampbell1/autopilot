@@ -2,7 +2,6 @@
 
 import { useState, useRef, useEffect } from "react";
 import { Button } from "@/components/ui/button";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { API_BASE, sendIntakeMessage } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import type { IntakeMessage, PRD } from "@/lib/types";
@@ -16,12 +15,18 @@ export function IntakeChat({ onPRDReady }: IntakeChatProps) {
   const [input, setInput] = useState("");
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const scrollRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+    const container = scrollRef.current;
+    if (!container) return;
+    const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
+    if (distanceFromBottom < 160 || messages.length <= 2 || loading) {
+      bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+    }
+  }, [messages, loading]);
 
   const send = async () => {
     const text = input.trim();
@@ -34,7 +39,9 @@ export function IntakeChat({ onPRDReady }: IntakeChatProps) {
     try {
       const data = await sendIntakeMessage(text, sessionId);
       setSessionId(data.session_id);
-      setMessages((prev) => [...prev, { role: "assistant", content: data.response }]);
+      if (data.response?.trim()) {
+        setMessages((prev) => [...prev, { role: "assistant", content: data.response }]);
+      }
       if (data.prd_ready && data.prd) {
         onPRDReady?.(data.prd);
       }
@@ -65,8 +72,7 @@ export function IntakeChat({ onPRDReady }: IntakeChatProps) {
 
   return (
     <div className="flex flex-col h-[560px] rounded-[8px] bg-white overflow-hidden shadow-[0_1px_3px_rgba(15,15,15,0.08),0_0_1px_rgba(15,15,15,0.04)]">
-      {/* Chat messages */}
-      <ScrollArea className="flex-1">
+      <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto">
         <div className="px-6 py-6 space-y-4">
           {messages.length === 0 && (
             <div className="flex flex-col items-center justify-center py-16 text-center">
@@ -129,7 +135,7 @@ export function IntakeChat({ onPRDReady }: IntakeChatProps) {
 
           <div ref={bottomRef} />
         </div>
-      </ScrollArea>
+      </div>
 
       {/* Input — closer to empty state */}
       <div className="border-t border-[#e3e2e0] px-5 py-3.5">

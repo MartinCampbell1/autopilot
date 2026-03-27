@@ -15,6 +15,8 @@ class TestConfig:
 
     def test_save_and_load(self, tmp_path: Path) -> None:
         cfg = DEFAULT_CONFIG
+        cfg.autopilot_home_override = str(tmp_path / ".autopilot")
+        cfg.profiles_dir_override = str(tmp_path / ".cli-profiles")
         config_path = tmp_path / "config.yaml"
         save_config(cfg, config_path)
 
@@ -22,6 +24,8 @@ class TestConfig:
         assert isinstance(loaded, AutopilotConfig)
         assert loaded.accounts.total == cfg.accounts.total
         assert loaded.accounts.workers == cfg.accounts.workers
+        assert loaded.autopilot_home == tmp_path / ".autopilot"
+        assert loaded.profiles_dir == tmp_path / ".cli-profiles"
 
     def test_load_missing_file_returns_default(self, tmp_path: Path) -> None:
         config_path = tmp_path / "nonexistent.yaml"

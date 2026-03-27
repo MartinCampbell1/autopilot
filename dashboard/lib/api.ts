@@ -33,6 +33,12 @@ export async function fetchAccountsHealth() {
   return res.json();
 }
 
+export async function fetchAccounts() {
+  const res = await fetch(`${API_BASE}/accounts/`);
+  if (!res.ok) return parseError(res, `Failed to fetch accounts: ${res.status}`);
+  return res.json();
+}
+
 export async function storyAction(
   projectName: string,
   storyId: number,
@@ -64,5 +70,51 @@ export async function sendIntakeMessage(message: string, sessionId?: string | nu
 export async function fetchIntakeSessions() {
   const res = await fetch(`${API_BASE}/intake/sessions`);
   if (!res.ok) return parseError(res, `Failed to fetch sessions: ${res.status}`);
+  return res.json();
+}
+
+export async function importSpec(spec: string) {
+  const res = await fetch(`${API_BASE}/intake/spec`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ spec }),
+  });
+  if (!res.ok) return parseError(res, `Spec import failed: ${res.status}`);
+  return res.json();
+}
+
+export async function createProjectFromPrd(
+  prd: object,
+  projectName?: string,
+  projectPath?: string,
+  launch = true
+) {
+  const res = await fetch(`${API_BASE}/projects/create`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      prd,
+      project_name: projectName || null,
+      project_path: projectPath || null,
+      launch,
+    }),
+  });
+  if (!res.ok) return parseError(res, `Project creation failed: ${res.status}`);
+  return res.json();
+}
+
+export async function openProviderLogin(provider: string) {
+  const res = await fetch(`${API_BASE}/accounts/${encodeURIComponent(provider)}/open-login`, {
+    method: "POST",
+  });
+  if (!res.ok) return parseError(res, `Login launch failed: ${res.status}`);
+  return res.json();
+}
+
+export async function importProviderSession(provider: string) {
+  const res = await fetch(`${API_BASE}/accounts/${encodeURIComponent(provider)}/import`, {
+    method: "POST",
+  });
+  if (!res.ok) return parseError(res, `Session import failed: ${res.status}`);
   return res.json();
 }
