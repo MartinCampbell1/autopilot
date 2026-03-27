@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -23,6 +24,7 @@ class AutopilotConfig:
     cooldown_base_sec: int = 300
     max_retries_per_provider: int = 3
     providers_order: list[str] = field(default_factory=lambda: ["codex", "claude", "gemini"])
+    profiles_dir_override: str | None = None
 
     @property
     def autopilot_home(self) -> Path:
@@ -30,6 +32,9 @@ class AutopilotConfig:
 
     @property
     def profiles_dir(self) -> Path:
+        override = self.profiles_dir_override or os.getenv("AUTOPILOT_PROFILES_DIR")
+        if override:
+            return Path(override).expanduser()
         return self.autopilot_home / "profiles"
 
     @property
@@ -58,6 +63,7 @@ def save_config(config: AutopilotConfig, path: Path) -> None:
         "cooldown_base_sec": config.cooldown_base_sec,
         "max_retries_per_provider": config.max_retries_per_provider,
         "providers_order": config.providers_order,
+        "profiles_dir": config.profiles_dir_override,
     }
     path.write_text(yaml.dump(data, default_flow_style=False))
 
@@ -81,4 +87,5 @@ def load_config(path: Path) -> AutopilotConfig:
         cooldown_base_sec=data.get("cooldown_base_sec", 300),
         max_retries_per_provider=data.get("max_retries_per_provider", 3),
         providers_order=data.get("providers_order", ["codex", "claude", "gemini"]),
+        profiles_dir_override=data.get("profiles_dir"),
     )

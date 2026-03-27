@@ -24,6 +24,8 @@ class TestIntake:
         assert len(session.messages) == 2
         assert session.messages[0]["role"] == "user"
         assert session.messages[1]["role"] == "assistant"
+        mock_run.assert_called_once()
+        assert "--skip-git-repo-check" in mock_run.call_args.args[0]
 
     @patch("autopilot.core.intake.subprocess.run")
     def test_run_intake_turn_parses_prd_json(self, mock_run: MagicMock) -> None:
@@ -58,3 +60,21 @@ class TestIntake:
         assert prd_path.name.startswith("prd-bug-tracker")
         saved = json.loads(prd_path.read_text())
         assert saved["title"] == "Bug Tracker"
+
+    @patch("autopilot.core.intake.subprocess.run")
+    def test_run_intake_turn_returns_stderr_on_failure(self, mock_run: MagicMock) -> None:
+        mock_run.return_value = MagicMock(
+            returncode=1,
+            stdout="",
+            stderr="Not inside a trusted directory",
+        )
+        session = IntakeSession(session_id="abc123")
+
+        response = run_intake_turn(
+            session=session,
+            user_message="Generate PRD",
+            provider="codex",
+            env={"PATH": "/usr/bin"},
+        )
+
+        assert response == "Not inside a trusted directory"
