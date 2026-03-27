@@ -279,6 +279,7 @@ def run(
                     gates_config=gates_config,
                     critic_profile=critic_profile,
                     critic_env=critic_env,
+                    retry_only=iteration > 1,
                 )
 
                 if outcome == StoryOutcome.APPROVED:

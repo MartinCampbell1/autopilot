@@ -74,6 +74,23 @@ class TestStuckDetector:
             )
         assert detector.is_stuck() is True
         assert detector.stuck_reason == StuckReason.SAME_GATE_FAIL
+        assert detector.summary() == "Same failure for 3 iterations"
+
+    def test_not_stuck_same_gate_failure_without_feedback(self) -> None:
+        detector = StuckDetector(max_same_gate_fail=3)
+        for _ in range(3):
+            detector.record_iteration(
+                IterationRecord(
+                    story_id=1,
+                    iteration=1,
+                    profile_used="acc1",
+                    provider="codex",
+                    gates_passed=False,
+                    critic_feedback="",
+                )
+            )
+
+        assert detector.is_stuck() is False
 
     def test_reset(self) -> None:
         detector = StuckDetector(max_same_feedback=2)

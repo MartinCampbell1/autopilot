@@ -4,12 +4,15 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from autopilot.core.loop_runner import (
+    apply_autopilot_ralph_overrides,
+    build_retry_prompt,
     check_git_diff_empty,
     check_ralph_installed,
     get_last_commit_diff,
     init_ralph_project,
     read_progress,
     run_ralph_iteration,
+    run_retry_iteration,
     write_critic_feedback,
 )
 
@@ -29,6 +32,9 @@ class TestLoopRunner:
     def test_init_ralph_project(self, mock_run: MagicMock, tmp_path: Path) -> None:
         mock_run.return_value = MagicMock(returncode=0, stdout="ok", stderr="")
         assert init_ralph_project(tmp_path) is True
+        assert (tmp_path / ".agents" / "ralph" / "PROMPT_build.md").exists()
+        assert (tmp_path / "AGENTS.md").exists()
+        assert (tmp_path / ".ralph" / "errors.log").exists()
 
     @patch("autopilot.core.loop_runner.subprocess.run")
     def test_init_ralph_project_tty_error_but_agents_installed(self, mock_run: MagicMock, tmp_path: Path) -> None:
@@ -36,6 +42,25 @@ class TestLoopRunner:
         agents_dir.mkdir(parents=True)
         mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="ERR_TTY_INIT_FAILED")
         assert init_ralph_project(tmp_path) is True
+        assert (agents_dir / "PROMPT_build.md").exists()
+        assert (tmp_path / ".ralph" / "critic-feedback.md").exists()
+
+    def test_apply_autopilot_ralph_overrides_preserves_existing_agents_doc(self, tmp_path: Path) -> None:
+        agents_doc = tmp_path / "AGENTS.md"
+        agents_doc.write_text("custom")
+        loop_script = tmp_path / ".agents" / "ralph" / "loop.sh"
+        loop_script.parent.mkdir(parents=True, exist_ok=True)
+        loop_script.write_text('for k, v in repl.items():\n    src = src.replace("{{" + k + "}}", v)\n')
+        config_script = tmp_path / ".agents" / "ralph" / "config.sh"
+        config_script.write_text("# config\n")
+
+        apply_autopilot_ralph_overrides(tmp_path)
+
+        assert agents_doc.read_text() == "custom"
+        prompt = (tmp_path / ".agents" / "ralph" / "PROMPT_build.md").read_text()
+        assert ".ralph/critic-feedback.md" in prompt
+        assert 'str(v)' in loop_script.read_text()
+        assert 'ACTIVITY_CMD=".agents/ralph/log-activity.sh"' in config_script.read_text()
 
     def test_write_and_read_critic_feedback(self, tmp_path: Path) -> None:
         ralph_dir = tmp_path / ".ralph"
@@ -97,3 +122,27 @@ class TestLoopRunner:
         result = get_last_commit_diff(Path("/tmp"))
 
         assert result == "commit diff"
+
+    def test_build_retry_prompt_includes_story_context(self) -> None:
+        prompt = build_retry_prompt(7, "Fix login", "Add OAuth callback validation")
+        assert "story #7" in prompt
+        assert "Fix login" in prompt
+        assert "OAuth callback validation" in prompt
+        assert ".ralph/critic-feedback.md" in prompt
+
+    @patch("autopilot.core.loop_runner.subprocess.run")
+    def test_run_retry_iteration_success(self, mock_run: MagicMock, tmp_path: Path) -> None:
+        mock_run.return_value = MagicMock(returncode=0, stdout="fixed", stderr="")
+        success, output, rate_limited = run_retry_iteration(
+            tmp_path,
+            {"PATH": "/usr/bin"},
+            "codex",
+            1,
+            "Create README and notes",
+            "Create both files",
+        )
+        assert success is True
+        assert output == "fixed"
+        assert rate_limited is False
+        called_cmd = mock_run.call_args.args[0]
+        assert called_cmd[:3] == ["codex", "exec", "--full-auto"]

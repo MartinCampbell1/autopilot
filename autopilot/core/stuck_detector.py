@@ -86,7 +86,7 @@ class StuckDetector:
         if len(recent) < self.max_same_gate_fail:
             return False
 
-        failed = [record for record in recent if not record.gates_passed]
+        failed = [record for record in recent if not record.gates_passed and record.critic_feedback.strip()]
         if len(failed) < self.max_same_gate_fail:
             return False
 
@@ -106,7 +106,7 @@ class StuckDetector:
         reason_messages = {
             StuckReason.SAME_FEEDBACK: f"Critic gave same feedback {self.max_same_feedback} times",
             StuckReason.EMPTY_DIFF: f"No code changes for {self.max_empty_diffs} iterations",
-            StuckReason.SAME_GATE_FAIL: f"Same gate failure for {self.max_same_gate_fail} iterations",
+            StuckReason.SAME_GATE_FAIL: f"Same failure for {self.max_same_gate_fail} iterations",
             StuckReason.TIMEOUT: "Agent timed out",
         }
         return reason_messages.get(self.stuck_reason, str(self.stuck_reason))

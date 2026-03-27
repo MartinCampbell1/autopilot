@@ -40,3 +40,7 @@ class TestProjectBootstrap:
 
         state_path = config.runtime_state_dir / f"{created.project_id}.json"
         assert state_path.exists()
+        assert (created.path / "AGENTS.md").exists()
+        assert (created.path / ".agents" / "ralph" / "PROMPT_build.md").exists()
+        assert (created.path / ".ralph" / "errors.log").exists()
+        assert (created.path / ".ralph" / "critic-feedback.md").exists()

@@ -30,11 +30,6 @@ def init(project_path: str = typer.Argument(help="Path to the project directory"
         console.print("[red]Ralph install failed.[/red]")
         raise typer.Exit(1)
 
-    ralph_dir = project / ".ralph"
-    ralph_dir.mkdir(exist_ok=True)
-    (ralph_dir / "progress.md").write_text("# Progress\n\n")
-    (ralph_dir / "guardrails.md").write_text("# Guardrails\n\nDo not repeat these mistakes:\n\n")
-
     console.print("[green]Done![/green] Project initialized.")
     console.print("\nNext steps:")
     console.print("  1. Create PRD: ralph prd")

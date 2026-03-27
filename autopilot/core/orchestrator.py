@@ -17,6 +17,7 @@ from autopilot.core.loop_runner import (
     check_git_diff_empty,
     get_last_commit_diff,
     run_ralph_iteration,
+    run_retry_iteration,
     write_critic_feedback,
 )
 from autopilot.core.models import IterationRecord, Profile
@@ -56,30 +57,47 @@ class Orchestrator:
         gates_config: list[dict],
         critic_profile: Profile,
         critic_env: dict[str, str],
+        retry_only: bool = False,
     ) -> StoryOutcome:
         """Execute one worker iteration followed by gates and critic review."""
         started_at = time.time()
 
         console.print(f"  [blue]Worker[/blue] {profile.provider}/{profile.name} starting story #{story_id}...")
-        success, output, rate_limited = run_ralph_iteration(
-            self.project_path,
-            env,
-            self.config.codex_timeout_sec,
-        )
+        if retry_only:
+            success, output, rate_limited = run_retry_iteration(
+                self.project_path,
+                env,
+                profile.provider,
+                story_id,
+                story_title,
+                story_description,
+                self.config.codex_timeout_sec,
+            )
+        else:
+            success, output, rate_limited = run_ralph_iteration(
+                self.project_path,
+                env,
+                self.config.codex_timeout_sec,
+            )
 
         if rate_limited:
             console.print(f"  [yellow]Rate limited[/yellow] - {profile.name}")
             return StoryOutcome.RATE_LIMITED
 
         if not success:
-            append_guardrail(self.project_path, f"Worker failed on story #{story_id}: {output[:200]}")
+            diff_empty = check_git_diff_empty(self.project_path)
+            failure_feedback = output.strip()[:2000] or "Worker execution failed before producing a usable result."
+            write_critic_feedback(self.project_path, failure_feedback)
+            append_guardrail(self.project_path, f"Worker failed on story #{story_id}: {failure_feedback[:200]}")
             record = IterationRecord(
                 story_id=story_id,
                 iteration=len(self.iteration_history) + 1,
                 profile_used=profile.name,
                 provider=profile.provider,
                 gates_passed=False,
+                critic_feedback=failure_feedback,
                 elapsed_sec=round(time.time() - started_at, 2),
+                git_diff_empty=diff_empty,
             )
             self.stuck_detector.record_iteration(record)
             self.iteration_history.append(record)

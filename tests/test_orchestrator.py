@@ -56,6 +56,49 @@ class TestOrchestrator:
 
         assert outcome == StoryOutcome.APPROVED
 
+    @patch("autopilot.core.orchestrator.check_git_diff_empty")
+    @patch("autopilot.core.orchestrator.get_last_commit_diff")
+    @patch("autopilot.core.orchestrator.run_critic")
+    @patch("autopilot.core.orchestrator.run_gates")
+    @patch("autopilot.core.orchestrator.run_retry_iteration")
+    @patch("autopilot.core.orchestrator.run_ralph_iteration")
+    def test_retry_iteration_uses_targeted_retry_prompt(
+        self,
+        mock_ralph,
+        mock_retry,
+        mock_gates,
+        mock_critic,
+        mock_get_diff,
+        mock_diff_empty,
+        tmp_path: Path,
+    ) -> None:
+        mock_ralph.return_value = (True, "unused", False)
+        mock_retry.return_value = (True, "fixed", False)
+        mock_gates.return_value = (True, [])
+        mock_get_diff.return_value = "+notes.txt"
+        mock_diff_empty.return_value = False
+        mock_critic.return_value = CriticResult(approved=True, feedback="", raw_output="APPROVED")
+
+        orchestrator = self._make_orchestrator(tmp_path)
+        profile = Profile(name="acc1", provider="codex", path=str(tmp_path))
+        env = {"PATH": "/usr/bin"}
+
+        outcome = orchestrator.run_single_iteration(
+            profile=profile,
+            env=env,
+            story_id=1,
+            story_title="Setup",
+            story_description="Project setup",
+            gates_config=[],
+            critic_profile=profile,
+            critic_env=env,
+            retry_only=True,
+        )
+
+        assert outcome == StoryOutcome.APPROVED
+        mock_retry.assert_called_once()
+        mock_ralph.assert_not_called()
+
     @patch("autopilot.core.orchestrator.run_gates")
     @patch("autopilot.core.orchestrator.run_ralph_iteration")
     def test_gate_failure(self, mock_ralph, mock_gates, tmp_path: Path) -> None:

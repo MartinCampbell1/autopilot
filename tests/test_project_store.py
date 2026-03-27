@@ -2,6 +2,7 @@
 
 import json
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import yaml
 
@@ -9,6 +10,7 @@ from autopilot.core.config import AutopilotConfig
 from autopilot.core.project_store import (
     ensure_project_state,
     get_project_entry,
+    launch_project_run,
     load_project_state,
     migrate_projects_registry,
     normalize_prd,
@@ -180,3 +182,41 @@ def test_ensure_project_state_keeps_paused_story_in_progress(tmp_path: Path) -> 
     assert repaired["status"] == "paused"
     assert repaired["current_story_id"] == 1
     assert repaired["story_state"]["1"]["status"] == "in_progress"
+
+
+@patch("autopilot.core.project_store.subprocess.Popen")
+@patch("autopilot.core.project_store.init_ralph_project")
+@patch("autopilot.core.project_store.check_ralph_installed")
+def test_launch_project_run_initializes_ralph_before_background_run(
+    mock_check_ralph: MagicMock,
+    mock_init_ralph: MagicMock,
+    mock_popen: MagicMock,
+    tmp_path: Path,
+) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    project_dir = tmp_path / "launch-project"
+    project_dir.mkdir(parents=True)
+
+    project = register_project(config, name="Launch Project", project_path=project_dir)
+    prd = normalize_prd(
+        {
+            "title": "Launch Project",
+            "stories": [{"id": 1, "title": "Bootstrap", "description": "Start"}],
+        }
+    )
+    save_project_prd(project, prd)
+    ensure_project_state(config, project, seed_mode="new")
+
+    mock_check_ralph.return_value = True
+    mock_init_ralph.return_value = True
+    mock_popen.return_value = MagicMock(pid=43210)
+
+    launched, log_path, message = launch_project_run(config, project["id"])
+
+    assert launched is True
+    assert log_path is not None
+    assert "Background run started" in message
+    mock_init_ralph.assert_called_once_with(project_dir)
+    popen_cmd = mock_popen.call_args.args[0]
+    assert "autopilot run" in popen_cmd[-1]
+    assert "autopilot init" not in popen_cmd[-1]

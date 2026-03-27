@@ -28,7 +28,7 @@ def dashboard(
         console.print(f"[red]Dashboard directory not found: {dashboard_dir}[/red]")
         raise typer.Exit(1)
 
-    console.print(f"[bold]Starting Autopilot dashboard stack...[/bold]")
+    console.print("[bold]Starting Autopilot dashboard stack...[/bold]")
     console.print(f"[dim]Frontend: http://localhost:{frontend_port}[/dim]")
     console.print(f"[dim]API: http://localhost:{port}[/dim]")
 
