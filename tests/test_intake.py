@@ -48,6 +48,40 @@ class TestIntake:
         assert session.prd is not None
         assert session.prd["stories"][0]["status"] == "open"
 
+    @patch("autopilot.core.intake.subprocess.run")
+    def test_run_intake_turn_uses_planning_context_and_normalizes_metadata(self, mock_run: MagicMock) -> None:
+        prd = {
+            "title": "Trading Platform",
+            "description": "Automate Solana trading",
+            "phases": [{"id": "phase-1", "title": "Foundation", "goal": "Ship the core API"}],
+            "stories": [
+                {
+                    "id": 1,
+                    "phase_id": "phase-1",
+                    "title": "Build market ingestion API",
+                    "description": "Create FastAPI endpoints for token data",
+                    "status": "done",
+                }
+            ],
+        }
+        mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps(prd), stderr="")
+        session = IntakeSession(session_id="abc123")
+
+        run_intake_turn(
+            session=session,
+            user_message="Generate PRD",
+            provider="codex",
+            env={"PATH": "/usr/bin"},
+            planning_context="Available roles:\n- backend_worker: build APIs",
+        )
+
+        prompt = mock_run.call_args.args[0][-1]
+        assert "Available roles:" in prompt
+        assert session.prd is not None
+        assert session.prd["phases"][0]["title"] == "Foundation"
+        assert session.prd["stories"][0]["status"] == "open"
+        assert session.prd["stories"][0]["role"] == "backend_worker"
+
     def test_save_prd(self, tmp_path: Path) -> None:
         prd = {
             "title": "Bug Tracker",
@@ -104,3 +138,87 @@ class TestIntake:
         parsed = generate_prd_from_spec("A markdown spec", provider="codex", env={"PATH": "/usr/bin"})
 
         assert parsed["title"] == "Spec Import"
+
+    @patch("autopilot.core.intake.subprocess.run")
+    def test_generate_prd_from_spec_normalizes_rich_planning_output(self, mock_run: MagicMock) -> None:
+        prd = {
+            "title": "Spec Import",
+            "description": "Convert spec",
+            "phases": [{"title": "Gateway Integration", "goal": "Integrate the orchestrator"}],
+            "stories": [
+                {
+                    "id": 1,
+                    "phase_title": "Gateway Integration",
+                    "title": "Create orchestration API endpoints",
+                    "description": "Add FastAPI endpoints and gateway integration",
+                    "status": "stuck",
+                }
+            ],
+        }
+        mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps(prd), stderr="")
+
+        parsed = generate_prd_from_spec(
+            "A markdown spec",
+            provider="codex",
+            env={"PATH": "/usr/bin"},
+            planning_context="Available MCP connectors / tools:\n- http_api: Call APIs",
+        )
+
+        prompt = mock_run.call_args.args[0][-1]
+        assert "Available MCP connectors / tools:" in prompt
+        assert parsed["phases"][0]["id"] == "gateway-integration"
+        assert parsed["stories"][0]["status"] == "open"
+        assert parsed["stories"][0]["role"] == "backend_worker"
+        assert "fastapi-backend" in parsed["stories"][0]["skill_packs"]
+
+    @patch("autopilot.core.intake.subprocess.run")
+    def test_generate_prd_from_spec_refines_coarse_complex_plan(self, mock_run: MagicMock) -> None:
+        initial_prd = {
+            "title": "Solana Trader",
+            "description": "Build a multi-agent Solana trading platform",
+            "phases": [{"id": "phase-1", "title": "Implementation", "goal": "Ship everything"}],
+            "stories": [
+                {"id": 1, "title": "Backend", "description": "Build the backend"},
+                {"id": 2, "title": "Frontend", "description": "Build the dashboard"},
+                {"id": 3, "title": "Agents", "description": "Build multi-agent orchestration"},
+                {"id": 4, "title": "Deploy", "description": "Deploy the system"},
+            ],
+        }
+        refined_prd = {
+            "title": "Solana Trader",
+            "description": "Build a multi-agent Solana trading platform",
+            "phases": [
+                {"id": "phase-1", "title": "Data Foundation", "goal": "Ingest market data"},
+                {"id": "phase-2", "title": "Execution Engine", "goal": "Execute strategies safely"},
+                {"id": "phase-3", "title": "Operations", "goal": "Observe and control the system"},
+            ],
+            "stories": [
+                {
+                    "id": index,
+                    "phase_id": f"phase-{1 if index <= 6 else 2 if index <= 12 else 3}",
+                    "phase_title": "Detailed Phase",
+                    "title": f"Story {index}",
+                    "description": f"Concrete task {index} for Solana trading",
+                }
+                for index in range(1, 19)
+            ],
+        }
+        mock_run.side_effect = [
+            MagicMock(returncode=0, stdout=json.dumps(initial_prd), stderr=""),
+            MagicMock(returncode=0, stdout=json.dumps(refined_prd), stderr=""),
+        ]
+
+        parsed = generate_prd_from_spec(
+            (
+                "Build a multi-agent Solana memecoin trading system with market ingestion, "
+                "strategy execution, wallet integration, dashboard, monitoring, and deployment. "
+                "It must expose APIs, run orchestration loops, and manage operational controls."
+            ),
+            provider="codex",
+            env={"PATH": "/usr/bin"},
+            planning_context="Available roles:\n- backend_worker: build APIs",
+        )
+
+        assert mock_run.call_count == 2
+        assert len(parsed["stories"]) == 18
+        assert len(parsed["phases"]) == 3

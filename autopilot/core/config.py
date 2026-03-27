@@ -57,6 +57,14 @@ class AutopilotConfig:
     def events_log_path(self) -> Path:
         return self.autopilot_home / "events" / "events.jsonl"
 
+    @property
+    def connectors_json_path(self) -> Path:
+        return self.autopilot_home / "connectors.json"
+
+    @property
+    def skill_packs_json_path(self) -> Path:
+        return self.autopilot_home / "skill-packs.json"
+
 
 DEFAULT_CONFIG = AutopilotConfig()
 

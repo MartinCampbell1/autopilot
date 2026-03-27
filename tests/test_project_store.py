@@ -94,6 +94,36 @@ def test_load_project_state_after_register_and_save(tmp_path: Path) -> None:
     assert json.loads((project_dir / ".agents" / "tasks" / "prd.json").read_text())["stories"][0]["status"] == "open"
 
 
+def test_normalize_prd_enriches_story_routing_and_phases() -> None:
+    prd = normalize_prd(
+        {
+            "title": "Solana Trader",
+            "description": "Build a Solana trading system",
+            "phases": [
+                {"id": "phase-1", "title": "Data Foundation", "goal": "Collect and normalize inputs"},
+            ],
+            "stories": [
+                {
+                    "id": 1,
+                    "phase_id": "phase-1",
+                    "title": "Build market ingestion API",
+                    "description": "Create FastAPI endpoints and normalize token data",
+                }
+            ],
+        },
+        seed_mode="new",
+    )
+
+    assert prd["phases"][0]["title"] == "Data Foundation"
+    story = prd["stories"][0]
+    assert story["phase_id"] == "phase-1"
+    assert story["phase_title"] == "Data Foundation"
+    assert "backend" in story["tags"]
+    assert story["role"] == "backend_worker"
+    assert "fastapi-backend" in story["skill_packs"]
+    assert "shell_exec" in story["connectors"]
+
+
 def test_ensure_project_state_requeues_interrupted_in_progress_story(tmp_path: Path) -> None:
     config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
     project_dir = tmp_path / "failed-project"

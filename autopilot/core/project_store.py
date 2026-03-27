@@ -17,6 +17,12 @@ from typing import Any
 
 import yaml
 
+from autopilot.core.capability_store import (
+    DEFAULT_CONNECTORS,
+    DEFAULT_SKILL_PACKS,
+    enrich_story_plan,
+    normalize_phase_plan,
+)
 from autopilot.core.config import AutopilotConfig
 from autopilot.core.loop_runner import apply_autopilot_ralph_overrides, check_ralph_installed, init_ralph_project
 
@@ -153,19 +159,46 @@ def normalize_prd(prd: dict[str, Any], *, seed_mode: str = "new") -> dict[str, A
             status = incoming_status
         else:
             status = "open"
-        normalized_stories.append(
+
+        phase_id = str(story.get("phase_id") or "").strip() or None
+        phase_title = str(story.get("phase_title") or "").strip() or None
+        phase_goal = str(story.get("phase_goal") or "").strip() or ""
+        normalized_story = enrich_story_plan(
             {
                 "id": story_id,
                 "title": str(story.get("title") or f"Story {index}").strip(),
                 "description": str(story.get("description") or "").strip(),
                 "position": index - 1,
                 "status": status,
-            }
+                "phase_id": phase_id,
+                "phase_title": phase_title,
+                "phase_goal": phase_goal,
+                "acceptance_criteria": story.get("acceptance_criteria") or [],
+                "tags": story.get("tags") or [],
+                "role": story.get("role"),
+                "skill_packs": story.get("skill_packs") or [],
+                "connectors": story.get("connectors") or [],
+            },
+            skill_packs=list(DEFAULT_SKILL_PACKS),
+            connectors=list(DEFAULT_CONNECTORS),
         )
+        normalized_stories.append(normalized_story)
+
+    phases = normalize_phase_plan(prd, normalized_stories)
+    phases_by_id = {phase["id"]: phase for phase in phases}
+    if phases:
+        fallback_phase = phases[0]
+        for story in normalized_stories:
+            phase_id = str(story.get("phase_id") or "").strip() or fallback_phase["id"]
+            phase = phases_by_id.get(phase_id, fallback_phase)
+            story["phase_id"] = phase["id"]
+            story["phase_title"] = phase["title"]
+            story["phase_goal"] = story.get("phase_goal") or phase.get("goal") or ""
 
     return {
         "title": title,
         "description": description,
+        "phases": phases,
         "stories": normalized_stories,
     }
 
@@ -638,6 +671,14 @@ def merge_project_stories(project: dict[str, Any], state: dict[str, Any]) -> lis
                 "title": story["title"],
                 "description": story["description"],
                 "position": story["position"],
+                "phase_id": story.get("phase_id"),
+                "phase_title": story.get("phase_title"),
+                "phase_goal": story.get("phase_goal"),
+                "tags": story.get("tags", []),
+                "role": story.get("role"),
+                "skill_packs": story.get("skill_packs", []),
+                "connectors": story.get("connectors", []),
+                "acceptance_criteria": story.get("acceptance_criteria", []),
                 "status": runtime.get("status", "open"),
                 "started_at": runtime.get("started_at"),
                 "completed_at": runtime.get("completed_at"),
@@ -720,6 +761,7 @@ def build_project_detail(config: AutopilotConfig, project_id: str) -> dict[str, 
     return {
         **summary,
         "description": prd.get("description", ""),
+        "phases": prd.get("phases", []),
         "stories": stories,
         "timeline": [{**event, "message": _sanitize_message(str(event.get("message") or ""))} for event in state.get("timeline", [])],
         "guardrails": _read_guardrails(project),
