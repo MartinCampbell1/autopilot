@@ -1,24 +1,63 @@
 export type StoryStatus = "open" | "in_progress" | "done" | "stuck" | "skipped";
+export type ProjectRunStatus = "idle" | "running" | "paused" | "completed" | "failed";
 
 export interface Story {
   id: number;
   title: string;
   description: string;
+  position: number;
   status: StoryStatus;
-  agent?: string;
-  iteration?: number;
-  elapsed_min?: number;
+  started_at?: string | null;
+  completed_at?: string | null;
+  updated_at?: string | null;
+  iteration?: number | null;
+  agent?: string | null;
+  critic?: string | null;
+  last_error?: string | null;
 }
 
-export interface Project {
+export interface TimelineEvent {
+  event: string;
+  project_id: string;
+  story_id?: number | null;
+  status: string;
+  message: string;
+  timestamp: string;
+  iteration?: number;
+  worker?: string;
+  critic?: string;
+}
+
+export interface ProjectSummary {
+  id: string;
   name: string;
   path: string;
   priority: "high" | "normal" | "low";
-  stories: Story[];
+  archived: boolean;
+  status: ProjectRunStatus;
+  paused: boolean;
   stories_done: number;
   stories_total: number;
-  progress?: string;
-  guardrails?: string;
+  current_story_id?: number | null;
+  current_story_title?: string | null;
+  last_activity_at?: string | null;
+  last_message?: string;
+  pid?: number | null;
+}
+
+export interface ProjectDetail extends ProjectSummary {
+  description: string;
+  stories: Story[];
+  timeline: TimelineEvent[];
+  guardrails: string;
+  log_tail: string;
+  log_path: string;
+  last_error?: string | null;
+  started_at?: string | null;
+  finished_at?: string | null;
+  active_worker?: string | null;
+  active_critic?: string | null;
+  current_iteration?: number;
 }
 
 export interface AccountHealth {
@@ -54,15 +93,23 @@ export interface PRD {
     id: number;
     title: string;
     description: string;
-    status: string;
+    status?: string;
   }>;
 }
 
 export interface CreateProjectResult {
   status: string;
+  project_id: string;
   project_name: string;
   project_path: string;
   prd_path: string;
+  launched: boolean;
+  message: string;
+}
+
+export interface LaunchResult {
+  status: string;
+  project_id: string;
   launched: boolean;
   message: string;
   log_path: string;

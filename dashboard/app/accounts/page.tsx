@@ -6,27 +6,31 @@ import { Button } from "@/components/ui/button";
 import {
   fetchAccounts,
   fetchAccountsHealth,
+  fetchProjects,
   importProviderSession,
   openProviderLogin,
 } from "@/lib/api";
-import type { AccountHealth, AccountsByProvider } from "@/lib/types";
+import type { AccountHealth, AccountsByProvider, ProjectSummary } from "@/lib/types";
 
 const PROVIDERS = ["codex", "claude", "gemini"] as const;
 
 export default function AccountsPage() {
   const [accounts, setAccounts] = useState<AccountsByProvider>({});
   const [health, setHealth] = useState<AccountHealth | null>(null);
+  const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [busyProvider, setBusyProvider] = useState<string>("");
   const [message, setMessage] = useState("");
 
   const load = useCallback(async () => {
     try {
-      const [accountsData, healthData] = await Promise.all([
+      const [accountsData, healthData, projectsData] = await Promise.all([
         fetchAccounts(),
         fetchAccountsHealth(),
+        fetchProjects(false),
       ]);
       setAccounts(accountsData.accounts || {});
       setHealth(healthData);
+      setProjects((projectsData.projects || []) as ProjectSummary[]);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Failed to load accounts.");
     }
@@ -63,9 +67,9 @@ export default function AccountsPage() {
 
   return (
     <div className="flex min-h-screen bg-[#fafaf9]">
-      <AppSidebar health={health} />
+      <AppSidebar health={health} projects={projects} />
 
-      <main className="flex-1 pl-[240px]">
+      <main className="flex-1 pl-[260px]">
         <header className="sticky top-0 z-30 flex h-[52px] items-center justify-between border-b border-[#e5e5e3] bg-white px-6">
           <h1 className="text-[15px] font-semibold tracking-[-0.02em] text-[#1a1a1a]">Accounts</h1>
           <Button

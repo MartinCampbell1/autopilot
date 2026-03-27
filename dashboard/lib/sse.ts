@@ -27,9 +27,25 @@ export function useSSE(onEvent: (event: string, data: unknown) => void) {
         }
       };
 
-      source.addEventListener("story_update", handler("story_update"));
-      source.addEventListener("account_update", handler("account_update"));
-      source.addEventListener("iteration_complete", handler("iteration_complete"));
+      [
+        "project_created",
+        "run_started",
+        "story_started",
+        "iteration_started",
+        "worker_failed",
+        "critic_rejected",
+        "story_done",
+        "story_stuck",
+        "paused",
+        "resumed",
+        "guidance_added",
+        "story_skipped",
+        "run_finished",
+        "run_failed",
+        "project_archived",
+      ].forEach((type) => {
+        source?.addEventListener(type, handler(type));
+      });
 
       source.onerror = () => {
         source?.close();

@@ -3,24 +3,36 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { storyAction } from "@/lib/api";
+import { addStoryGuidance, pauseProject, skipStory } from "@/lib/api";
+import type { ProjectRunStatus } from "@/lib/types";
 
 interface ActionButtonsProps {
-  projectName: string;
+  projectId: string;
   storyId: number;
-  onAction?: () => void;
+  projectStatus: ProjectRunStatus;
+  onAction?: () => void | Promise<void>;
 }
 
-export function ActionButtons({ projectName, storyId, onAction }: ActionButtonsProps) {
+export function ActionButtons({
+  projectId,
+  storyId,
+  projectStatus,
+  onAction,
+}: ActionButtonsProps) {
   const [guidance, setGuidance] = useState("");
   const [showGuidance, setShowGuidance] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [message, setMessage] = useState("");
 
-  const handleAction = async (action: string, payload = "") => {
+  const runAction = async (task: () => Promise<{ message: string }>) => {
     setLoading(true);
+    setMessage("");
     try {
-      await storyAction(projectName, storyId, action, payload);
-      onAction?.();
+      const result = await task();
+      setMessage(result.message);
+      await onAction?.();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Action failed.");
     } finally {
       setLoading(false);
     }
@@ -28,31 +40,23 @@ export function ActionButtons({ projectName, storyId, onAction }: ActionButtonsP
 
   return (
     <div className="space-y-3">
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         <Button
           size="sm"
           variant="outline"
-          disabled={loading}
-          onClick={() => handleAction("pause")}
+          disabled={loading || projectStatus !== "running"}
+          onClick={() => void runAction(() => pauseProject(projectId))}
           className="h-8 rounded-lg text-[12px] font-medium"
         >
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="mr-1.5">
-            <rect x="6" y="4" width="4" height="16" rx="1" />
-            <rect x="14" y="4" width="4" height="16" rx="1" />
-          </svg>
           Pause
         </Button>
         <Button
           size="sm"
           variant="outline"
           disabled={loading}
-          onClick={() => handleAction("skip")}
+          onClick={() => void runAction(() => skipStory(projectId, storyId))}
           className="h-8 rounded-lg text-[12px] font-medium"
         >
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="mr-1.5">
-            <path d="M5 4l10 8-10 8V4z" />
-            <line x1="19" y1="5" x2="19" y2="19" />
-          </svg>
           Skip
         </Button>
         <Button
@@ -61,9 +65,6 @@ export function ActionButtons({ projectName, storyId, onAction }: ActionButtonsP
           onClick={() => setShowGuidance(!showGuidance)}
           className="h-8 rounded-lg text-[12px] font-medium"
         >
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="mr-1.5">
-            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-          </svg>
           Guidance
         </Button>
       </div>
@@ -71,10 +72,10 @@ export function ActionButtons({ projectName, storyId, onAction }: ActionButtonsP
       {showGuidance && (
         <div className="space-y-2">
           <Textarea
-            placeholder="Add guidance for the agent..."
+            placeholder="Add guidance for the next iteration..."
             value={guidance}
-            onChange={(e) => setGuidance(e.target.value)}
-            className="min-h-[80px] resize-none rounded-lg border-border/60 text-[13px] placeholder:text-muted-foreground/50"
+            onChange={(event) => setGuidance(event.target.value)}
+            className="min-h-[90px] resize-none rounded-lg border-border/60 text-[13px]"
           />
           <div className="flex justify-end gap-2">
             <Button
@@ -92,7 +93,7 @@ export function ActionButtons({ projectName, storyId, onAction }: ActionButtonsP
               size="sm"
               disabled={!guidance.trim() || loading}
               onClick={() => {
-                handleAction("add_guidance", guidance);
+                void runAction(() => addStoryGuidance(projectId, storyId, guidance));
                 setGuidance("");
                 setShowGuidance(false);
               }}
@@ -101,6 +102,12 @@ export function ActionButtons({ projectName, storyId, onAction }: ActionButtonsP
               Send
             </Button>
           </div>
+        </div>
+      )}
+
+      {message && (
+        <div className="rounded-lg border border-[#e5e5e3] bg-[#fbfbf9] px-3 py-2 text-[12px] text-[#6b6b6b]">
+          {message}
         </div>
       )}
     </div>
