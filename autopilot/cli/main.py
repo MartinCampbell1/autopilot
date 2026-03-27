@@ -34,11 +34,12 @@ def login(provider: str = typer.Argument(help="Provider: codex, claude, or gemin
 def run(
     project_path: str = typer.Argument(help="Path to the project directory"),
     prd: str = typer.Option(".agents/tasks/prd.json", help="PRD JSON path relative to project"),
+    project_id: str | None = typer.Option(None, "--project-id", help="Stable project id from the dashboard"),
 ) -> None:
     """Run autopilot loop on a project until all stories are done."""
     from autopilot.cli.run import run as _run
 
-    _run(project_path, prd)
+    _run(project_path, prd, project_id)
 
 
 @app.command(name="run-all")

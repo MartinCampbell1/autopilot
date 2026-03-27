@@ -2,7 +2,7 @@
 
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { StoryCard } from "./story-card";
-import type { Project, StoryStatus } from "@/lib/types";
+import type { ProjectDetail, StoryStatus } from "@/lib/types";
 
 const COLUMNS: Array<{ key: StoryStatus; label: string; emptyText: string }> = [
   { key: "open", label: "Open", emptyText: "No open stories" },
@@ -12,45 +12,16 @@ const COLUMNS: Array<{ key: StoryStatus; label: string; emptyText: string }> = [
 ];
 
 interface KanbanBoardProps {
-  project: Project;
+  project: ProjectDetail;
   selectedStoryId?: number | null;
   onStoryClick?: (storyId: number) => void;
+  className?: string;
 }
 
-export function KanbanBoard({ project, selectedStoryId, onStoryClick }: KanbanBoardProps) {
-  const progress = project.stories_total > 0
-    ? Math.round((project.stories_done / project.stories_total) * 100)
-    : 0;
-
+export function KanbanBoard({ project, selectedStoryId, onStoryClick, className }: KanbanBoardProps) {
   return (
-    <div>
-      {/* Project header */}
-      <div className="flex items-center justify-between mb-5">
-        <div className="flex items-baseline gap-3">
-          <h2 className="text-[22px] font-semibold tracking-[-0.02em] text-[#37352f]">
-            {project.name}
-          </h2>
-          <span className="text-[14px] text-[#c3c2bf]">
-            {project.stories_done} of {project.stories_total}
-          </span>
-        </div>
-
-        {/* Progress bar */}
-        <div className="flex items-center gap-3">
-          <div className="h-[6px] w-36 rounded-full bg-[#e3e2e0] overflow-hidden">
-            <div
-              className="h-[6px] rounded-full bg-[#37352f] transition-all duration-700 ease-out"
-              style={{ width: `${progress}%` }}
-            />
-          </div>
-          <span className="text-[14px] font-semibold tabular-nums text-[#37352f]">
-            {progress}%
-          </span>
-        </div>
-      </div>
-
-      {/* Columns */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+    <div className={className}>
+      <div className="grid grid-cols-1 gap-3 xl:grid-cols-4">
         {COLUMNS.map((col) => {
           const stories = project.stories.filter((s) => s.status === col.key);
           return (
@@ -67,7 +38,7 @@ export function KanbanBoard({ project, selectedStoryId, onStoryClick }: KanbanBo
               </div>
 
               {/* Cards */}
-              <ScrollArea className="h-[calc(100vh-300px)] min-h-[200px]">
+              <ScrollArea className="h-[calc(100vh-260px)] min-h-[200px]">
                 <div className="space-y-3">
                   {stories.length === 0 ? (
                     <div className="flex items-center justify-center rounded-lg border border-dashed border-[#e3e2e0] py-12">

@@ -6,8 +6,8 @@ import { AppSidebar } from "@/components/app-sidebar";
 import { IntakeChat } from "@/components/intake-chat";
 import { SpecImportPanel } from "@/components/spec-import-panel";
 import { Button } from "@/components/ui/button";
-import { createProjectFromPrd, fetchAccountsHealth } from "@/lib/api";
-import type { PRD } from "@/lib/types";
+import { createProjectFromPrd, fetchAccountsHealth, fetchProjects, launchProject as launchProjectRun } from "@/lib/api";
+import type { PRD, ProjectSummary } from "@/lib/types";
 
 export default function IntakePage() {
   const router = useRouter();
@@ -20,11 +20,18 @@ export default function IntakePage() {
   const [editingPrd, setEditingPrd] = useState(false);
   const [prdDraft, setPrdDraft] = useState("");
   const [health, setHealth] = useState<{ total: number; available: number; on_cooldown: number } | null>(null);
+  const [projects, setProjects] = useState<ProjectSummary[]>([]);
 
   useEffect(() => {
-    void fetchAccountsHealth()
-      .then(setHealth)
-      .catch(() => setHealth(null));
+    void Promise.all([fetchAccountsHealth(), fetchProjects(false)])
+      .then(([healthData, projectsData]) => {
+        setHealth(healthData);
+        setProjects((projectsData.projects || []) as ProjectSummary[]);
+      })
+      .catch(() => {
+        setHealth(null);
+        setProjects([]);
+      });
   }, []);
 
   useEffect(() => {
@@ -61,14 +68,12 @@ export default function IntakePage() {
       const data = await createProjectFromPrd(
         prd,
         projectName.trim() || prd.title,
-        projectPath.trim() || undefined,
-        true
+        projectPath.trim() || undefined
       );
-      setMessage(data.message);
-      if (data.launched) {
-        router.push("/");
-        router.refresh();
-      }
+      const launch = await launchProjectRun(data.project_id);
+      setMessage(launch.message);
+      router.push(`/projects/${data.project_id}`);
+      router.refresh();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Failed to launch project.");
     } finally {
@@ -78,9 +83,9 @@ export default function IntakePage() {
 
   return (
     <div className="flex min-h-screen bg-[#fafaf9]">
-      <AppSidebar health={health} />
+      <AppSidebar health={health} projects={projects} />
 
-      <main className="flex-1 pl-[240px]">
+      <main className="flex-1 pl-[260px]">
         <header className="sticky top-0 z-30 flex h-[52px] items-center justify-between border-b border-[#e5e5e3] bg-white px-6">
           <h1 className="text-[15px] font-semibold tracking-[-0.02em] text-[#1a1a1a]">New Project</h1>
           <div className="flex items-center gap-2 rounded-[8px] bg-[#f1f1ef] p-1">

@@ -1,44 +1,37 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { AppSidebar } from "@/components/app-sidebar";
-import { KanbanBoard } from "@/components/kanban-board";
-import { StoryDetailPanel } from "@/components/story-detail-panel";
-import { fetchProjects, fetchAccountsHealth } from "@/lib/api";
+import { PortfolioProjectCard } from "@/components/portfolio-project-card";
+import { archiveProject, fetchAccountsHealth, fetchProjects, launchProject, pauseProject, resumeProject } from "@/lib/api";
 import { useSSE } from "@/lib/sse";
-import type { Project, AccountHealth, Story } from "@/lib/types";
+import type { AccountHealth, ProjectSummary } from "@/lib/types";
 
 export default function DashboardPage() {
-  const [projects, setProjects] = useState<Project[]>([]);
+  const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [health, setHealth] = useState<AccountHealth | null>(null);
-  const [selectedProject, setSelectedProject] = useState<string>("");
-  const [selectedStoryId, setSelectedStoryId] = useState<number | null>(null);
-  const [panelOpen, setPanelOpen] = useState(false);
+  const [busyProjectId, setBusyProjectId] = useState<string>("");
+  const [message, setMessage] = useState("");
 
   const loadData = useCallback(async () => {
     try {
-      const [projData, healthData] = await Promise.all([
-        fetchProjects(),
+      const [projectData, healthData] = await Promise.all([
+        fetchProjects(false),
         fetchAccountsHealth(),
       ]);
-      setProjects(projData.projects || []);
-      setHealth(healthData);
-    } catch {
-      // API not available yet
+      setProjects((projectData.projects || []) as ProjectSummary[]);
+      setHealth(healthData as AccountHealth);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Failed to load dashboard.");
     }
   }, []);
 
   useEffect(() => {
-    const initialLoad = setTimeout(() => {
-      void loadData();
-    }, 0);
+    void loadData();
     const interval = setInterval(() => {
       void loadData();
     }, 10000);
-    return () => {
-      clearTimeout(initialLoad);
-      clearInterval(interval);
-    };
+    return () => clearInterval(interval);
   }, [loadData]);
 
   useSSE(
@@ -47,79 +40,86 @@ export default function DashboardPage() {
     }, [loadData])
   );
 
-  const handleStoryClick = (projectName: string, storyId: number) => {
-    setSelectedProject(projectName);
-    setSelectedStoryId(storyId);
-    setPanelOpen(true);
+  const visibleProjects = useMemo(
+    () => projects.filter((project) => !project.archived),
+    [projects]
+  );
+
+  const runAction = async (projectId: string, action: () => Promise<{ message: string }>) => {
+    setBusyProjectId(projectId);
+    setMessage("");
+    try {
+      const result = await action();
+      setMessage(result.message);
+      await loadData();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Action failed.");
+    } finally {
+      setBusyProjectId("");
+    }
   };
 
-  const selectedStory: Story | null = (() => {
-    if (!selectedProject || !selectedStoryId) return null;
-    const proj = projects.find((p) => p.name === selectedProject);
-    return proj?.stories.find((s) => s.id === selectedStoryId) ?? null;
-  })();
-
   return (
-    <div className="flex min-h-screen bg-[#fbfbf9]">
-      <AppSidebar health={health} />
+    <div className="flex min-h-screen bg-[#fafaf9]">
+      <AppSidebar health={health} projects={visibleProjects} />
 
-      <main className="flex-1 pl-[240px]">
-        <header className="sticky top-0 z-30 flex h-[48px] items-center justify-between border-b border-[#e3e2e0] bg-white px-6">
-          <h1 className="text-[14px] font-semibold text-[#37352f]">Projects</h1>
-          <div className="flex items-center gap-3">
-            {health && (
-              <div className="flex items-center gap-2 text-[13px]">
-                <span className="inline-block h-2 w-2 rounded-full bg-[#2ecc71]" />
-                <span className="tabular-nums text-[#787774]">{health.available} agents available</span>
-              </div>
-            )}
+      <main className="flex-1 pl-[260px]">
+        <header className="sticky top-0 z-30 flex h-[52px] items-center justify-between border-b border-[#e5e5e3] bg-white px-6">
+          <div>
+            <h1 className="text-[15px] font-semibold tracking-[-0.02em] text-[#1a1a1a]">Projects</h1>
+            <p className="mt-0.5 text-[12px] text-[#9b9a97]">
+              Portfolio view for active workspaces and live runs.
+            </p>
           </div>
+          {health && (
+            <div className="flex items-center gap-2 text-[13px]">
+              <span className="inline-block h-2 w-2 rounded-full bg-[#2ecc71]" />
+              <span className="tabular-nums text-[#787774]">{health.available} agents available</span>
+            </div>
+          )}
         </header>
 
         <div className="px-6 py-6">
-          {projects.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-24 text-center">
-              <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-xl bg-secondary">
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="text-muted-foreground">
-                  <rect x="3" y="3" width="7" height="7" rx="1" />
-                  <rect x="14" y="3" width="7" height="7" rx="1" />
-                  <rect x="3" y="14" width="7" height="7" rx="1" />
-                  <rect x="14" y="14" width="7" height="7" rx="1" />
-                </svg>
+          {message && (
+            <div className="mb-4 rounded-xl border border-[#e5e5e3] bg-white px-4 py-3 text-[13px] text-[#6b6b6b]">
+              {message}
+            </div>
+          )}
+
+          {visibleProjects.length === 0 ? (
+            <div className="flex min-h-[60vh] items-center justify-center">
+              <div className="max-w-md rounded-2xl border border-dashed border-[#e5e5e3] bg-white px-8 py-12 text-center">
+                <h2 className="text-[18px] font-semibold text-[#37352f]">No active projects</h2>
+                <p className="mt-3 text-[14px] leading-relaxed text-[#787774]">
+                  Create a project from the intake chat or import a spec to start a new workspace.
+                </p>
               </div>
-              <h3 className="text-[15px] font-semibold">No projects yet</h3>
-              <p className="mt-1 text-[13px] text-muted-foreground max-w-sm">
-                Add projects to ~/.autopilot/projects.yaml or create a new one via the Intake chat.
-              </p>
             </div>
           ) : (
-            <div className="space-y-16 divide-y divide-[#e3e2e0]">
-              {projects.map((project) => (
-                <KanbanBoard
-                  key={project.name}
+            <div className="space-y-4">
+              {visibleProjects.map((project) => (
+                <PortfolioProjectCard
+                  key={project.id}
                   project={project}
-                  selectedStoryId={
-                    selectedProject === project.name ? selectedStoryId : null
-                  }
-                  onStoryClick={(id) => handleStoryClick(project.name, id)}
+                  busy={busyProjectId === project.id}
+                  onLaunch={() => {
+                    const fn = project.status === "paused"
+                      ? () => resumeProject(project.id)
+                      : () => launchProject(project.id);
+                    void runAction(project.id, fn);
+                  }}
+                  onPause={() => {
+                    void runAction(project.id, () => pauseProject(project.id));
+                  }}
+                  onArchive={() => {
+                    void runAction(project.id, () => archiveProject(project.id));
+                  }}
                 />
               ))}
             </div>
           )}
         </div>
       </main>
-
-      {/* Story detail slide-out */}
-      <StoryDetailPanel
-        story={selectedStory}
-        projectName={selectedProject}
-        open={panelOpen}
-        onClose={() => {
-          setPanelOpen(false);
-          setSelectedStoryId(null);
-        }}
-        onAction={loadData}
-      />
     </div>
   );
 }

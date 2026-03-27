@@ -49,6 +49,14 @@ class AutopilotConfig:
     def projects_yaml_path(self) -> Path:
         return self.autopilot_home / "projects.yaml"
 
+    @property
+    def runtime_state_dir(self) -> Path:
+        return self.autopilot_home / "state"
+
+    @property
+    def events_log_path(self) -> Path:
+        return self.autopilot_home / "events" / "events.jsonl"
+
 
 DEFAULT_CONFIG = AutopilotConfig()
 

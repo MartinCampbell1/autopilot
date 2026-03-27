@@ -19,6 +19,14 @@ interface StoryCardProps {
 
 export function StoryCard({ story, onClick, isSelected }: StoryCardProps) {
   const cfg = STATUS_CONFIG[story.status] || STATUS_CONFIG.open;
+  const updated = story.updated_at
+    ? new Intl.DateTimeFormat("en", {
+        month: "short",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+      }).format(new Date(story.updated_at))
+    : null;
 
   return (
     <button
@@ -38,7 +46,7 @@ export function StoryCard({ story, onClick, isSelected }: StoryCardProps) {
       </p>
 
       {/* Metadata pills */}
-      {(story.agent || story.iteration !== undefined || story.elapsed_min !== undefined) && (
+      {(story.agent || story.iteration !== undefined || updated) && (
         <div className="mt-2.5 flex items-center gap-1.5 flex-wrap">
           {story.agent && (
             <span className="rounded-[4px] bg-[#f1f1ef] px-2.5 py-[3px] text-[11px] text-[#6b6b6b] font-medium">
@@ -50,9 +58,9 @@ export function StoryCard({ story, onClick, isSelected }: StoryCardProps) {
               iter {story.iteration}
             </span>
           )}
-          {story.elapsed_min !== undefined && (
+          {updated && (
             <span className="rounded-[4px] bg-[#f1f1ef] px-2.5 py-[3px] text-[11px] text-[#6b6b6b] font-medium tabular-nums">
-              {story.elapsed_min}m
+              {updated}
             </span>
           )}
         </div>
