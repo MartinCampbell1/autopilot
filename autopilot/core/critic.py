@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import subprocess
+import tempfile
 import time
 from pathlib import Path
 
@@ -11,7 +12,18 @@ from autopilot.core.models import CriticResult
 
 TEMPLATE_DIR = Path(__file__).parent.parent / "templates"
 ISSUE_PATTERN = re.compile(r"^\s*-\s*Issue\b.*", re.IGNORECASE)
-PLACEHOLDER_ISSUE_PATTERN = re.compile(r"^\s*-\s*Issue\s+\d+:\s*specific description\s*$", re.IGNORECASE)
+PLACEHOLDER_ISSUE_PATTERN = re.compile(
+    r"^\s*(?:-\s*)?(?:"
+    r"Issue\s+\d+:\s*specific description|"
+    r"<[^>]+>|"
+    r"concrete issue\b.*|"
+    r"second concrete issue\b.*|"
+    r"Then list one or more bullet points with concrete blocking issues\.?|"
+    r"Followed by one or more bullet points that each name a real blocking issue\.?"
+    r")\s*$",
+    re.IGNORECASE,
+)
+NON_ACTIONABLE_FEEDBACK = "Critic returned NEEDS_WORK without actionable issues."
 STOP_MARKERS = (
     "openai codex",
     "claude code",
@@ -47,9 +59,48 @@ APPROVED
 
 If there are issues:
 NEEDS_WORK
-- Issue 1: specific description
-- Issue 2: specific description
+Then list one or more bullet points with concrete blocking issues.
 """
+
+STRICT_CRITIC_TEMPLATE = """You are a code reviewer. Evaluate the latest relevant code changes in the workspace against the story.
+
+## Task from PRD
+{story_title}: {story_description}
+
+## Diff
+{diff}
+
+## Review rules
+1. Approve only if the change satisfies the story as written.
+2. Reject only for concrete, code-backed issues you can point to in the diff or files.
+3. Do not output placeholder bullet text or template fillers.
+4. If you cannot identify at least one concrete blocking issue, respond with APPROVED.
+5. If tests or verification are missing for required new behavior, call that out explicitly.
+
+## Response format
+Use exactly one of these formats:
+
+APPROVED
+
+or
+
+NEEDS_WORK
+Followed by one or more bullet points that each name a real blocking issue.
+"""
+
+
+def feedback_is_actionable(feedback: str) -> bool:
+    stripped = feedback.strip()
+    if not stripped or stripped == NON_ACTIONABLE_FEEDBACK:
+        return False
+
+    lines = [line.strip() for line in stripped.splitlines() if line.strip()]
+    if not lines:
+        return False
+
+    if all(PLACEHOLDER_ISSUE_PATTERN.match(line) for line in lines):
+        return False
+    return True
 
 
 def _extract_issue_lines(raw_output: str) -> list[str]:
@@ -111,7 +162,7 @@ def parse_critic_output(raw_output: str) -> CriticResult:
         feedback_lines = _extract_issue_lines(raw_output)
         feedback = "\n".join(feedback_lines).strip()
         if not feedback:
-            feedback = "Critic returned NEEDS_WORK without actionable issues."
+            feedback = NON_ACTIONABLE_FEEDBACK
 
         return CriticResult(
             approved=False,
@@ -130,12 +181,14 @@ def build_critic_prompt(
     story_description: str,
     diff: str,
     template_path: Path | None = None,
+    *,
+    strict: bool = False,
 ) -> str:
     """Build a critic prompt from template and runtime values."""
     if template_path and template_path.exists():
         template = template_path.read_text()
     else:
-        template = DEFAULT_CRITIC_TEMPLATE
+        template = STRICT_CRITIC_TEMPLATE if strict else DEFAULT_CRITIC_TEMPLATE
 
     return template.format(
         story_title=story_title,
@@ -189,28 +242,71 @@ def run_critic(
     started_at = time.time()
 
     if provider == "codex":
-        cmd = ["codex", "exec", "--full-auto", prompt]
+        output_file = None
+        try:
+            with tempfile.NamedTemporaryFile(prefix="autopilot-critic-", suffix=".txt", delete=False) as handle:
+                output_file = Path(handle.name)
+            cmd = [
+                "codex",
+                "exec",
+                "--full-auto",
+                "--skip-git-repo-check",
+                "--ephemeral",
+                "-o",
+                str(output_file),
+                "-",
+            ]
+            result = subprocess.run(
+                cmd,
+                cwd=str(workdir),
+                input=prompt,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                env=env,
+            )
+            raw_output = output_file.read_text().strip() if output_file.exists() and output_file.read_text().strip() else result.stdout + result.stderr
+        except subprocess.TimeoutExpired:
+            raw_output = "TIMEOUT: critic did not respond within time limit"
+        except Exception as exc:
+            raw_output = f"ERROR: {exc}"
+        finally:
+            if output_file and output_file.exists():
+                output_file.unlink(missing_ok=True)
     elif provider == "claude":
         cmd = ["claude", "-p", prompt]
+        try:
+            result = subprocess.run(
+                cmd,
+                cwd=str(workdir),
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                env=env,
+            )
+            raw_output = result.stdout + result.stderr
+        except subprocess.TimeoutExpired:
+            raw_output = "TIMEOUT: critic did not respond within time limit"
+        except Exception as exc:
+            raw_output = f"ERROR: {exc}"
     elif provider == "gemini":
         cmd = ["gemini", "-p", prompt]
+        try:
+            result = subprocess.run(
+                cmd,
+                cwd=str(workdir),
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                env=env,
+            )
+            raw_output = result.stdout + result.stderr
+        except subprocess.TimeoutExpired:
+            raw_output = "TIMEOUT: critic did not respond within time limit"
+        except Exception as exc:
+            raw_output = f"ERROR: {exc}"
     else:
         return CriticResult(approved=False, feedback=f"Unknown provider: {provider}", raw_output="")
-
-    try:
-        result = subprocess.run(
-            cmd,
-            cwd=str(workdir),
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            env=env,
-        )
-        raw_output = result.stdout + result.stderr
-    except subprocess.TimeoutExpired:
-        raw_output = "TIMEOUT: critic did not respond within time limit"
-    except Exception as exc:
-        raw_output = f"ERROR: {exc}"
 
     parsed = parse_critic_output(raw_output)
     parsed.elapsed_sec = round(time.time() - started_at, 2)

@@ -1,6 +1,6 @@
 """Tests for critic runner."""
 
-from autopilot.core.critic import build_critic_prompt, parse_critic_output
+from autopilot.core.critic import NON_ACTIONABLE_FEEDBACK, build_critic_prompt, feedback_is_actionable, parse_critic_output
 
 
 class TestParseCriticOutput:
@@ -58,7 +58,22 @@ exec /bin/zsh -lc 'git show'
 """
         result = parse_critic_output(output)
         assert result.approved is False
-        assert result.feedback == "Critic returned NEEDS_WORK without actionable issues."
+        assert result.feedback == NON_ACTIONABLE_FEEDBACK
+
+    def test_needs_work_instruction_echo_becomes_non_actionable(self) -> None:
+        output = """NEEDS_WORK
+Then list one or more bullet points with concrete blocking issues.
+"""
+        result = parse_critic_output(output)
+        assert result.approved is False
+        assert result.feedback == NON_ACTIONABLE_FEEDBACK
+
+    def test_feedback_is_actionable(self) -> None:
+        assert feedback_is_actionable("- Issue 1: missing test")
+        assert not feedback_is_actionable(NON_ACTIONABLE_FEEDBACK)
+        assert not feedback_is_actionable("- Issue 1: specific description")
+        assert not feedback_is_actionable("- <concrete issue tied to code, tests, files, or behavior>")
+        assert not feedback_is_actionable("Then list one or more bullet points with concrete blocking issues.")
 
 
 class TestBuildCriticPrompt:
@@ -72,3 +87,13 @@ class TestBuildCriticPrompt:
         assert "OAuth login" in prompt
         assert "oauth_callback" in prompt
         assert "latest relevant code changes in the workspace" in prompt
+
+    def test_builds_strict_prompt_without_placeholder_language(self) -> None:
+        prompt = build_critic_prompt(
+            story_title="OAuth login",
+            story_description="Add Google OAuth",
+            diff="+ def oauth_callback():\n+     pass",
+            strict=True,
+        )
+        assert "If you cannot identify at least one concrete blocking issue, respond with APPROVED." in prompt
+        assert "<concrete issue" not in prompt

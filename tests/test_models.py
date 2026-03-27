@@ -8,6 +8,7 @@ from autopilot.core.models import (
     IterationRecord,
     Profile,
     StoryStatus,
+    is_rate_limited,
 )
 
 
@@ -88,3 +89,15 @@ class TestIterationRecord:
         )
         assert record.story_id == 1
         assert record.critic_approved is False
+
+
+class TestRateLimitDetection:
+    def test_detects_real_rate_limit_messages(self) -> None:
+        assert is_rate_limited("HTTP 429 Too Many Requests")
+        assert is_rate_limited("resource_exhausted: try again later")
+
+    def test_ignores_timing_output_that_contains_429ms(self) -> None:
+        assert not is_rate_limited("command succeeded in 429ms")
+
+    def test_ignores_story_text_that_mentions_limited_scope(self) -> None:
+        assert not is_rate_limited("The story is limited to creating README.md and notes.txt.")
