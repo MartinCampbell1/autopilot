@@ -18,7 +18,7 @@ from typing import Any
 import yaml
 
 from autopilot.core.config import AutopilotConfig
-from autopilot.core.loop_runner import check_ralph_installed
+from autopilot.core.loop_runner import apply_autopilot_ralph_overrides, check_ralph_installed, init_ralph_project
 
 TIMELINE_LIMIT = 300
 TERMINAL_STORY_STATUSES = {"done", "skipped", "stuck"}
@@ -780,12 +780,18 @@ def launch_project_run(
     if not check_ralph_installed():
         return False, None, "Project created, but Ralph is not installed. Install Ralph before launching."
 
+    project_path = Path(project["path"])
+    if not (project_path / ".agents" / "ralph" / "loop.sh").exists():
+        if not init_ralph_project(project_path):
+            return False, None, "Ralph project initialization failed."
+    else:
+        apply_autopilot_ralph_overrides(project_path)
+
     logs_dir = config.autopilot_home / "logs"
     logs_dir.mkdir(parents=True, exist_ok=True)
     log_path = logs_dir / f"{project['id']}.log"
 
     with log_path.open("a", encoding="utf-8") as log_file:
-        init_cmd = f"{shlex.quote(sys.executable)} -m autopilot init {shlex.quote(str(project['path']))}"
         run_cmd = (
             f"{shlex.quote(sys.executable)} -m autopilot run "
             f"{shlex.quote(str(project['path']))} "
@@ -793,7 +799,7 @@ def launch_project_run(
             f"--prd {shlex.quote(project.get('prd', '.agents/tasks/prd.json'))}"
         )
         process = subprocess.Popen(
-            ["/bin/sh", "-lc", f"{init_cmd} && {run_cmd}"],
+            ["/bin/sh", "-lc", run_cmd],
             stdout=log_file,
             stderr=subprocess.STDOUT,
             start_new_session=True,

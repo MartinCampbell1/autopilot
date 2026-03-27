@@ -7,8 +7,44 @@ import subprocess
 from pathlib import Path
 
 from autopilot.core.models import is_rate_limited
+from autopilot.core.providers import build_cli_command
 
 IGNORED_PREFIXES = (".agents/", ".ralph/")
+TEMPLATE_DIR = Path(__file__).parent.parent / "templates"
+RALPH_BUILD_TEMPLATE_PATH = TEMPLATE_DIR / "ralph-build-prompt.md"
+RETRY_TEMPLATE_PATH = TEMPLATE_DIR / "retry-prompt.md"
+DEFAULT_PROJECT_AGENTS = """# AGENTS.md
+
+This repository was bootstrapped by Autopilot from a PRD.
+
+## Operational Rules
+- Work only on the currently selected story.
+- For non-documentation stories, a README-only or docs-only change is incomplete.
+- If the repository is greenfield, create the smallest real scaffold needed to satisfy the story.
+- If the story depends on an existing app, gateway, or file that is not present here, record the exact blocker in `.ralph/errors.log` and `.ralph/guardrails.md`, then stop without claiming success.
+- Prefer the lightest verification that still proves the story works.
+- If you discover repeatable build/test commands, keep this file updated with concise operational notes.
+
+## Verification Guidance
+- Python: prefer `pytest`, then targeted smoke checks or import checks.
+- Node: prefer `npm test`, `npm run lint`, or `npm run build` when available.
+- If no tooling exists yet, add the smallest meaningful verification artifact you can run and document it in `.ralph/progress.md`.
+"""
+DEFAULT_STATE_FILES = {
+    "progress.md": "# Progress\n\n",
+    "guardrails.md": "# Guardrails\n\nDo not repeat these mistakes:\n\n",
+    "errors.log": "# Error Log\n\n> Failures and repeated issues. Use this to add guardrails.\n",
+    "activity.log": "# Activity Log\n\n## Run Summary\n\n## Events\n",
+    "critic-feedback.md": "",
+}
+RALPH_LOOP_REPLACE_OLD = '    src = src.replace("{{" + k + "}}", v)\n'
+RALPH_LOOP_REPLACE_NEW = '    src = src.replace("{{" + k + "}}", str(v))\n'
+AUTOPILOT_CONFIG_MARKER = "# Autopilot overrides"
+AUTOPILOT_CONFIG_BLOCK = """# Autopilot overrides
+ACTIVITY_CMD=".agents/ralph/log-activity.sh"
+AGENTS_PATH="AGENTS.md"
+PROMPT_BUILD=".agents/ralph/PROMPT_build.md"
+"""
 
 
 def check_ralph_installed() -> bool:
@@ -16,8 +52,40 @@ def check_ralph_installed() -> bool:
     return shutil.which("ralph") is not None
 
 
+def apply_autopilot_ralph_overrides(project_path: Path) -> None:
+    """Install Autopilot-specific Ralph prompt and support files into a project."""
+    agents_dir = project_path / ".agents" / "ralph"
+    agents_dir.mkdir(parents=True, exist_ok=True)
+
+    if RALPH_BUILD_TEMPLATE_PATH.exists():
+        (agents_dir / "PROMPT_build.md").write_text(RALPH_BUILD_TEMPLATE_PATH.read_text())
+
+    loop_script = agents_dir / "loop.sh"
+    if loop_script.exists():
+        loop_contents = loop_script.read_text()
+        if RALPH_LOOP_REPLACE_OLD in loop_contents and RALPH_LOOP_REPLACE_NEW not in loop_contents:
+            loop_script.write_text(loop_contents.replace(RALPH_LOOP_REPLACE_OLD, RALPH_LOOP_REPLACE_NEW))
+
+    config_script = agents_dir / "config.sh"
+    if config_script.exists():
+        config_contents = config_script.read_text()
+        if AUTOPILOT_CONFIG_MARKER not in config_contents:
+            config_script.write_text(f"{config_contents.rstrip()}\n\n{AUTOPILOT_CONFIG_BLOCK}")
+
+    agents_doc = project_path / "AGENTS.md"
+    if not agents_doc.exists():
+        agents_doc.write_text(DEFAULT_PROJECT_AGENTS)
+
+    ralph_dir = project_path / ".ralph"
+    ralph_dir.mkdir(parents=True, exist_ok=True)
+    for filename, default_contents in DEFAULT_STATE_FILES.items():
+        file_path = ralph_dir / filename
+        if not file_path.exists():
+            file_path.write_text(default_contents)
+
+
 def init_ralph_project(project_path: Path) -> bool:
-    """Run `ralph install` in the project directory."""
+    """Run `ralph install` in the project directory and apply Autopilot overrides."""
     agents_dir = project_path / ".agents" / "ralph"
     try:
         result = subprocess.run(
@@ -28,10 +96,17 @@ def init_ralph_project(project_path: Path) -> bool:
             timeout=30,
         )
         if result.returncode == 0:
+            apply_autopilot_ralph_overrides(project_path)
             return True
-        return agents_dir.exists()
+        if agents_dir.exists():
+            apply_autopilot_ralph_overrides(project_path)
+            return True
+        return False
     except Exception:
-        return agents_dir.exists()
+        if agents_dir.exists():
+            apply_autopilot_ralph_overrides(project_path)
+            return True
+        return False
 
 
 def run_ralph_iteration(
@@ -44,6 +119,59 @@ def run_ralph_iteration(
     cmd = ["ralph", "build", "1"]
     if prd_path:
         cmd.extend(["--prd", prd_path])
+
+    try:
+        result = subprocess.run(
+            cmd,
+            cwd=str(project_path),
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            env=env,
+        )
+        output = f"{result.stdout}\n{result.stderr}".strip()
+        success = result.returncode == 0
+        rate_limited = is_rate_limited(output)
+        return success, output, rate_limited
+    except subprocess.TimeoutExpired:
+        return False, f"Timeout after {timeout}s", False
+    except Exception as exc:
+        return False, str(exc), False
+
+
+def build_retry_prompt(
+    story_id: int,
+    story_title: str,
+    story_description: str,
+    template_path: Path | None = None,
+) -> str:
+    """Build a focused retry prompt for follow-up iterations."""
+    resolved_template = template_path or RETRY_TEMPLATE_PATH
+    template = resolved_template.read_text() if resolved_template.exists() else (
+        "Continue story #{story_id}: {story_title}\n\n"
+        "Story details:\n{story_description}\n\n"
+        "Read .ralph/critic-feedback.md, .ralph/progress.md, and .ralph/guardrails.md.\n"
+        "Fix only the outstanding issues from the previous attempt.\n"
+    )
+    return template.format(
+        story_id=story_id,
+        story_title=story_title,
+        story_description=story_description,
+    )
+
+
+def run_retry_iteration(
+    project_path: Path,
+    env: dict[str, str],
+    provider: str,
+    story_id: int,
+    story_title: str,
+    story_description: str,
+    timeout: int = 1800,
+) -> tuple[bool, str, bool]:
+    """Run a focused retry prompt after a failed or rejected iteration."""
+    prompt = build_retry_prompt(story_id, story_title, story_description)
+    cmd = build_cli_command(provider, prompt, mode="exec")
 
     try:
         result = subprocess.run(
