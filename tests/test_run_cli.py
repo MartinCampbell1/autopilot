@@ -18,9 +18,23 @@ def test_write_ralph_story_snapshot_selects_only_requested_story(tmp_path: Path)
             {
                 "title": "Demo",
                 "description": "Demo project",
+                "phases": [{"id": "phase-1", "title": "Foundation", "goal": "Bootstrap"}],
                 "stories": [
                     {"id": 1, "title": "One", "description": "A", "position": 0, "status": "stuck"},
-                    {"id": 2, "title": "Two", "description": "B", "position": 1, "status": "open"},
+                    {
+                        "id": 2,
+                        "title": "Two",
+                        "description": "B",
+                        "position": 1,
+                        "phase_id": "phase-1",
+                        "phase_title": "Foundation",
+                        "acceptance_criteria": ["Pass a smoke check"],
+                        "tags": ["backend", "api"],
+                        "role": "backend_worker",
+                        "skill_packs": ["fastapi-backend"],
+                        "connectors": ["shell_exec", "python_exec"],
+                        "status": "open",
+                    },
                     {"id": 3, "title": "Three", "description": "C", "position": 2, "status": "done"},
                 ],
             }
@@ -38,4 +52,7 @@ def test_write_ralph_story_snapshot_selects_only_requested_story(tmp_path: Path)
 
     snapshot = json.loads(Path(snapshot_path).read_text())
 
+    assert snapshot["phases"][0]["title"] == "Foundation"
     assert [story["status"] for story in snapshot["stories"]] == ["done", "open", "done"]
+    assert snapshot["stories"][1]["role"] == "backend_worker"
+    assert snapshot["stories"][1]["acceptance_criteria"] == ["Pass a smoke check"]

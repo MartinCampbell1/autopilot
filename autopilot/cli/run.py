@@ -65,6 +65,7 @@ def _write_ralph_story_snapshot(project_entry: dict, story_id: int) -> str:
     snapshot = {
         "title": prd.get("title", project_entry["name"]),
         "description": prd.get("description", ""),
+        "phases": prd.get("phases", []),
         "stories": [],
     }
     for story in prd.get("stories", []):
@@ -74,6 +75,14 @@ def _write_ralph_story_snapshot(project_entry: dict, story_id: int) -> str:
                 "title": story.get("title", f"Story {story['id']}"),
                 "description": story.get("description", ""),
                 "position": story.get("position", 0),
+                "phase_id": story.get("phase_id"),
+                "phase_title": story.get("phase_title"),
+                "phase_goal": story.get("phase_goal"),
+                "acceptance_criteria": story.get("acceptance_criteria", []),
+                "tags": story.get("tags", []),
+                "role": story.get("role"),
+                "skill_packs": story.get("skill_packs", []),
+                "connectors": story.get("connectors", []),
                 "status": "open" if story["id"] == story_id else "done",
             }
         )

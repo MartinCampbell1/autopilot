@@ -6,6 +6,14 @@ export interface Story {
   title: string;
   description: string;
   position: number;
+  phase_id?: string | null;
+  phase_title?: string | null;
+  phase_goal?: string | null;
+  tags?: string[];
+  role?: string | null;
+  skill_packs?: string[];
+  connectors?: string[];
+  acceptance_criteria?: string[];
   status: StoryStatus;
   started_at?: string | null;
   completed_at?: string | null;
@@ -47,6 +55,11 @@ export interface ProjectSummary {
 
 export interface ProjectDetail extends ProjectSummary {
   description: string;
+  phases?: Array<{
+    id: string;
+    title: string;
+    goal?: string;
+  }>;
   stories: Story[];
   timeline: TimelineEvent[];
   guardrails: string;
@@ -89,12 +102,52 @@ export interface IntakeSession {
 export interface PRD {
   title: string;
   description: string;
+  phases?: Array<{
+    id: string;
+    title: string;
+    goal?: string;
+  }>;
   stories: Array<{
     id: number;
+    phase_id?: string;
+    phase_title?: string;
     title: string;
     description: string;
+    acceptance_criteria?: string[];
+    tags?: string[];
+    role?: string;
+    skill_packs?: string[];
+    connectors?: string[];
     status?: string;
   }>;
+}
+
+export interface MCPConnector {
+  id: string;
+  name: string;
+  connector_type: string;
+  description: string;
+  transport: string;
+  tags: string[];
+  providers: string[];
+  risk_level: string;
+  scopes: string[];
+  enabled: boolean;
+  built_in: boolean;
+  config: Record<string, unknown>;
+  validation_status: string;
+}
+
+export interface SkillPack {
+  id: string;
+  name: string;
+  description: string;
+  prompt: string;
+  tags: string[];
+  default_roles: string[];
+  preferred_connectors: string[];
+  enabled: boolean;
+  built_in: boolean;
 }
 
 export interface CreateProjectResult {
