@@ -1,4 +1,5 @@
 import type {
+  CapabilitiesCatalog,
   AccountHealth,
   AccountsByProvider,
   CreateProjectResult,
@@ -7,6 +8,8 @@ import type {
   PRD,
   ProjectDetail,
   ProjectSummary,
+  MCPConnector,
+  SkillPack,
 } from "@/lib/types";
 
 export const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8420/api";
@@ -156,4 +159,65 @@ export async function importProviderSession(provider: string): Promise<{ status:
     method: "POST",
   });
   return jsonOrThrow<{ status: string; message: string }>(res, `Session import failed: ${res.status}`);
+}
+
+export async function fetchCapabilitiesCatalog(): Promise<CapabilitiesCatalog> {
+  const res = await fetch(`${API_BASE}/capabilities/catalog`);
+  return jsonOrThrow<CapabilitiesCatalog>(res, `Failed to fetch capabilities catalog: ${res.status}`);
+}
+
+export async function fetchConnectors(): Promise<{ connectors: MCPConnector[] }> {
+  const res = await fetch(`${API_BASE}/capabilities/connectors`);
+  return jsonOrThrow<{ connectors: MCPConnector[] }>(res, `Failed to fetch connectors: ${res.status}`);
+}
+
+export async function createConnector(
+  connector: Omit<MCPConnector, "built_in" | "validation_status">
+): Promise<{ status: string; connector: MCPConnector }> {
+  const res = await fetch(`${API_BASE}/capabilities/connectors`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(connector),
+  });
+  return jsonOrThrow<{ status: string; connector: MCPConnector }>(res, `Connector creation failed: ${res.status}`);
+}
+
+export async function updateConnector(
+  connectorId: string,
+  connector: Omit<MCPConnector, "built_in" | "validation_status">
+): Promise<{ status: string; connector: MCPConnector }> {
+  const res = await fetch(`${API_BASE}/capabilities/connectors/${encodeURIComponent(connectorId)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(connector),
+  });
+  return jsonOrThrow<{ status: string; connector: MCPConnector }>(res, `Connector update failed: ${res.status}`);
+}
+
+export async function fetchSkillPacks(): Promise<{ skill_packs: SkillPack[] }> {
+  const res = await fetch(`${API_BASE}/capabilities/skill-packs`);
+  return jsonOrThrow<{ skill_packs: SkillPack[] }>(res, `Failed to fetch skill packs: ${res.status}`);
+}
+
+export async function createSkillPack(
+  skillPack: Omit<SkillPack, "built_in">
+): Promise<{ status: string; skill_pack: SkillPack }> {
+  const res = await fetch(`${API_BASE}/capabilities/skill-packs`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(skillPack),
+  });
+  return jsonOrThrow<{ status: string; skill_pack: SkillPack }>(res, `Skill pack creation failed: ${res.status}`);
+}
+
+export async function updateSkillPack(
+  skillPackId: string,
+  skillPack: Omit<SkillPack, "built_in">
+): Promise<{ status: string; skill_pack: SkillPack }> {
+  const res = await fetch(`${API_BASE}/capabilities/skill-packs/${encodeURIComponent(skillPackId)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(skillPack),
+  });
+  return jsonOrThrow<{ status: string; skill_pack: SkillPack }>(res, `Skill pack update failed: ${res.status}`);
 }
