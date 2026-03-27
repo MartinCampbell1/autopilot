@@ -41,6 +41,14 @@ def run(
     _run(project_path, prd)
 
 
+@app.command(name="run-all")
+def run_all_projects() -> None:
+    """Run autopilot on all configured projects in parallel."""
+    from autopilot.cli.run import run_all
+
+    run_all()
+
+
 @app.command()
 def status() -> None:
     """Show status of accounts and projects."""

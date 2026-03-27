@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import concurrent.futures
 import json
 import time
 from pathlib import Path
@@ -147,3 +148,38 @@ def run(
                 break
 
     console.print("\n[bold]Autopilot finished.[/bold]")
+
+
+def run_all() -> None:
+    """Run autopilot on all configured projects in parallel."""
+    import yaml
+
+    config = load_config(Path.home() / ".autopilot" / "config.yaml")
+    projects_path = config.projects_yaml_path
+
+    if not projects_path.exists():
+        console.print("[red]No projects.yaml found. Create ~/.autopilot/projects.yaml[/red]")
+        raise typer.Exit(1)
+
+    data = yaml.safe_load(projects_path.read_text()) or {}
+    projects = data.get("projects", [])
+
+    if not projects:
+        console.print("[red]No projects configured in projects.yaml[/red]")
+        raise typer.Exit(1)
+
+    console.print(f"[bold]Autopilot[/bold] - running {len(projects)} projects in parallel\n")
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(projects)) as executor:
+        futures: dict[concurrent.futures.Future[None], str] = {}
+        for project in projects:
+            future = executor.submit(run, project["path"], project.get("prd", ".agents/tasks/prd.json"))
+            futures[future] = project["name"]
+
+        for future in concurrent.futures.as_completed(futures):
+            name = futures[future]
+            try:
+                future.result()
+                console.print(f"[green]{name}: complete[/green]")
+            except Exception as exc:
+                console.print(f"[red]{name}: error - {exc}[/red]")
