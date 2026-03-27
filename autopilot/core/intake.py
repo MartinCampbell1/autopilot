@@ -64,11 +64,11 @@ def run_intake_turn(
     conversation += "[Assistant]:"
 
     if provider == "codex":
-        cmd = ["codex", "exec", "--full-auto", conversation]
+        cmd = ["codex", "exec", "--full-auto", "--skip-git-repo-check", conversation]
     elif provider == "claude":
         cmd = ["claude", "-p", conversation]
     else:
-        cmd = ["codex", "exec", "--full-auto", conversation]
+        cmd = ["codex", "exec", "--full-auto", "--skip-git-repo-check", conversation]
 
     try:
         result = subprocess.run(
@@ -79,7 +79,16 @@ def run_intake_turn(
             cwd=workdir,
             env=env,
         )
-        response = result.stdout.strip()
+        stdout = result.stdout.strip()
+        stderr = result.stderr.strip()
+        if result.returncode == 0 and stdout:
+            response = stdout
+        elif stderr:
+            response = stderr
+        elif stdout:
+            response = stdout
+        else:
+            response = f"Command failed with exit code {result.returncode}"
     except Exception as exc:
         response = f"Error: {exc}"
 

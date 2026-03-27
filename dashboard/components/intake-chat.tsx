@@ -38,12 +38,16 @@ export function IntakeChat({ onPRDReady }: IntakeChatProps) {
       if (data.prd_ready && data.prd) {
         onPRDReady?.(data.prd);
       }
-    } catch {
+    } catch (error) {
+      const message =
+        error instanceof Error && error.message.trim()
+          ? error.message
+          : `Could not reach ${API_BASE}. Check that the FastAPI server is running and that NEXT_PUBLIC_API_URL points to the correct backend.`;
       setMessages((prev) => [
         ...prev,
         {
           role: "assistant",
-          content: `Could not reach ${API_BASE}. Check that the FastAPI server is running and that NEXT_PUBLIC_API_URL points to the correct backend.`,
+          content: message,
         },
       ]);
     } finally {
