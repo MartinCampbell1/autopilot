@@ -150,6 +150,22 @@ export interface SkillPack {
   built_in: boolean;
 }
 
+export interface RoleTemplate {
+  id: string;
+  name: string;
+  description: string;
+  default_skill_packs: string[];
+  optional_skill_tags: string[];
+  default_connectors: string[];
+  optional_connector_tags: string[];
+}
+
+export interface CapabilitiesCatalog {
+  connectors: MCPConnector[];
+  skill_packs: SkillPack[];
+  roles: RoleTemplate[];
+}
+
 export interface CreateProjectResult {
   status: string;
   project_id: string;
