@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import subprocess
 import time
 from pathlib import Path
@@ -9,8 +10,21 @@ from pathlib import Path
 from autopilot.core.models import CriticResult
 
 TEMPLATE_DIR = Path(__file__).parent.parent / "templates"
+ISSUE_PATTERN = re.compile(r"^\s*-\s*Issue\b.*", re.IGNORECASE)
+PLACEHOLDER_ISSUE_PATTERN = re.compile(r"^\s*-\s*Issue\s+\d+:\s*specific description\s*$", re.IGNORECASE)
+STOP_MARKERS = (
+    "openai codex",
+    "claude code",
+    "assistant",
+    "user",
+    "codex",
+    "exec",
+    "mcp:",
+    "tokens used",
+    "--------",
+)
 
-DEFAULT_CRITIC_TEMPLATE = """You are a code reviewer. Your task is to evaluate the latest commit.
+DEFAULT_CRITIC_TEMPLATE = """You are a code reviewer. Your task is to evaluate the latest relevant code changes in the workspace.
 
 ## Task from PRD
 {story_title}: {story_description}
@@ -36,6 +50,48 @@ NEEDS_WORK
 """
 
 
+def _extract_issue_lines(raw_output: str) -> list[str]:
+    lines = [line.rstrip() for line in raw_output.splitlines()]
+    needs_work_indexes = [index for index, line in enumerate(lines) if "NEEDS_WORK" in line.upper()]
+    search_space = lines[needs_work_indexes[-1] + 1 :] if needs_work_indexes else lines
+
+    issues: list[str] = []
+    for line in search_space:
+        stripped = line.strip()
+        if not stripped:
+            if issues:
+                break
+            continue
+        if any(stripped.lower().startswith(marker) for marker in STOP_MARKERS):
+            break
+        if ISSUE_PATTERN.match(stripped):
+            if PLACEHOLDER_ISSUE_PATTERN.match(stripped):
+                continue
+            issues.append(stripped)
+            continue
+        if issues:
+            break
+
+    if issues:
+        deduped: list[str] = []
+        for issue in issues:
+            if issue not in deduped:
+                deduped.append(issue)
+        return deduped
+
+    cleaned: list[str] = []
+    for line in search_space:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if any(stripped.lower().startswith(marker) for marker in STOP_MARKERS):
+            break
+        cleaned.append(stripped)
+        if len(cleaned) >= 8:
+            break
+    return cleaned
+
+
 def parse_critic_output(raw_output: str) -> CriticResult:
     """Parse critic CLI output into a structured result."""
     if not raw_output.strip():
@@ -46,19 +102,12 @@ def parse_critic_output(raw_output: str) -> CriticResult:
     has_approved = "APPROVED" in upper
 
     if has_needs_work:
-        lines = raw_output.strip().split("\n")
-        feedback_lines: list[str] = []
-        capture = False
-        for line in lines:
-            if "NEEDS_WORK" in line.upper():
-                capture = True
-                continue
-            if capture:
-                feedback_lines.append(line)
+        feedback_lines = _extract_issue_lines(raw_output)
+        feedback = "\n".join(feedback_lines).strip() or raw_output.strip()[:1000]
 
         return CriticResult(
             approved=False,
-            feedback="\n".join(feedback_lines).strip(),
+            feedback=feedback,
             raw_output=raw_output,
         )
 
@@ -88,10 +137,29 @@ def build_critic_prompt(
 
 
 def get_git_diff(workdir: Path) -> str:
-    """Get the diff of the previous commit relative to HEAD."""
+    """Return the latest committed diff for ad-hoc callers."""
     try:
+        has_head = subprocess.run(
+            ["git", "rev-parse", "--verify", "HEAD"],
+            cwd=str(workdir),
+            capture_output=True,
+            text=True,
+            timeout=10,
+        ).returncode == 0
+        if not has_head:
+            return ""
+
+        has_parent = subprocess.run(
+            ["git", "rev-parse", "--verify", "HEAD~1"],
+            cwd=str(workdir),
+            capture_output=True,
+            text=True,
+            timeout=10,
+        ).returncode == 0
+
+        cmd = ["git", "diff", "HEAD~1", "HEAD"] if has_parent else ["git", "show", "--format=", "HEAD"]
         result = subprocess.run(
-            ["git", "diff", "HEAD~1"],
+            cmd,
             cwd=str(workdir),
             capture_output=True,
             text=True,

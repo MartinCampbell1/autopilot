@@ -59,6 +59,15 @@ def _story_definitions(project_entry: dict) -> list[dict]:
 
 
 def _next_open_story(project_entry: dict, state: dict) -> dict | None:
+    current_story_id = state.get("current_story_id")
+    if current_story_id is not None:
+        current_runtime = state.get("story_state", {}).get(str(current_story_id), {})
+        if current_runtime.get("status") == "in_progress":
+            return next(
+                (story for story in _story_definitions(project_entry) if story["id"] == current_story_id),
+                None,
+            )
+
     story_state = state.get("story_state", {})
     for story in _story_definitions(project_entry):
         runtime = story_state.get(str(story["id"]), {})
@@ -179,6 +188,8 @@ def run(
             story_id = story["id"]
             story_title = story.get("title", f"Story #{story_id}")
             story_desc = story.get("description", "")
+            story_runtime = state["story_state"][str(story_id)]
+            resuming_story = story_runtime.get("status") == "in_progress"
 
             console.print(f"\n[bold]Story #{story_id}:[/bold] {story_title}")
             update_story_runtime(
@@ -186,7 +197,7 @@ def run(
                 project_id,
                 story_id,
                 status="in_progress",
-                started_at=state["story_state"][str(story_id)].get("started_at") or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                started_at=story_runtime.get("started_at") or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                 completed_at=None,
                 last_error=None,
             )
@@ -196,19 +207,20 @@ def run(
                 status="running",
                 paused=False,
                 current_story_id=story_id,
-                current_iteration=0,
+                current_iteration=story_runtime.get("iteration", 0) if resuming_story else 0,
                 active_worker=None,
                 active_critic=None,
                 last_error=None,
             )
-            emit_project_event(
-                config,
-                project_id,
-                event="story_started",
-                status="in_progress",
-                message=story_title,
-                story_id=story_id,
-            )
+            if not resuming_story:
+                emit_project_event(
+                    config,
+                    project_id,
+                    event="story_started",
+                    status="in_progress",
+                    message=story_title,
+                    story_id=story_id,
+                )
             orchestrator.reset_stuck()
 
             approved = False
