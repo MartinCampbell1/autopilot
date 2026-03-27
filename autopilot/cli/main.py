@@ -20,3 +20,11 @@ def version() -> None:
     from autopilot import __version__
 
     typer.echo(f"autopilot v{__version__}")
+
+
+@app.command()
+def login(provider: str = typer.Argument(help="Provider: codex, claude, or gemini")) -> None:
+    """Save a logged-in CLI session as a reusable profile."""
+    from autopilot.cli.login import login as _login
+
+    _login(provider)
