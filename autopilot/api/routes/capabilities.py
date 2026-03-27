@@ -9,6 +9,8 @@ from autopilot.api.deps import get_config
 from autopilot.core.capability_store import (
     MCPConnector,
     SkillPack,
+    delete_connector,
+    delete_skill_pack,
     load_connectors_registry,
     load_role_templates,
     load_skill_packs_registry,
@@ -81,6 +83,19 @@ async def update_connector(connector_id: str, request: ConnectorRequest) -> dict
     return {"status": "ok", "connector": stored.model_dump()}
 
 
+@router.delete("/connectors/{connector_id}")
+async def remove_connector(connector_id: str) -> dict[str, str]:
+    config = get_config()
+    existing = {connector.id: connector for connector in load_connectors_registry(config)}
+    connector = existing.get(connector_id)
+    if connector is None:
+        raise HTTPException(404, f"Connector {connector_id} not found")
+    if connector.built_in:
+        raise HTTPException(400, f"Connector {connector_id} is built in and cannot be deleted")
+    delete_connector(config, connector_id)
+    return {"status": "ok", "message": f"Connector {connector_id} deleted."}
+
+
 @router.get("/skill-packs")
 async def list_skill_packs() -> dict[str, list[dict]]:
     config = get_config()
@@ -106,3 +121,16 @@ async def update_skill_pack(skill_pack_id: str, request: SkillPackRequest) -> di
     skill_pack = SkillPack.model_validate({**request.model_dump(), "built_in": False})
     stored = upsert_skill_pack(config, skill_pack)
     return {"status": "ok", "skill_pack": stored.model_dump()}
+
+
+@router.delete("/skill-packs/{skill_pack_id}")
+async def remove_skill_pack(skill_pack_id: str) -> dict[str, str]:
+    config = get_config()
+    existing = {skill_pack.id: skill_pack for skill_pack in load_skill_packs_registry(config)}
+    skill_pack = existing.get(skill_pack_id)
+    if skill_pack is None:
+        raise HTTPException(404, f"Skill pack {skill_pack_id} not found")
+    if skill_pack.built_in:
+        raise HTTPException(400, f"Skill pack {skill_pack_id} is built in and cannot be deleted")
+    delete_skill_pack(config, skill_pack_id)
+    return {"status": "ok", "message": f"Skill pack {skill_pack_id} deleted."}

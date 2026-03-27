@@ -10,6 +10,8 @@ import { Textarea } from "@/components/ui/textarea";
 import {
   createConnector,
   createSkillPack,
+  deleteConnector,
+  deleteSkillPack,
   fetchCapabilitiesCatalog,
   updateConnector,
   updateSkillPack,
@@ -70,6 +72,52 @@ const EMPTY_SKILL_PACK: SkillPackDraft = {
 const CONNECTOR_TYPES = ["mcp_server", "http_api", "builtin", "custom"];
 const TRANSPORTS = ["stdio", "http", "builtin"];
 const RISK_LEVELS = ["low", "medium", "high"];
+const CONNECTOR_PRESETS: Array<{
+  label: string;
+  connector_type: string;
+  transport: string;
+  description: string;
+  tags: string[];
+  scopes: string[];
+  config: Record<string, string>;
+}> = [
+  {
+    label: "HTTP API",
+    connector_type: "http_api",
+    transport: "http",
+    description: "Call an external REST or JSON API from workers.",
+    tags: ["api", "integration", "backend"],
+    scopes: ["network"],
+    config: { base_url: "https://api.example.com", headers: "{}", auth_strategy: "bearer" },
+  },
+  {
+    label: "External MCP",
+    connector_type: "mcp_server",
+    transport: "stdio",
+    description: "Attach an external MCP server over stdio or HTTP transport.",
+    tags: ["mcp", "tools", "integration"],
+    scopes: ["network"],
+    config: { command: "npx your-mcp-server", args: "[]", url: "" },
+  },
+  {
+    label: "Neo4j Graph",
+    connector_type: "neo4j",
+    transport: "stdio",
+    description: "Expose a graph database for retrieval, relationships, or topology work.",
+    tags: ["graph", "database", "research"],
+    scopes: ["database"],
+    config: { uri: "bolt://localhost:7687", database: "neo4j", username: "", password: "" },
+  },
+  {
+    label: "Postgres",
+    connector_type: "postgres",
+    transport: "stdio",
+    description: "Expose a relational database for queries, migrations, and verification.",
+    tags: ["database", "backend", "data"],
+    scopes: ["database"],
+    config: { dsn: "postgresql://user:pass@localhost:5432/app" },
+  },
+];
 
 function splitList(value: string) {
   return value
@@ -127,6 +175,18 @@ function skillPackSummary(skillPack: SkillPack) {
 
 function roleSummary(role: RoleTemplate) {
   return `${role.default_skill_packs.join(", ") || "none"} · ${role.default_connectors.join(", ") || "none"}`;
+}
+
+function applyConnectorPreset(preset: (typeof CONNECTOR_PRESETS)[number]): ConnectorDraft {
+  return {
+    ...EMPTY_CONNECTOR,
+    connector_type: preset.connector_type,
+    transport: preset.transport,
+    description: preset.description,
+    tags: joinList(preset.tags),
+    scopes: joinList(preset.scopes),
+    config: JSON.stringify(preset.config, null, 2),
+  };
 }
 
 export function SettingsCapabilitiesManager() {
@@ -306,6 +366,38 @@ export function SettingsCapabilitiesManager() {
     }
   };
 
+  const removeSelectedConnector = async () => {
+    if (!selectedConnectorId) return;
+    setSaving(true);
+    try {
+      const result = await deleteConnector(selectedConnectorId);
+      setMessage(result.message);
+      setSelectedConnectorId("");
+      setConnectorDraft(EMPTY_CONNECTOR);
+      await loadCatalog();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Failed to delete connector.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const removeSelectedSkillPack = async () => {
+    if (!selectedSkillPackId) return;
+    setSaving(true);
+    try {
+      const result = await deleteSkillPack(selectedSkillPackId);
+      setMessage(result.message);
+      setSelectedSkillPackId("");
+      setSkillPackDraft(EMPTY_SKILL_PACK);
+      await loadCatalog();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Failed to delete skill pack.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const connectorCount = catalog.connectors.length;
   const enabledConnectorCount = catalog.connectors.filter((item) => item.enabled).length;
   const skillPackCount = catalog.skill_packs.length;
@@ -318,6 +410,8 @@ export function SettingsCapabilitiesManager() {
     const haystack = `${skillPack.id} ${skillPack.name} ${skillPack.description} ${skillPack.tags.join(" ")}`.toLowerCase();
     return haystack.includes(skillPackFilter.trim().toLowerCase());
   });
+  const selectedConnector = catalog.connectors.find((item) => item.id === selectedConnectorId) ?? null;
+  const selectedSkillPack = catalog.skill_packs.find((item) => item.id === selectedSkillPackId) ?? null;
 
   return (
     <div className="space-y-6">
@@ -386,6 +480,21 @@ export function SettingsCapabilitiesManager() {
                   onChange={(event) => setConnectorFilter(event.target.value)}
                   placeholder="Search connectors"
                 />
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {CONNECTOR_PRESETS.map((preset) => (
+                    <button
+                      key={preset.label}
+                      type="button"
+                      onClick={() => {
+                        startNewConnector();
+                        setConnectorDraft(applyConnectorPreset(preset));
+                      }}
+                      className="rounded-full border border-[#e5e5e3] bg-white px-2.5 py-1 text-[11px] font-medium text-[#6b6b6b] transition-colors hover:border-[#d0cfcc] hover:bg-[#f7f7f5]"
+                    >
+                      {preset.label}
+                    </button>
+                  ))}
+                </div>
               </div>
               <ScrollArea className="h-[620px]">
                 <div className="space-y-2 px-3 py-3">
@@ -427,6 +536,12 @@ export function SettingsCapabilitiesManager() {
                                 {tag}
                               </Badge>
                             ))}
+                            <Badge variant="outline" className="border-[#ecebe8] bg-white text-[11px] text-[#9b9a97]">
+                              {connector.transport}
+                            </Badge>
+                            <Badge variant="outline" className="border-[#ecebe8] bg-white text-[11px] text-[#9b9a97]">
+                              {connector.validation_status || "unknown"}
+                            </Badge>
                           </div>
                         </button>
                       );
@@ -586,6 +701,17 @@ export function SettingsCapabilitiesManager() {
               </label>
 
               <div className="mt-5 flex items-center justify-end gap-2">
+                {selectedConnector && !selectedConnector.built_in && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-9 rounded-[8px] border-[#f0d7d1] text-[13px] text-[#93370d] hover:bg-[#fff7f5]"
+                    onClick={() => void removeSelectedConnector()}
+                    disabled={saving}
+                  >
+                    Delete connector
+                  </Button>
+                )}
                 <Button
                   size="sm"
                   variant="outline"
@@ -603,6 +729,16 @@ export function SettingsCapabilitiesManager() {
                 >
                   {saving ? "Saving..." : selectedConnectorId ? "Update connector" : "Create connector"}
                 </Button>
+              </div>
+
+              <div className="mt-5 rounded-[12px] border border-[#ecebe8] bg-[#fbfbf9] p-4">
+                <p className="text-[11px] uppercase tracking-[0.08em] text-[#9b9a97]">Notes</p>
+                <ul className="mt-2 space-y-1.5 text-[13px] leading-relaxed text-[#6b6b6b]">
+                  <li>Use preset chips to start from a typed connector template instead of raw JSON.</li>
+                  <li>`transport=http` is useful for hosted APIs or remote MCP bridges.</li>
+                  <li>`transport=stdio` is useful when the connector should spawn a local MCP/tool process.</li>
+                  <li>Only enabled connectors are considered by the planner when it tags and routes stories.</li>
+                </ul>
               </div>
             </section>
           </div>
@@ -783,6 +919,17 @@ export function SettingsCapabilitiesManager() {
               </label>
 
               <div className="mt-5 flex items-center justify-end gap-2">
+                {selectedSkillPack && !selectedSkillPack.built_in && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-9 rounded-[8px] border-[#f0d7d1] text-[13px] text-[#93370d] hover:bg-[#fff7f5]"
+                    onClick={() => void removeSelectedSkillPack()}
+                    disabled={saving}
+                  >
+                    Delete skill pack
+                  </Button>
+                )}
                 <Button
                   size="sm"
                   variant="outline"

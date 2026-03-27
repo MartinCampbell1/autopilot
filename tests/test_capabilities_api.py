@@ -112,6 +112,55 @@ def test_create_and_update_connector_and_skill_pack(tmp_path: Path, monkeypatch)
     assert config.skill_packs_json_path.exists()
 
 
+def test_delete_custom_connector_and_skill_pack(tmp_path: Path, monkeypatch) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    client = _build_client(config, monkeypatch)
+
+    client.post(
+        "/api/capabilities/connectors",
+        json={
+            "id": "temporary_connector",
+            "name": "Temporary Connector",
+            "connector_type": "mcp_server",
+            "description": "Temporary connector",
+            "transport": "stdio",
+            "tags": ["debug"],
+            "providers": ["codex"],
+            "risk_level": "medium",
+            "scopes": ["workspace"],
+            "enabled": True,
+            "config": {"command": "demo"},
+        },
+    )
+    client.post(
+        "/api/capabilities/skill-packs",
+        json={
+            "id": "temporary_skill",
+            "name": "Temporary Skill",
+            "description": "Temporary skill",
+            "prompt": "Do the temporary thing.",
+            "tags": ["debug"],
+            "default_roles": ["backend_worker"],
+            "preferred_connectors": ["temporary_connector"],
+            "enabled": True,
+        },
+    )
+
+    delete_connector_response = client.delete("/api/capabilities/connectors/temporary_connector")
+    delete_skill_response = client.delete("/api/capabilities/skill-packs/temporary_skill")
+
+    assert delete_connector_response.status_code == 200
+    assert delete_skill_response.status_code == 200
+    assert not any(
+        connector["id"] == "temporary_connector"
+        for connector in client.get("/api/capabilities/connectors").json()["connectors"]
+    )
+    assert not any(
+        skill_pack["id"] == "temporary_skill"
+        for skill_pack in client.get("/api/capabilities/skill-packs").json()["skill_packs"]
+    )
+
+
 def test_update_routes_validate_mismatch_and_missing_ids(tmp_path: Path, monkeypatch) -> None:
     config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
     client = _build_client(config, monkeypatch)
@@ -136,3 +185,6 @@ def test_update_routes_validate_mismatch_and_missing_ids(tmp_path: Path, monkeyp
         },
     )
     assert missing.status_code == 404
+
+    built_in_delete = client.delete("/api/capabilities/connectors/shell_exec")
+    assert built_in_delete.status_code == 400
