@@ -30,6 +30,9 @@ Ask clarifying questions ONE AT A TIME to understand:
 3. Key features (3-8 stories)
 4. Any constraints or requirements
 
+If the user already described what they want to build, do not repeat "What do you want to build?".
+Instead, ask the next most useful clarifying question immediately.
+
 After you have enough information, generate a PRD in this JSON format:
 ```json
 {
@@ -43,32 +46,56 @@ After you have enough information, generate a PRD in this JSON format:
 ```
 
 Output ONLY the JSON when you're ready. No markdown fences, no explanation.
-Start by asking: "What do you want to build?"
+If the user has not provided a project description yet, start by asking: "What do you want to build?"
+"""
+
+SPEC_TO_PRD_PROMPT = """You are a project planner.
+
+You will receive a project specification. Convert it into a PRD JSON document.
+
+Rules:
+- Preserve the user's actual intent.
+- Keep the title concise.
+- Write a one-paragraph description.
+- Produce 3-8 implementation stories.
+- Output ONLY valid JSON with this shape:
+{
+  "title": "Project Name",
+  "description": "One paragraph description",
+  "stories": [
+    {"id": 1, "title": "Story title", "description": "What to build", "status": "open"}
+  ]
+}
 """
 
 
-def run_intake_turn(
-    session: IntakeSession,
-    user_message: str,
+def _extract_json_blob(text: str) -> str:
+    """Extract the first top-level JSON object from model output."""
+    cleaned = text.strip()
+    if cleaned.startswith("```"):
+        cleaned = cleaned.strip("`")
+        cleaned = cleaned.replace("json\n", "", 1).strip()
+
+    start = cleaned.find("{")
+    end = cleaned.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        return cleaned[start : end + 1]
+    return cleaned
+
+
+def _run_provider_prompt(
+    prompt: str,
     provider: str,
     env: dict[str, str],
     workdir: str = "/tmp",
 ) -> str:
-    """Run one intake conversation turn and update the session."""
-    session.add_user_message(user_message)
-
-    conversation = f"[System]: {INTAKE_SYSTEM_PROMPT}\n\n"
-    for message in session.messages:
-        role = "User" if message["role"] == "user" else "Assistant"
-        conversation += f"[{role}]: {message['content']}\n\n"
-    conversation += "[Assistant]:"
-
+    """Run one provider prompt and return stdout or a surfaced error."""
     if provider == "codex":
-        cmd = ["codex", "exec", "--full-auto", "--skip-git-repo-check", conversation]
+        cmd = ["codex", "exec", "--full-auto", "--skip-git-repo-check", prompt]
     elif provider == "claude":
-        cmd = ["claude", "-p", conversation]
+        cmd = ["claude", "-p", prompt]
     else:
-        cmd = ["codex", "exec", "--full-auto", "--skip-git-repo-check", conversation]
+        cmd = ["codex", "exec", "--full-auto", "--skip-git-repo-check", prompt]
 
     try:
         result = subprocess.run(
@@ -82,26 +109,83 @@ def run_intake_turn(
         stdout = result.stdout.strip()
         stderr = result.stderr.strip()
         if result.returncode == 0 and stdout:
-            response = stdout
-        elif stderr:
-            response = stderr
-        elif stdout:
-            response = stdout
-        else:
-            response = f"Command failed with exit code {result.returncode}"
+            return stdout
+        if stderr:
+            return stderr
+        if stdout:
+            return stdout
+        return f"Command failed with exit code {result.returncode}"
     except Exception as exc:
-        response = f"Error: {exc}"
+        return f"Error: {exc}"
+
+
+def run_intake_turn(
+    session: IntakeSession,
+    user_message: str,
+    provider: str,
+    env: dict[str, str],
+    workdir: str = "/tmp",
+) -> str:
+    """Run one intake conversation turn and update the session."""
+    session.add_user_message(user_message)
+
+    introduction = INTAKE_SYSTEM_PROMPT
+    if len(session.messages) == 1 and user_message.strip():
+        introduction += (
+            "\n\nThe user already provided the initial project description in their first message. "
+            "Do not repeat the generic opening question."
+        )
+
+    conversation = f"[System]: {introduction}\n\n"
+    for message in session.messages:
+        role = "User" if message["role"] == "user" else "Assistant"
+        conversation += f"[{role}]: {message['content']}\n\n"
+    conversation += "[Assistant]:"
+
+    response = _run_provider_prompt(conversation, provider, env, workdir)
 
     session.add_agent_message(response)
 
     try:
-        prd = json.loads(response)
+        prd = json.loads(_extract_json_blob(response))
         if "stories" in prd:
             session.prd = prd
     except (json.JSONDecodeError, TypeError):
         pass
 
     return response
+
+
+def generate_prd_from_spec(
+    spec_text: str,
+    provider: str,
+    env: dict[str, str],
+    workdir: str = "/tmp",
+) -> dict:
+    """Convert an uploaded specification into a PRD JSON document."""
+    spec = spec_text.strip()
+    if not spec:
+        raise ValueError("Spec text is empty")
+
+    try:
+        parsed = json.loads(spec)
+        if isinstance(parsed, dict) and "stories" in parsed:
+            return parsed
+    except json.JSONDecodeError:
+        pass
+
+    prompt = f"{SPEC_TO_PRD_PROMPT}\n\n[Specification]\n{spec}\n"
+    response = _run_provider_prompt(prompt, provider, env, workdir)
+
+    try:
+        parsed = json.loads(_extract_json_blob(response))
+    except json.JSONDecodeError as exc:
+        raise ValueError(response.strip() or "Provider did not return valid JSON") from exc
+
+    if not isinstance(parsed, dict) or "stories" not in parsed:
+        raise ValueError("Provider response did not contain a valid PRD")
+
+    return parsed
 
 
 def save_prd(prd: dict, project_path: Path) -> Path:

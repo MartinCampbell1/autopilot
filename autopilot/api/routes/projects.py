@@ -10,6 +10,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from autopilot.api.deps import get_config
+from autopilot.core.project_bootstrap import create_project_from_prd
 
 router = APIRouter()
 
@@ -17,6 +18,14 @@ router = APIRouter()
 class StoryAction(BaseModel):
     action: str
     payload: str = ""
+
+
+class CreateProjectRequest(BaseModel):
+    prd: dict
+    project_name: str | None = None
+    project_path: str | None = None
+    priority: str = "normal"
+    launch: bool = True
 
 
 @router.get("/")
@@ -113,3 +122,26 @@ async def story_action(project_name: str, story_id: int, action: StoryAction) ->
             return {"status": "ok", "message": f"Story #{story_id} skipped"}
 
     raise HTTPException(404, "Project or story not found")
+
+
+@router.post("/create")
+async def create_project(request: CreateProjectRequest) -> dict[str, str | bool]:
+    config = get_config()
+    created = create_project_from_prd(
+        config=config,
+        prd=request.prd,
+        project_name=request.project_name,
+        project_path=request.project_path,
+        priority=request.priority,
+        launch=request.launch,
+    )
+
+    return {
+        "status": "ok",
+        "project_name": created.name,
+        "project_path": str(created.path),
+        "prd_path": str(created.prd_path),
+        "launched": created.launched,
+        "message": created.message,
+        "log_path": str(created.log_path) if created.log_path else "",
+    }
