@@ -306,6 +306,29 @@ def _story_state_from_definition(story: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _requeue_interrupted_stories(state: dict[str, Any], fallback_error: str) -> bool:
+    changed = False
+    for story_state in state.get("story_state", {}).values():
+        if story_state.get("status") != "in_progress":
+            continue
+        story_state["status"] = "open"
+        story_state["started_at"] = None
+        story_state["completed_at"] = None
+        story_state["updated_at"] = utcnow_iso()
+        story_state["agent"] = None
+        story_state["critic"] = None
+        story_state["last_error"] = _sanitize_message(story_state.get("last_error") or fallback_error)
+        changed = True
+
+    if changed:
+        state["current_story_id"] = None
+        state["current_iteration"] = 0
+        state["active_worker"] = None
+        state["active_critic"] = None
+        state["finished_at"] = state.get("finished_at") or utcnow_iso()
+    return changed
+
+
 def _default_runtime_state(project_id: str, prd: dict[str, Any]) -> dict[str, Any]:
     timeline: list[dict[str, Any]] = []
     return {
@@ -406,13 +429,28 @@ def ensure_project_state(
         state["active_worker"] = None
         state["active_critic"] = None
         if state.get("status") == "running" and not state.get("paused"):
+            interruption_error = _sanitize_message(
+                state.get("last_error") or "Background run stopped unexpectedly."
+            )
             has_active_story = state.get("current_story_id") is not None or any(
                 story_state.get("status") == "in_progress" for story_state in state["story_state"].values()
             )
             if has_active_story:
                 state["status"] = "failed"
-                state["last_error"] = state.get("last_error") or "Background run stopped unexpectedly."
+                state["last_error"] = interruption_error
+                if _requeue_interrupted_stories(state, interruption_error):
+                    changed = True
         changed = True
+
+    if (
+        state.get("pid") is None
+        and not state.get("paused")
+        and state.get("status") == "failed"
+    ):
+        failure_error = _sanitize_message(state.get("last_error") or "Background run stopped unexpectedly.")
+        if _requeue_interrupted_stories(state, failure_error):
+            state["last_error"] = failure_error
+            changed = True
 
     if all(story["status"] in {"done", "skipped"} for story in state["story_state"].values()) and state["story_state"]:
         state["status"] = "completed"
