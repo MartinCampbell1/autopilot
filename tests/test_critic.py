@@ -51,6 +51,15 @@ exec /bin/zsh -lc 'git show'
             "- Issue 2: handler does not validate input"
         )
 
+    def test_needs_work_placeholder_only_becomes_actionable_fallback(self) -> None:
+        output = """NEEDS_WORK
+- Issue 1: specific description
+- Issue 2: specific description
+"""
+        result = parse_critic_output(output)
+        assert result.approved is False
+        assert result.feedback == "Critic returned NEEDS_WORK without actionable issues."
+
 
 class TestBuildCriticPrompt:
     def test_builds_prompt_with_diff(self) -> None:

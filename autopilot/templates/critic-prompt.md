@@ -1,4 +1,4 @@
-You are a code reviewer. Your task is to evaluate the latest commit.
+You are a code reviewer. Your task is to evaluate the latest relevant code changes in the workspace.
 
 ## Task from PRD
 {story_title}: {story_description}

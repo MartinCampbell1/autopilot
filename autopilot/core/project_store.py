@@ -22,6 +22,7 @@ from autopilot.core.loop_runner import apply_autopilot_ralph_overrides, check_ra
 
 TIMELINE_LIMIT = 300
 TERMINAL_STORY_STATUSES = {"done", "skipped", "stuck"}
+PLACEHOLDER_ISSUE_PATTERN = re.compile(r"^-\s*Issue\s+\d+:\s*specific description\s*$", re.IGNORECASE)
 
 
 def utcnow_iso() -> str:
@@ -88,7 +89,7 @@ def _sanitize_message(message: str, *, max_len: int = 1200) -> str:
     issue_lines: list[str] = []
     for line in search_space:
         if re.match(r"^-\s*Issue\b", line, flags=re.IGNORECASE):
-            if re.match(r"^-\s*Issue\s+\d+:\s*specific description\s*$", line, flags=re.IGNORECASE):
+            if PLACEHOLDER_ISSUE_PATTERN.match(line):
                 continue
             issue_lines.append(line)
             continue
@@ -100,6 +101,21 @@ def _sanitize_message(message: str, *, max_len: int = 1200) -> str:
             if issue not in deduped:
                 deduped.append(issue)
         return "\n".join(deduped[:6])
+
+    if needs_work_indexes:
+        cleaned_lines = [
+            line
+            for line in search_space
+            if line
+            and line.upper() != "NEEDS_WORK"
+            and not PLACEHOLDER_ISSUE_PATTERN.match(line)
+        ]
+        if cleaned_lines:
+            cleaned = "\n".join(cleaned_lines[:6])
+            if len(cleaned) <= max_len:
+                return cleaned
+            return cleaned[: max_len - 1].rstrip() + "…"
+        return "Critic returned NEEDS_WORK without actionable issues."
 
     cleaned = message.strip()
     if len(cleaned) <= max_len:
@@ -303,6 +319,7 @@ def _story_state_from_definition(story: dict[str, Any]) -> dict[str, Any]:
         "agent": None,
         "critic": None,
         "last_error": None,
+        "requeue_count": 0,
     }
 
 
@@ -419,6 +436,7 @@ def ensure_project_state(
         current.setdefault("agent", None)
         current.setdefault("critic", None)
         current.setdefault("last_error", None)
+        current.setdefault("requeue_count", 0)
         synchronized_story_state[key] = current
     if synchronized_story_state != state["story_state"]:
         state["story_state"] = synchronized_story_state
@@ -552,6 +570,58 @@ def update_story_runtime(
     story_state["updated_at"] = utcnow_iso()
     save_project_state(config, project_id, state)
     return story_state
+
+
+def requeue_recoverable_stuck_stories(config: AutopilotConfig, project_id: str) -> list[int]:
+    state = load_project_state(config, project_id)
+    if not state:
+        raise KeyError(project_id)
+
+    story_state = state.get("story_state", {})
+    done_timestamps = [
+        datetime.fromisoformat(str(entry["updated_at"]).replace("Z", "+00:00"))
+        for entry in story_state.values()
+        if entry.get("status") == "done" and entry.get("updated_at")
+    ]
+    if not done_timestamps:
+        return []
+
+    latest_done = max(done_timestamps)
+    reopened: list[int] = []
+    for entry in story_state.values():
+        if entry.get("status") != "stuck":
+            continue
+        if int(entry.get("requeue_count", 0)) >= 1:
+            continue
+        updated_at = entry.get("updated_at")
+        if not updated_at:
+            continue
+        stuck_updated = datetime.fromisoformat(str(updated_at).replace("Z", "+00:00"))
+        if stuck_updated >= latest_done:
+            continue
+        entry["status"] = "open"
+        entry["started_at"] = None
+        entry["completed_at"] = None
+        entry["updated_at"] = utcnow_iso()
+        entry["iteration"] = 0
+        entry["agent"] = None
+        entry["critic"] = None
+        entry["last_error"] = None
+        entry["requeue_count"] = int(entry.get("requeue_count", 0)) + 1
+        reopened.append(int(entry["story_id"]))
+
+    if not reopened:
+        return []
+
+    state["status"] = "running"
+    state["finished_at"] = None
+    state["last_error"] = None
+    state["current_story_id"] = None
+    state["current_iteration"] = 0
+    state["active_worker"] = None
+    state["active_critic"] = None
+    save_project_state(config, project_id, state)
+    return reopened
 
 
 def merge_project_stories(project: dict[str, Any], state: dict[str, Any]) -> list[dict[str, Any]]:

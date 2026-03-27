@@ -88,6 +88,10 @@ def _extract_issue_lines(raw_output: str) -> list[str]:
             continue
         if any(stripped.lower().startswith(marker) for marker in STOP_MARKERS):
             break
+        if stripped.upper() == "NEEDS_WORK":
+            continue
+        if PLACEHOLDER_ISSUE_PATTERN.match(stripped):
+            continue
         cleaned.append(stripped)
         if len(cleaned) >= 8:
             break
@@ -105,7 +109,9 @@ def parse_critic_output(raw_output: str) -> CriticResult:
 
     if has_needs_work:
         feedback_lines = _extract_issue_lines(raw_output)
-        feedback = "\n".join(feedback_lines).strip() or raw_output.strip()[:1000]
+        feedback = "\n".join(feedback_lines).strip()
+        if not feedback:
+            feedback = "Critic returned NEEDS_WORK without actionable issues."
 
         return CriticResult(
             approved=False,
