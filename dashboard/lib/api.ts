@@ -194,6 +194,13 @@ export async function updateConnector(
   return jsonOrThrow<{ status: string; connector: MCPConnector }>(res, `Connector update failed: ${res.status}`);
 }
 
+export async function deleteConnector(connectorId: string): Promise<{ status: string; message: string }> {
+  const res = await fetch(`${API_BASE}/capabilities/connectors/${encodeURIComponent(connectorId)}`, {
+    method: "DELETE",
+  });
+  return jsonOrThrow<{ status: string; message: string }>(res, `Connector delete failed: ${res.status}`);
+}
+
 export async function fetchSkillPacks(): Promise<{ skill_packs: SkillPack[] }> {
   const res = await fetch(`${API_BASE}/capabilities/skill-packs`);
   return jsonOrThrow<{ skill_packs: SkillPack[] }>(res, `Failed to fetch skill packs: ${res.status}`);
@@ -220,4 +227,11 @@ export async function updateSkillPack(
     body: JSON.stringify(skillPack),
   });
   return jsonOrThrow<{ status: string; skill_pack: SkillPack }>(res, `Skill pack update failed: ${res.status}`);
+}
+
+export async function deleteSkillPack(skillPackId: string): Promise<{ status: string; message: string }> {
+  const res = await fetch(`${API_BASE}/capabilities/skill-packs/${encodeURIComponent(skillPackId)}`, {
+    method: "DELETE",
+  });
+  return jsonOrThrow<{ status: string; message: string }>(res, `Skill pack delete failed: ${res.status}`);
 }

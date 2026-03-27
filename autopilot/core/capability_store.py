@@ -342,6 +342,20 @@ def upsert_connector(config: AutopilotConfig, connector: MCPConnector) -> MCPCon
     return connector
 
 
+def delete_connector(config: AutopilotConfig, connector_id: str) -> bool:
+    connectors = load_connectors_registry(config)
+    kept: list[MCPConnector] = []
+    removed = False
+    for connector in connectors:
+        if connector.id == connector_id and not connector.built_in:
+            removed = True
+            continue
+        kept.append(connector)
+    if removed:
+        save_connectors_registry(config, kept)
+    return removed
+
+
 def load_skill_packs_registry(config: AutopilotConfig) -> list[SkillPack]:
     if not config.skill_packs_json_path.exists():
         return list(DEFAULT_SKILL_PACKS)
@@ -362,6 +376,20 @@ def upsert_skill_pack(config: AutopilotConfig, skill_pack: SkillPack) -> SkillPa
     skill_packs[skill_pack.id] = skill_pack
     save_skill_packs_registry(config, list(skill_packs.values()))
     return skill_pack
+
+
+def delete_skill_pack(config: AutopilotConfig, skill_pack_id: str) -> bool:
+    skill_packs = load_skill_packs_registry(config)
+    kept: list[SkillPack] = []
+    removed = False
+    for skill_pack in skill_packs:
+        if skill_pack.id == skill_pack_id and not skill_pack.built_in:
+            removed = True
+            continue
+        kept.append(skill_pack)
+    if removed:
+        save_skill_packs_registry(config, kept)
+    return removed
 
 
 def load_role_templates() -> list[RoleTemplate]:
