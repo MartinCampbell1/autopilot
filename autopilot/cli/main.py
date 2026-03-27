@@ -50,6 +50,17 @@ def run_all_projects() -> None:
 
 
 @app.command()
+def dashboard(
+    port: int = typer.Option(8420, help="API server port"),
+    no_browser: bool = typer.Option(False, help="Don't open browser"),
+) -> None:
+    """Start the Autopilot dashboard."""
+    from autopilot.cli.dashboard import dashboard as _dashboard
+
+    _dashboard(port, no_browser)
+
+
+@app.command()
 def status() -> None:
     """Show status of accounts and projects."""
     from autopilot.cli.status import status as _status
