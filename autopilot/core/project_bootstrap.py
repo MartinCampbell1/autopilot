@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from autopilot.core.config import AutopilotConfig
-from autopilot.core.loop_runner import apply_autopilot_ralph_overrides
+from autopilot.core.loop_runner import apply_autopilot_ralph_overrides, check_ralph_installed, init_ralph_project
 from autopilot.core.project_store import (
     ensure_project_state,
     emit_project_event,
@@ -63,7 +63,12 @@ def create_project_from_prd(
     root_dir.mkdir(parents=True, exist_ok=True)
     (root_dir / ".agents" / "tasks").mkdir(parents=True, exist_ok=True)
     (root_dir / ".ralph").mkdir(parents=True, exist_ok=True)
-    apply_autopilot_ralph_overrides(root_dir)
+    if check_ralph_installed():
+        initialized = init_ralph_project(root_dir)
+        if not initialized:
+            apply_autopilot_ralph_overrides(root_dir)
+    else:
+        apply_autopilot_ralph_overrides(root_dir)
 
     progress_path = root_dir / ".ralph" / "progress.md"
     if not progress_path.exists():

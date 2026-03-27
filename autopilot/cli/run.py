@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import concurrent.futures
+import json
 import time
 from pathlib import Path
 
@@ -19,6 +20,7 @@ from autopilot.core.project_store import (
     load_project_prd,
     load_projects_registry,
     load_project_state,
+    requeue_recoverable_stuck_stories,
     register_project,
     save_project_state,
     update_project_runtime,
@@ -56,6 +58,31 @@ def _load_or_register_project(config, project_path: Path, project_id: str | None
 
 def _story_definitions(project_entry: dict) -> list[dict]:
     return load_project_prd(project_entry, seed_mode="migrate").get("stories", [])
+
+
+def _write_ralph_story_snapshot(project_entry: dict, story_id: int) -> str:
+    prd = load_project_prd(project_entry, seed_mode="migrate")
+    snapshot = {
+        "title": prd.get("title", project_entry["name"]),
+        "description": prd.get("description", ""),
+        "stories": [],
+    }
+    for story in prd.get("stories", []):
+        snapshot["stories"].append(
+            {
+                "id": story["id"],
+                "title": story.get("title", f"Story {story['id']}"),
+                "description": story.get("description", ""),
+                "position": story.get("position", 0),
+                "status": "open" if story["id"] == story_id else "done",
+            }
+        )
+
+    tmp_dir = Path(project_entry["path"]) / ".ralph" / ".tmp"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    snapshot_path = tmp_dir / f"autopilot-story-{story_id}.json"
+    snapshot_path.write_text(json.dumps(snapshot, indent=2))
+    return str(snapshot_path)
 
 
 def _next_open_story(project_entry: dict, state: dict) -> dict | None:
@@ -171,6 +198,18 @@ def run(
     try:
         while True:
             state = ensure_project_state(config, project_entry, seed_mode="migrate")
+            reopened_story_ids = requeue_recoverable_stuck_stories(config, project_id)
+            if reopened_story_ids:
+                for reopened_story_id in reopened_story_ids:
+                    emit_project_event(
+                        config,
+                        project_id,
+                        event="story_requeued",
+                        status="open",
+                        message="Story reopened after later completed work may have resolved the blocker.",
+                        story_id=reopened_story_id,
+                    )
+                state = ensure_project_state(config, project_entry, seed_mode="migrate")
             story = _next_open_story(project_entry, state)
 
             if story is None:
@@ -256,6 +295,7 @@ def run(
                     active_worker=f"{worker_profile.provider}/{worker_profile.name}",
                     active_critic=f"{critic_profile.provider}/{critic_profile.name}",
                 )
+                ralph_prd_path = _write_ralph_story_snapshot(project_entry, story_id)
                 emit_project_event(
                     config,
                     project_id,
@@ -280,6 +320,7 @@ def run(
                     critic_profile=critic_profile,
                     critic_env=critic_env,
                     retry_only=iteration > 1,
+                    ralph_prd_path=ralph_prd_path,
                 )
 
                 if outcome == StoryOutcome.APPROVED:

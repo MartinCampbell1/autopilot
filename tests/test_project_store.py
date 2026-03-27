@@ -14,8 +14,10 @@ from autopilot.core.project_store import (
     load_project_state,
     migrate_projects_registry,
     normalize_prd,
+    requeue_recoverable_stuck_stories,
     register_project,
     save_project_prd,
+    save_project_state,
 )
 
 
@@ -182,6 +184,54 @@ def test_ensure_project_state_keeps_paused_story_in_progress(tmp_path: Path) -> 
     assert repaired["status"] == "paused"
     assert repaired["current_story_id"] == 1
     assert repaired["story_state"]["1"]["status"] == "in_progress"
+
+
+def test_requeue_recoverable_stuck_stories_reopens_older_stuck_story(tmp_path: Path) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    project_dir = tmp_path / "requeue-project"
+    project_dir.mkdir(parents=True)
+
+    project = register_project(config, name="Requeue Project", project_path=project_dir)
+    prd = normalize_prd(
+        {
+            "title": "Requeue Project",
+            "stories": [
+                {"id": 1, "title": "Foundation", "description": "Start"},
+                {"id": 2, "title": "Scaffold", "description": "Finish"},
+            ],
+        }
+    )
+    save_project_prd(project, prd)
+    state = ensure_project_state(config, project, seed_mode="new")
+    state.update({"status": "failed", "last_error": "Run finished with stuck stories."})
+    state["story_state"]["1"].update(
+        {
+            "status": "stuck",
+            "updated_at": "2026-03-27T10:00:00+00:00",
+            "completed_at": "2026-03-27T10:00:00+00:00",
+            "last_error": "Missing scaffold.",
+            "requeue_count": 0,
+        }
+    )
+    state["story_state"]["2"].update(
+        {
+            "status": "done",
+            "updated_at": "2026-03-27T10:05:00+00:00",
+            "completed_at": "2026-03-27T10:05:00+00:00",
+        }
+    )
+    save_project_state(config, project["id"], state)
+
+    reopened = requeue_recoverable_stuck_stories(config, project["id"])
+    repaired = load_project_state(config, project["id"])
+
+    assert reopened == [1]
+    assert repaired["status"] == "running"
+    assert repaired["last_error"] is None
+    assert repaired["story_state"]["1"]["status"] == "open"
+    assert repaired["story_state"]["1"]["iteration"] == 0
+    assert repaired["story_state"]["1"]["last_error"] is None
+    assert repaired["story_state"]["1"]["requeue_count"] == 1
 
 
 @patch("autopilot.core.project_store.subprocess.Popen")
