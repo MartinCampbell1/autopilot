@@ -3,7 +3,7 @@
 import { useState, useRef, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { sendIntakeMessage } from "@/lib/api";
+import { API_BASE, sendIntakeMessage } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import type { IntakeMessage, PRD } from "@/lib/types";
 
@@ -41,7 +41,10 @@ export function IntakeChat({ onPRDReady }: IntakeChatProps) {
     } catch {
       setMessages((prev) => [
         ...prev,
-        { role: "assistant", content: "Failed to connect to API. Is the server running?" },
+        {
+          role: "assistant",
+          content: `Could not reach ${API_BASE}. Check that the FastAPI server is running and that NEXT_PUBLIC_API_URL points to the correct backend.`,
+        },
       ]);
     } finally {
       setLoading(false);
