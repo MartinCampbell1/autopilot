@@ -41,15 +41,17 @@ export function ActionButtons({
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center gap-2">
-        <Button
-          size="sm"
-          variant="outline"
-          disabled={loading || projectStatus !== "running"}
-          onClick={() => void runAction(() => pauseProject(projectId))}
-          className="h-8 rounded-lg text-[12px] font-medium"
-        >
-          Pause
-        </Button>
+        {projectStatus === "running" && (
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={loading}
+            onClick={() => void runAction(() => pauseProject(projectId))}
+            className="h-8 rounded-lg text-[12px] font-medium"
+          >
+            Pause
+          </Button>
+        )}
         <Button
           size="sm"
           variant="outline"

@@ -78,6 +78,35 @@ def _is_temp_project_path(project_path: str) -> bool:
     return project_path.startswith("/tmp/") or project_path.startswith("/private/tmp/")
 
 
+def _sanitize_message(message: str, *, max_len: int = 1200) -> str:
+    if not message:
+        return ""
+
+    lines = [line.strip() for line in message.splitlines() if line.strip()]
+    needs_work_indexes = [index for index, line in enumerate(lines) if "NEEDS_WORK" in line.upper()]
+    search_space = lines[needs_work_indexes[-1] + 1 :] if needs_work_indexes else lines
+    issue_lines: list[str] = []
+    for line in search_space:
+        if re.match(r"^-\s*Issue\b", line, flags=re.IGNORECASE):
+            if re.match(r"^-\s*Issue\s+\d+:\s*specific description\s*$", line, flags=re.IGNORECASE):
+                continue
+            issue_lines.append(line)
+            continue
+        if issue_lines:
+            break
+    if issue_lines:
+        deduped: list[str] = []
+        for issue in issue_lines:
+            if issue not in deduped:
+                deduped.append(issue)
+        return "\n".join(deduped[:6])
+
+    cleaned = message.strip()
+    if len(cleaned) <= max_len:
+        return cleaned
+    return cleaned[: max_len - 1].rstrip() + "…"
+
+
 def _normalize_story_id(value: Any, fallback: int, seen_ids: set[int]) -> int:
     try:
         candidate = int(value)
@@ -431,7 +460,7 @@ def emit_project_event(
         "project_id": project_id,
         "story_id": story_id,
         "status": status,
-        "message": message,
+        "message": _sanitize_message(message),
         "timestamp": utcnow_iso(),
     }
     if extra:
@@ -505,7 +534,7 @@ def merge_project_stories(project: dict[str, Any], state: dict[str, Any]) -> lis
                 "iteration": runtime.get("iteration"),
                 "agent": runtime.get("agent"),
                 "critic": runtime.get("critic"),
-                "last_error": runtime.get("last_error"),
+                "last_error": _sanitize_message(runtime.get("last_error") or ""),
             }
         )
     return merged
@@ -553,7 +582,7 @@ def build_project_summary(config: AutopilotConfig, project: dict[str, Any]) -> d
         "current_story_id": state.get("current_story_id"),
         "current_story_title": current_story["title"] if current_story else None,
         "last_activity_at": state.get("updated_at"),
-        "last_message": last_event["message"] if last_event else "",
+        "last_message": _sanitize_message(last_event["message"]) if last_event else "",
         "pid": state.get("pid"),
     }
 
@@ -581,11 +610,11 @@ def build_project_detail(config: AutopilotConfig, project_id: str) -> dict[str, 
         **summary,
         "description": prd.get("description", ""),
         "stories": stories,
-        "timeline": state.get("timeline", []),
+        "timeline": [{**event, "message": _sanitize_message(str(event.get("message") or ""))} for event in state.get("timeline", [])],
         "guardrails": _read_guardrails(project),
         "log_tail": _read_log_tail(state.get("log_path", "")),
         "log_path": state.get("log_path", ""),
-        "last_error": state.get("last_error"),
+        "last_error": _sanitize_message(state.get("last_error") or ""),
         "started_at": state.get("started_at"),
         "finished_at": state.get("finished_at"),
         "active_worker": state.get("active_worker"),

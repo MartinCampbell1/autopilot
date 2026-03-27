@@ -32,6 +32,25 @@ class TestParseCriticOutput:
         assert result.approved is False
         assert "empty" in result.feedback.lower()
 
+    def test_needs_work_extracts_issue_lines_from_noisy_output(self) -> None:
+        output = """If there are issues:
+NEEDS_WORK
+- Issue 1: specific description
+- Issue 2: specific description
+
+NEEDS_WORK
+- Issue 1: latest change is missing tests
+- Issue 2: handler does not validate input
+OpenAI Codex v0.116.0
+exec /bin/zsh -lc 'git show'
+"""
+        result = parse_critic_output(output)
+        assert result.approved is False
+        assert result.feedback == (
+            "- Issue 1: latest change is missing tests\n"
+            "- Issue 2: handler does not validate input"
+        )
+
 
 class TestBuildCriticPrompt:
     def test_builds_prompt_with_diff(self) -> None:
@@ -43,3 +62,4 @@ class TestBuildCriticPrompt:
         )
         assert "OAuth login" in prompt
         assert "oauth_callback" in prompt
+        assert "latest relevant code changes in the workspace" in prompt

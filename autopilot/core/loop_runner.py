@@ -8,6 +8,8 @@ from pathlib import Path
 
 from autopilot.core.models import is_rate_limited
 
+IGNORED_PREFIXES = (".agents/", ".ralph/")
+
 
 def check_ralph_installed() -> bool:
     """Return whether the Ralph CLI is available."""
@@ -39,7 +41,7 @@ def run_ralph_iteration(
     prd_path: str | None = None,
 ) -> tuple[bool, str, bool]:
     """Run one Ralph build iteration and report success/output/rate-limit state."""
-    cmd = ["ralph", "build", "1", "--no-commit"]
+    cmd = ["ralph", "build", "1"]
     if prd_path:
         cmd.extend(["--prd", prd_path])
 
@@ -87,31 +89,91 @@ def append_guardrail(project_path: Path, guardrail: str) -> None:
     guardrails_file.write_text(f"{existing}\n- {guardrail}\n")
 
 
-def check_git_diff_empty(project_path: Path) -> bool:
-    """Return whether the previous commit produced an empty diff stat."""
+def _run_capture(project_path: Path, args: list[str], timeout: int = 30) -> tuple[int, str]:
     try:
         result = subprocess.run(
-            ["git", "diff", "HEAD~1", "--stat"],
+            args,
             cwd=str(project_path),
             capture_output=True,
             text=True,
-            timeout=10,
+            timeout=timeout,
         )
-        return result.stdout.strip() == ""
+        return result.returncode, result.stdout.strip()
     except Exception:
-        return False
+        return 1, ""
+
+
+def _git_has_revision(project_path: Path, revision: str) -> bool:
+    code, _ = _run_capture(project_path, ["git", "rev-parse", "--verify", revision], timeout=10)
+    return code == 0
+
+
+def _pathspec() -> list[str]:
+    return ["--", ".", ":(exclude).agents", ":(exclude).ralph"]
+
+
+def _committed_diff(project_path: Path) -> str:
+    if not _git_has_revision(project_path, "HEAD"):
+        return ""
+
+    if _git_has_revision(project_path, "HEAD~1"):
+        _, output = _run_capture(
+            project_path,
+            ["git", "diff", "HEAD~1", "HEAD", *_pathspec()],
+        )
+        return output
+
+    _, output = _run_capture(
+        project_path,
+        ["git", "show", "--format=", "HEAD", *_pathspec()],
+    )
+    return output
+
+
+def _working_tree_diff(project_path: Path) -> str:
+    chunks: list[str] = []
+
+    _, staged = _run_capture(project_path, ["git", "diff", "--cached", *_pathspec()])
+    if staged:
+        chunks.append(staged)
+
+    _, unstaged = _run_capture(project_path, ["git", "diff", *_pathspec()])
+    if unstaged:
+        chunks.append(unstaged)
+
+    _, untracked_raw = _run_capture(
+        project_path,
+        ["git", "ls-files", "--others", "--exclude-standard"],
+    )
+    for relative_path in untracked_raw.splitlines():
+        relative_path = relative_path.strip()
+        if not relative_path or relative_path.startswith(IGNORED_PREFIXES):
+            continue
+        file_path = project_path / relative_path
+        if not file_path.is_file():
+            continue
+        _, file_diff = _run_capture(
+            project_path,
+            ["git", "diff", "--no-index", "--", "/dev/null", relative_path],
+        )
+        if file_diff:
+            chunks.append(file_diff)
+
+    return "\n".join(chunk for chunk in chunks if chunk).strip()
+
+
+def check_git_diff_empty(project_path: Path) -> bool:
+    """Return whether the latest relevant workspace changes are empty."""
+    return get_last_commit_diff(project_path).strip() == ""
 
 
 def get_last_commit_diff(project_path: Path) -> str:
-    """Return the diff of the last commit."""
-    try:
-        result = subprocess.run(
-            ["git", "diff", "HEAD~1"],
-            cwd=str(project_path),
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        return result.stdout.strip()
-    except Exception:
-        return ""
+    """Return the latest relevant changes for critic review.
+
+    Prefer the current working tree if Ralph left changes uncommitted.
+    Fall back to the latest commit diff when the tree is clean.
+    """
+    worktree_diff = _working_tree_diff(project_path)
+    if worktree_diff:
+        return worktree_diff
+    return _committed_diff(project_path)

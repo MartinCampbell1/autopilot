@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 from autopilot.core.loop_runner import (
     check_git_diff_empty,
     check_ralph_installed,
+    get_last_commit_diff,
     init_ralph_project,
     read_progress,
     run_ralph_iteration,
@@ -73,3 +74,26 @@ class TestLoopRunner:
         assert success is True
         assert output == "done"
         assert rate_limited is False
+        mock_run.assert_called_once()
+        assert mock_run.call_args.args[0] == ["ralph", "build", "1"]
+
+    @patch("autopilot.core.loop_runner._committed_diff")
+    @patch("autopilot.core.loop_runner._working_tree_diff")
+    def test_get_last_commit_diff_prefers_worktree(self, mock_worktree: MagicMock, mock_committed: MagicMock) -> None:
+        mock_worktree.return_value = "diff --git a/new.py b/new.py"
+        mock_committed.return_value = "old commit diff"
+
+        result = get_last_commit_diff(Path("/tmp"))
+
+        assert result == "diff --git a/new.py b/new.py"
+        mock_committed.assert_not_called()
+
+    @patch("autopilot.core.loop_runner._committed_diff")
+    @patch("autopilot.core.loop_runner._working_tree_diff")
+    def test_get_last_commit_diff_falls_back_to_commit(self, mock_worktree: MagicMock, mock_committed: MagicMock) -> None:
+        mock_worktree.return_value = ""
+        mock_committed.return_value = "commit diff"
+
+        result = get_last_commit_diff(Path("/tmp"))
+
+        assert result == "commit diff"
