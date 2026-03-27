@@ -10,7 +10,7 @@ from rich.console import Console
 
 from autopilot.core.account_manager import AccountManager
 from autopilot.core.config import AutopilotConfig
-from autopilot.core.critic import build_critic_prompt, run_critic
+from autopilot.core.critic import NON_ACTIONABLE_FEEDBACK, build_critic_prompt, feedback_is_actionable, run_critic
 from autopilot.core.gates import run_gates
 from autopilot.core.loop_runner import (
     append_guardrail,
@@ -149,6 +149,24 @@ class Orchestrator:
             env=critic_env,
             workdir=self.project_path,
         )
+        if not critic_result.approved and not feedback_is_actionable(critic_result.feedback):
+            console.print("  [yellow]Critic[/yellow] returned non-actionable feedback; retrying once...")
+            strict_prompt = build_critic_prompt(
+                story_title,
+                story_description,
+                diff,
+                strict=True,
+            )
+            retry_result = run_critic(
+                prompt=strict_prompt,
+                provider=critic_profile.provider,
+                env=critic_env,
+                workdir=self.project_path,
+            )
+            if retry_result.approved or feedback_is_actionable(retry_result.feedback):
+                critic_result = retry_result
+            else:
+                critic_result.feedback = NON_ACTIONABLE_FEEDBACK
 
         record = IterationRecord(
             story_id=story_id,

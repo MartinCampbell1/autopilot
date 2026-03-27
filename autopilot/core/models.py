@@ -5,6 +5,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 from enum import StrEnum
+import re
 
 
 class StoryStatus(StrEnum):
@@ -105,23 +106,22 @@ class ProjectConfig:
     providers: list[str] = field(default_factory=lambda: ["codex"])
 
 
-RATE_LIMIT_PATTERNS: list[str] = [
-    "resource has been exhausted",
-    "resource_exhausted",
-    "rate limit",
-    "rate_limit",
-    "quota exceeded",
-    "quota_exceeded",
-    "429",
-    "too many requests",
-    "insufficient_quota",
-    "capacity",
-    "overloaded",
-    "try again later",
+RATE_LIMIT_PATTERNS: list[re.Pattern[str]] = [
+    re.compile(r"resource has been exhausted", re.IGNORECASE),
+    re.compile(r"resource_exhausted", re.IGNORECASE),
+    re.compile(r"\brate limit(?:ed)?\b", re.IGNORECASE),
+    re.compile(r"rate_limit", re.IGNORECASE),
+    re.compile(r"quota exceeded", re.IGNORECASE),
+    re.compile(r"quota_exceeded", re.IGNORECASE),
+    re.compile(r"\b429\b", re.IGNORECASE),
+    re.compile(r"too many requests", re.IGNORECASE),
+    re.compile(r"insufficient_quota", re.IGNORECASE),
+    re.compile(r"\bat capacity\b", re.IGNORECASE),
+    re.compile(r"\boverloaded\b", re.IGNORECASE),
+    re.compile(r"try again later", re.IGNORECASE),
 ]
 
 
 def is_rate_limited(text: str) -> bool:
     """Check whether text contains rate limit indicators."""
-    lower = text.lower()
-    return any(pattern in lower for pattern in RATE_LIMIT_PATTERNS)
+    return any(pattern.search(text) for pattern in RATE_LIMIT_PATTERNS)

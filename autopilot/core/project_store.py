@@ -22,7 +22,10 @@ from autopilot.core.loop_runner import apply_autopilot_ralph_overrides, check_ra
 
 TIMELINE_LIMIT = 300
 TERMINAL_STORY_STATUSES = {"done", "skipped", "stuck"}
-PLACEHOLDER_ISSUE_PATTERN = re.compile(r"^-\s*Issue\s+\d+:\s*specific description\s*$", re.IGNORECASE)
+PLACEHOLDER_ISSUE_PATTERN = re.compile(
+    r"^-\s*(?:Issue\s+\d+:\s*specific description|<[^>]+>|concrete issue\b.*|second concrete issue\b.*)\s*$",
+    re.IGNORECASE,
+)
 
 
 def utcnow_iso() -> str:

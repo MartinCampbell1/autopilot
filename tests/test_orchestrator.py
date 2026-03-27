@@ -145,3 +145,48 @@ class TestOrchestrator:
         )
 
         assert outcome == StoryOutcome.RATE_LIMITED
+
+    @patch("autopilot.core.orchestrator.check_git_diff_empty")
+    @patch("autopilot.core.orchestrator.get_last_commit_diff")
+    @patch("autopilot.core.orchestrator.run_critic")
+    @patch("autopilot.core.orchestrator.run_gates")
+    @patch("autopilot.core.orchestrator.run_ralph_iteration")
+    def test_non_actionable_critic_feedback_retries_once(
+        self,
+        mock_ralph,
+        mock_gates,
+        mock_critic,
+        mock_get_diff,
+        mock_diff_empty,
+        tmp_path: Path,
+    ) -> None:
+        mock_ralph.return_value = (True, "Story 1 done", False)
+        mock_gates.return_value = (True, [])
+        mock_get_diff.return_value = "+new code"
+        mock_diff_empty.return_value = False
+        mock_critic.side_effect = [
+            CriticResult(
+                approved=False,
+                feedback="Critic returned NEEDS_WORK without actionable issues.",
+                raw_output="NEEDS_WORK",
+            ),
+            CriticResult(approved=True, feedback="", raw_output="APPROVED"),
+        ]
+
+        orchestrator = self._make_orchestrator(tmp_path)
+        profile = Profile(name="acc1", provider="codex", path=str(tmp_path))
+        env = {"PATH": "/usr/bin"}
+
+        outcome = orchestrator.run_single_iteration(
+            profile=profile,
+            env=env,
+            story_id=1,
+            story_title="Setup",
+            story_description="Project setup",
+            gates_config=[],
+            critic_profile=profile,
+            critic_env=env,
+        )
+
+        assert outcome == StoryOutcome.APPROVED
+        assert mock_critic.call_count == 2
