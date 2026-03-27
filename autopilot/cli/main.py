@@ -39,3 +39,19 @@ def run(
     from autopilot.cli.run import run as _run
 
     _run(project_path, prd)
+
+
+@app.command()
+def status() -> None:
+    """Show status of accounts and projects."""
+    from autopilot.cli.status import status as _status
+
+    _status()
+
+
+@app.command(name="init")
+def init_project(project_path: str = typer.Argument(help="Path to the project directory")) -> None:
+    """Initialize a project for autopilot."""
+    from autopilot.cli.init_cmd import init as _init
+
+    _init(project_path)
