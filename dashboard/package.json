@@ -4,9 +4,9 @@
   "private": true,
   "scripts": {
     "dev": "concurrently -k -n frontend,backend -c magenta,cyan \"npm:dev:frontend\" \"npm:dev:backend\"",
-    "dev:frontend": "sh -c 'NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://localhost:${AUTOPILOT_API_PORT:-8420}/api} next dev --port ${AUTOPILOT_FRONTEND_PORT:-3000}'",
+    "dev:frontend": "sh -c 'NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://localhost:${AUTOPILOT_API_PORT:-8420}/api} next dev --webpack --port ${AUTOPILOT_FRONTEND_PORT:-3020}'",
     "dev:backend": "sh -c 'cd .. && ./.venv/bin/python -m uvicorn autopilot.api.main:app --port ${AUTOPILOT_API_PORT:-8420} --host 0.0.0.0'",
-    "build": "next build",
+    "build": "next build --webpack",
     "start": "next start",
     "lint": "eslint"
   },

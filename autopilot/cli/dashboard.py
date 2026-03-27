@@ -17,6 +17,7 @@ console = Console()
 
 def dashboard(
     port: int = typer.Option(8420, help="API server port"),
+    frontend_port: int = typer.Option(3020, help="Frontend server port"),
     no_browser: bool = typer.Option(False, help="Don't open browser"),
 ) -> None:
     """Start the dashboard frontend and API server."""
@@ -28,12 +29,13 @@ def dashboard(
         raise typer.Exit(1)
 
     console.print(f"[bold]Starting Autopilot dashboard stack...[/bold]")
-    console.print(f"[dim]Frontend: http://localhost:3000[/dim]")
+    console.print(f"[dim]Frontend: http://localhost:{frontend_port}[/dim]")
     console.print(f"[dim]API: http://localhost:{port}[/dim]")
 
     try:
         env = os.environ.copy()
         env["AUTOPILOT_API_PORT"] = str(port)
+        env["AUTOPILOT_FRONTEND_PORT"] = str(frontend_port)
 
         process = subprocess.Popen(
             ["npm", "run", "dev"],
@@ -44,7 +46,7 @@ def dashboard(
         time.sleep(2)
 
         if not no_browser:
-            webbrowser.open("http://localhost:3000")
+            webbrowser.open(f"http://localhost:{frontend_port}")
 
         console.print("[dim]Press Ctrl+C to stop[/dim]")
 
