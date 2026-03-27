@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import os
+from pathlib import Path
+import signal
 import subprocess
-import sys
 import time
 import webbrowser
 
@@ -17,14 +19,26 @@ def dashboard(
     port: int = typer.Option(8420, help="API server port"),
     no_browser: bool = typer.Option(False, help="Don't open browser"),
 ) -> None:
-    """Start the dashboard API server and optionally open the browser."""
-    console.print(f"[bold]Starting Autopilot dashboard on port {port}...[/bold]")
+    """Start the dashboard frontend and API server."""
+    repo_root = Path(__file__).resolve().parents[2]
+    dashboard_dir = repo_root / "dashboard"
+
+    if not dashboard_dir.exists():
+        console.print(f"[red]Dashboard directory not found: {dashboard_dir}[/red]")
+        raise typer.Exit(1)
+
+    console.print(f"[bold]Starting Autopilot dashboard stack...[/bold]")
+    console.print(f"[dim]Frontend: http://localhost:3000[/dim]")
+    console.print(f"[dim]API: http://localhost:{port}[/dim]")
 
     try:
+        env = os.environ.copy()
+        env["AUTOPILOT_API_PORT"] = str(port)
+
         process = subprocess.Popen(
-            [sys.executable, "-m", "uvicorn", "autopilot.api.main:app", "--port", str(port), "--host", "0.0.0.0"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            ["npm", "run", "dev"],
+            cwd=str(dashboard_dir),
+            env=env,
         )
 
         time.sleep(2)
@@ -32,10 +46,9 @@ def dashboard(
         if not no_browser:
             webbrowser.open("http://localhost:3000")
 
-        console.print(f"[green]API running on http://localhost:{port}[/green]")
         console.print("[dim]Press Ctrl+C to stop[/dim]")
 
         process.wait()
     except KeyboardInterrupt:
         console.print("\n[yellow]Shutting down...[/yellow]")
-        process.terminate()
+        process.send_signal(signal.SIGINT)
