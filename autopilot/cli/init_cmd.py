@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-import subprocess
 from pathlib import Path
 
 import typer
 from rich.console import Console
 
-from autopilot.core.loop_runner import check_ralph_installed
+from autopilot.core.loop_runner import check_ralph_installed, init_ralph_project
 
 console = Console()
 
@@ -27,15 +26,8 @@ def init(project_path: str = typer.Argument(help="Path to the project directory"
 
     console.print(f"[bold]Initializing autopilot in {project.name}...[/bold]")
 
-    result = subprocess.run(
-        ["ralph", "install"],
-        cwd=str(project),
-        capture_output=True,
-        text=True,
-    )
-
-    if result.returncode != 0:
-        console.print(f"[red]Ralph install failed: {result.stderr}[/red]")
+    if not init_ralph_project(project):
+        console.print("[red]Ralph install failed.[/red]")
         raise typer.Exit(1)
 
     ralph_dir = project / ".ralph"

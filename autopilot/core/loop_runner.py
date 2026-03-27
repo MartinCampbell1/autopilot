@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -10,26 +11,25 @@ from autopilot.core.models import is_rate_limited
 
 def check_ralph_installed() -> bool:
     """Return whether the Ralph CLI is available."""
-    try:
-        result = subprocess.run(["ralph", "--version"], capture_output=True, text=True, timeout=10)
-        return result.returncode == 0
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        return False
+    return shutil.which("ralph") is not None
 
 
 def init_ralph_project(project_path: Path) -> bool:
     """Run `ralph install` in the project directory."""
+    agents_dir = project_path / ".agents" / "ralph"
     try:
         result = subprocess.run(
-            ["ralph", "install"],
+            ["ralph", "install", "--force"],
             cwd=str(project_path),
             capture_output=True,
             text=True,
             timeout=30,
         )
-        return result.returncode == 0
+        if result.returncode == 0:
+            return True
+        return agents_dir.exists()
     except Exception:
-        return False
+        return agents_dir.exists()
 
 
 def run_ralph_iteration(

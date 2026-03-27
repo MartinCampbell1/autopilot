@@ -14,19 +14,26 @@ from autopilot.core.loop_runner import (
 
 
 class TestLoopRunner:
-    @patch("autopilot.core.loop_runner.subprocess.run")
-    def test_check_ralph_installed(self, mock_run: MagicMock) -> None:
-        mock_run.return_value = MagicMock(returncode=0, stdout="0.1.3")
+    @patch("autopilot.core.loop_runner.shutil.which")
+    def test_check_ralph_installed(self, mock_which: MagicMock) -> None:
+        mock_which.return_value = "/opt/homebrew/bin/ralph"
         assert check_ralph_installed() is True
 
-    @patch("autopilot.core.loop_runner.subprocess.run")
-    def test_check_ralph_not_installed(self, mock_run: MagicMock) -> None:
-        mock_run.side_effect = FileNotFoundError()
+    @patch("autopilot.core.loop_runner.shutil.which")
+    def test_check_ralph_not_installed(self, mock_which: MagicMock) -> None:
+        mock_which.return_value = None
         assert check_ralph_installed() is False
 
     @patch("autopilot.core.loop_runner.subprocess.run")
     def test_init_ralph_project(self, mock_run: MagicMock, tmp_path: Path) -> None:
         mock_run.return_value = MagicMock(returncode=0, stdout="ok", stderr="")
+        assert init_ralph_project(tmp_path) is True
+
+    @patch("autopilot.core.loop_runner.subprocess.run")
+    def test_init_ralph_project_tty_error_but_agents_installed(self, mock_run: MagicMock, tmp_path: Path) -> None:
+        agents_dir = tmp_path / ".agents" / "ralph"
+        agents_dir.mkdir(parents=True)
+        mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="ERR_TTY_INIT_FAILED")
         assert init_ralph_project(tmp_path) is True
 
     def test_write_and_read_critic_feedback(self, tmp_path: Path) -> None:
