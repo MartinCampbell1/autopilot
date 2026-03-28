@@ -136,6 +136,7 @@ export interface MCPConnector {
   built_in: boolean;
   config: Record<string, unknown>;
   validation_status: string;
+  last_validation_result?: ConnectorValidationResult;
 }
 
 export interface SkillPack {
@@ -160,10 +161,41 @@ export interface RoleTemplate {
   optional_connector_tags: string[];
 }
 
+export interface ConnectorFieldSchema {
+  key: string;
+  label: string;
+  field_type: string;
+  required: boolean;
+  placeholder: string;
+  help_text: string;
+  options: string[];
+  sensitive: boolean;
+}
+
+export interface ConnectorTypeSchema {
+  id: string;
+  name: string;
+  description: string;
+  transport_options: string[];
+  default_transport: string;
+  suggested_tags: string[];
+  suggested_scopes: string[];
+  config_fields: ConnectorFieldSchema[];
+}
+
+export interface ConnectorValidationResult {
+  ok: boolean;
+  status: string;
+  summary: string;
+  log: string;
+  checked_fields: string[];
+}
+
 export interface CapabilitiesCatalog {
   connectors: MCPConnector[];
   skill_packs: SkillPack[];
   roles: RoleTemplate[];
+  connector_types: ConnectorTypeSchema[];
 }
 
 export interface CreateProjectResult {

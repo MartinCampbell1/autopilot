@@ -15,8 +15,17 @@ import {
   fetchCapabilitiesCatalog,
   updateConnector,
   updateSkillPack,
+  validateConnectorDraft,
 } from "@/lib/api";
-import type { CapabilitiesCatalog, MCPConnector, RoleTemplate, SkillPack } from "@/lib/types";
+import type {
+  CapabilitiesCatalog,
+  ConnectorFieldSchema,
+  ConnectorValidationResult,
+  ConnectorTypeSchema,
+  MCPConnector,
+  RoleTemplate,
+  SkillPack,
+} from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 type ConnectorDraft = {
@@ -189,8 +198,109 @@ function applyConnectorPreset(preset: (typeof CONNECTOR_PRESETS)[number]): Conne
   };
 }
 
+function parseDraftConfig(configText: string): Record<string, unknown> {
+  if (!configText.trim()) return {};
+  return JSON.parse(configText) as Record<string, unknown>;
+}
+
+function statusTone(status: string) {
+  switch (status) {
+    case "valid":
+      return "bg-[#dbeddb] text-[#2b6e3f]";
+    case "invalid":
+      return "bg-[#fbe4e4] text-[#a02323]";
+    default:
+      return "bg-[#f1f1ef] text-[#787774]";
+  }
+}
+
+function getConnectorConfigValue(configText: string, field: ConnectorFieldSchema): string {
+  try {
+    const config = parseDraftConfig(configText);
+    const value = config[field.key];
+    if (value == null) return "";
+    if (typeof value === "string") return value;
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return "";
+  }
+}
+
+function normalizeConnectorConfigValue(field: ConnectorFieldSchema, value: unknown): unknown {
+  if (typeof value !== "string") return value;
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+  if (field.field_type === "textarea") {
+    if (
+      (trimmed.startsWith("{") && trimmed.endsWith("}")) ||
+      (trimmed.startsWith("[") && trimmed.endsWith("]"))
+    ) {
+      try {
+        return JSON.parse(trimmed);
+      } catch {
+        return value;
+      }
+    }
+  }
+  return value;
+}
+
+function renderConnectorFieldInput(
+  field: ConnectorFieldSchema,
+  value: string,
+  onChange: (nextValue: string) => void
+) {
+  if (field.field_type === "textarea") {
+    return (
+      <Textarea
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        className="min-h-24 font-mono text-[12px]"
+        placeholder={field.placeholder}
+      />
+    );
+  }
+
+  if (field.field_type === "select") {
+    return (
+      <select
+        value={value || field.options[0] || ""}
+        onChange={(event) => onChange(event.target.value)}
+        className="h-10 w-full rounded-lg border border-[#e3e2e0] bg-white px-3 text-[14px] text-[#37352f] outline-none focus:border-[#37352f]"
+      >
+        <option value="">Select…</option>
+        {field.options.map((option) => (
+          <option key={option} value={option}>
+            {option}
+          </option>
+        ))}
+      </select>
+    );
+  }
+
+  return (
+    <Input
+      type={
+        field.field_type === "password"
+          ? "password"
+          : field.field_type === "url"
+            ? "url"
+            : "text"
+      }
+      value={value}
+      onChange={(event) => onChange(event.target.value)}
+      placeholder={field.placeholder}
+    />
+  );
+}
+
 export function SettingsCapabilitiesManager() {
-  const [catalog, setCatalog] = useState<CapabilitiesCatalog>({ connectors: [], skill_packs: [], roles: [] });
+  const [catalog, setCatalog] = useState<CapabilitiesCatalog>({
+    connectors: [],
+    skill_packs: [],
+    roles: [],
+    connector_types: [],
+  });
   const [activeTab, setActiveTab] = useState<"connectors" | "skill-packs">("connectors");
   const [selectedConnectorId, setSelectedConnectorId] = useState<string>("");
   const [selectedSkillPackId, setSelectedSkillPackId] = useState<string>("");
@@ -201,6 +311,7 @@ export function SettingsCapabilitiesManager() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
+  const [draftValidation, setDraftValidation] = useState<ConnectorValidationResult | null>(null);
 
   const loadCatalog = async () => {
     setLoading(true);
@@ -231,8 +342,10 @@ export function SettingsCapabilitiesManager() {
     const selected = catalog.connectors.find((item) => item.id === selectedConnectorId);
     if (selected) {
       setConnectorDraft(formatConnectorDraft(selected));
+      setDraftValidation(selected.last_validation_result ?? null);
     } else if (!selectedConnectorId) {
       setConnectorDraft(EMPTY_CONNECTOR);
+      setDraftValidation(null);
     }
   }, [catalog.connectors, selectedConnectorId]);
 
@@ -249,6 +362,7 @@ export function SettingsCapabilitiesManager() {
     setActiveTab("connectors");
     setSelectedConnectorId(connector.id);
     setConnectorDraft(formatConnectorDraft(connector));
+    setDraftValidation(connector.last_validation_result ?? null);
     setMessage("");
   };
 
@@ -263,6 +377,7 @@ export function SettingsCapabilitiesManager() {
     setActiveTab("connectors");
     setSelectedConnectorId("");
     setConnectorDraft(EMPTY_CONNECTOR);
+    setDraftValidation(null);
     setMessage("");
   };
 
@@ -273,36 +388,62 @@ export function SettingsCapabilitiesManager() {
     setMessage("");
   };
 
-  const saveConnector = async () => {
+  const selectedConnectorType =
+    catalog.connector_types.find((item) => item.id === connectorDraft.connector_type) ?? null;
+
+  const buildConnectorPayload = () => {
     const id = connectorDraft.id.trim();
     if (!id) {
-      setMessage("Connector id is required.");
-      return;
+      throw new Error("Connector id is required.");
     }
 
-    let config: Record<string, unknown> = {};
-    try {
-      config = connectorDraft.config.trim() ? JSON.parse(connectorDraft.config) : {};
-    } catch {
-      setMessage("Connector config must be valid JSON.");
-      return;
-    }
+    const config = parseDraftConfig(connectorDraft.config);
+    const normalizedConfig = selectedConnectorType
+      ? Object.fromEntries(
+          Object.entries(config).map(([key, value]) => {
+            const field = selectedConnectorType.config_fields.find((item) => item.key === key);
+            return [key, field ? normalizeConnectorConfigValue(field, value) : value];
+          })
+        )
+      : config;
+    return {
+      id,
+      name: connectorDraft.name.trim() || id,
+      connector_type: connectorDraft.connector_type.trim() || "mcp_server",
+      description: connectorDraft.description.trim(),
+      transport: connectorDraft.transport.trim() || selectedConnectorType?.default_transport || "stdio",
+      tags: splitList(connectorDraft.tags),
+      providers: splitList(connectorDraft.providers),
+      risk_level: connectorDraft.risk_level.trim() || "medium",
+      scopes: splitList(connectorDraft.scopes),
+      enabled: connectorDraft.enabled,
+      config: normalizedConfig,
+    };
+  };
 
-    setSaving(true);
-    try {
-      const payload = {
-        id,
-        name: connectorDraft.name.trim() || id,
-        connector_type: connectorDraft.connector_type.trim() || "mcp_server",
-        description: connectorDraft.description.trim(),
-        transport: connectorDraft.transport.trim() || "stdio",
-        tags: splitList(connectorDraft.tags),
-        providers: splitList(connectorDraft.providers),
-        risk_level: connectorDraft.risk_level.trim() || "medium",
-        scopes: splitList(connectorDraft.scopes),
-        enabled: connectorDraft.enabled,
-        config,
+  const updateConnectorConfigField = (field: string, value: string) => {
+    setConnectorDraft((current) => {
+      let config: Record<string, unknown> = {};
+      try {
+        config = parseDraftConfig(current.config);
+      } catch {
+        config = {};
+      }
+      config[field] = value;
+      return {
+        ...current,
+        config: JSON.stringify(config, null, 2),
       };
+    });
+    setDraftValidation(null);
+  };
+
+  const saveConnector = async () => {
+    try {
+      const payload = buildConnectorPayload();
+      const id = payload.id;
+
+      setSaving(true);
 
       if (selectedConnectorId && selectedConnectorId === id) {
         await updateConnector(selectedConnectorId, payload);
@@ -316,10 +457,37 @@ export function SettingsCapabilitiesManager() {
       }
 
       setMessage(`Connector ${id} saved.`);
+      setDraftValidation(null);
       await loadCatalog();
       setSelectedConnectorId(id);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Failed to save connector.");
+      setMessage(
+        error instanceof Error && error.message.includes("Unexpected token")
+          ? "Connector config must be valid JSON."
+          : error instanceof Error
+            ? error.message
+            : "Failed to save connector."
+      );
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const validateCurrentConnector = async () => {
+    try {
+      const payload = buildConnectorPayload();
+      setSaving(true);
+      const result = await validateConnectorDraft(payload);
+      setDraftValidation(result.result);
+      setMessage(result.result.summary);
+    } catch (error) {
+      setMessage(
+        error instanceof Error && error.message.includes("Unexpected token")
+          ? "Connector config must be valid JSON."
+          : error instanceof Error
+            ? error.message
+            : "Failed to validate connector."
+      );
     } finally {
       setSaving(false);
     }
@@ -374,6 +542,7 @@ export function SettingsCapabilitiesManager() {
       setMessage(result.message);
       setSelectedConnectorId("");
       setConnectorDraft(EMPTY_CONNECTOR);
+      setDraftValidation(null);
       await loadCatalog();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Failed to delete connector.");
@@ -412,6 +581,37 @@ export function SettingsCapabilitiesManager() {
   });
   const selectedConnector = catalog.connectors.find((item) => item.id === selectedConnectorId) ?? null;
   const selectedSkillPack = catalog.skill_packs.find((item) => item.id === selectedSkillPackId) ?? null;
+  const connectorTypeOptions = catalog.connector_types.length
+    ? catalog.connector_types
+    : CONNECTOR_TYPES.map(
+        (id) =>
+          ({
+            id,
+            name: id,
+            description: "",
+            transport_options: TRANSPORTS,
+            default_transport: "stdio",
+            suggested_tags: [],
+            suggested_scopes: [],
+            config_fields: [],
+          }) satisfies ConnectorTypeSchema
+      );
+  const transportOptions = selectedConnectorType?.transport_options?.length
+    ? selectedConnectorType.transport_options
+    : TRANSPORTS;
+  const activeValidation = draftValidation ?? selectedConnector?.last_validation_result ?? null;
+  const activeValidationStatus = draftValidation?.status || selectedConnector?.validation_status || "unknown";
+  const activeValidationCheckedFields = Array.isArray(activeValidation?.checked_fields)
+    ? activeValidation.checked_fields
+    : [];
+  const activeValidationSummary =
+    typeof activeValidation?.summary === "string" && activeValidation.summary.trim()
+      ? activeValidation.summary
+      : "No validation summary recorded yet.";
+  const activeValidationLog =
+    typeof activeValidation?.log === "string" && activeValidation.log.trim()
+      ? activeValidation.log
+      : "";
 
   return (
     <div className="space-y-6">
@@ -566,6 +766,72 @@ export function SettingsCapabilitiesManager() {
                 </Badge>
               </div>
 
+              <div className="mt-4 rounded-[12px] border border-[#ecebe8] bg-[#fbfbf9] p-4">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <p className="text-[13px] font-medium text-[#37352f]">
+                      {selectedConnectorType?.name || connectorDraft.connector_type}
+                    </p>
+                    <p className="mt-1 text-[12px] leading-relaxed text-[#787774]">
+                      {selectedConnectorType?.description || "Connector type schema is not loaded yet."}
+                    </p>
+                  </div>
+                  <Badge className={cn("border-0 text-[11px]", statusTone(activeValidationStatus))} variant="outline">
+                    {activeValidationStatus}
+                  </Badge>
+                </div>
+                {selectedConnectorType && (
+                  <div className="mt-3 grid gap-3 md:grid-cols-2">
+                    <div>
+                      <p className="text-[11px] uppercase tracking-[0.08em] text-[#9b9a97]">Suggested tags</p>
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        {selectedConnectorType.suggested_tags.length === 0 ? (
+                          <span className="text-[12px] text-[#9b9a97]">No type-level tag suggestions.</span>
+                        ) : (
+                          selectedConnectorType.suggested_tags.map((tag) => (
+                            <button
+                              key={tag}
+                              type="button"
+                              onClick={() => {
+                                const nextTags = Array.from(new Set([...splitList(connectorDraft.tags), tag]));
+                                setConnectorDraft((current) => ({ ...current, tags: joinList(nextTags) }));
+                                setDraftValidation(null);
+                              }}
+                              className="rounded-full border border-[#e5e5e3] bg-white px-2.5 py-1 text-[11px] text-[#6b6b6b] transition-colors hover:bg-[#f7f7f5]"
+                            >
+                              + {tag}
+                            </button>
+                          ))
+                        )}
+                      </div>
+                    </div>
+                    <div>
+                      <p className="text-[11px] uppercase tracking-[0.08em] text-[#9b9a97]">Suggested scopes</p>
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        {selectedConnectorType.suggested_scopes.length === 0 ? (
+                          <span className="text-[12px] text-[#9b9a97]">No type-level scope suggestions.</span>
+                        ) : (
+                          selectedConnectorType.suggested_scopes.map((scope) => (
+                            <button
+                              key={scope}
+                              type="button"
+                              onClick={() => {
+                                const nextScopes = Array.from(new Set([...splitList(connectorDraft.scopes), scope]));
+                                setConnectorDraft((current) => ({ ...current, scopes: joinList(nextScopes) }));
+                                setDraftValidation(null);
+                              }}
+                              className="rounded-full border border-[#e5e5e3] bg-white px-2.5 py-1 text-[11px] text-[#6b6b6b] transition-colors hover:bg-[#f7f7f5]"
+                            >
+                              + {scope}
+                            </button>
+                          ))
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+
               <div className="mt-5 grid gap-4 md:grid-cols-2">
                 <label className="block">
                   <span className="mb-1.5 block text-[11px] font-semibold uppercase tracking-[0.08em] text-[#9b9a97]">
@@ -594,12 +860,25 @@ export function SettingsCapabilitiesManager() {
                   </span>
                   <select
                     value={connectorDraft.connector_type}
-                    onChange={(event) => setConnectorDraft((current) => ({ ...current, connector_type: event.target.value }))}
+                    onChange={(event) => {
+                      const nextType = connectorTypeOptions.find((item) => item.id === event.target.value) ?? null;
+                      setConnectorDraft((current) => ({
+                        ...current,
+                        connector_type: event.target.value,
+                        transport:
+                          nextType && !nextType.transport_options.includes(current.transport)
+                            ? nextType.default_transport
+                            : current.transport,
+                        tags: current.tags || joinList(nextType?.suggested_tags || []),
+                        scopes: current.scopes || joinList(nextType?.suggested_scopes || []),
+                      }));
+                      setDraftValidation(null);
+                    }}
                     className="h-10 w-full rounded-lg border border-[#e3e2e0] bg-white px-3 text-[14px] text-[#37352f] outline-none focus:border-[#37352f]"
                   >
-                    {CONNECTOR_TYPES.map((type) => (
-                      <option key={type} value={type}>
-                        {type}
+                    {connectorTypeOptions.map((type) => (
+                      <option key={type.id} value={type.id}>
+                        {type.name}
                       </option>
                     ))}
                   </select>
@@ -610,10 +889,13 @@ export function SettingsCapabilitiesManager() {
                   </span>
                   <select
                     value={connectorDraft.transport}
-                    onChange={(event) => setConnectorDraft((current) => ({ ...current, transport: event.target.value }))}
+                    onChange={(event) => {
+                      setConnectorDraft((current) => ({ ...current, transport: event.target.value }));
+                      setDraftValidation(null);
+                    }}
                     className="h-10 w-full rounded-lg border border-[#e3e2e0] bg-white px-3 text-[14px] text-[#37352f] outline-none focus:border-[#37352f]"
                   >
-                    {TRANSPORTS.map((transport) => (
+                    {transportOptions.map((transport) => (
                       <option key={transport} value={transport}>
                         {transport}
                       </option>
@@ -626,7 +908,10 @@ export function SettingsCapabilitiesManager() {
                   </span>
                   <Input
                     value={connectorDraft.providers}
-                    onChange={(event) => setConnectorDraft((current) => ({ ...current, providers: event.target.value }))}
+                    onChange={(event) => {
+                      setConnectorDraft((current) => ({ ...current, providers: event.target.value }));
+                      setDraftValidation(null);
+                    }}
                     placeholder="codex, claude, gemini"
                   />
                 </label>
@@ -636,7 +921,10 @@ export function SettingsCapabilitiesManager() {
                   </span>
                   <select
                     value={connectorDraft.risk_level}
-                    onChange={(event) => setConnectorDraft((current) => ({ ...current, risk_level: event.target.value }))}
+                    onChange={(event) => {
+                      setConnectorDraft((current) => ({ ...current, risk_level: event.target.value }));
+                      setDraftValidation(null);
+                    }}
                     className="h-10 w-full rounded-lg border border-[#e3e2e0] bg-white px-3 text-[14px] text-[#37352f] outline-none focus:border-[#37352f]"
                   >
                     {RISK_LEVELS.map((level) => (
@@ -652,7 +940,10 @@ export function SettingsCapabilitiesManager() {
                   </span>
                   <Input
                     value={connectorDraft.tags}
-                    onChange={(event) => setConnectorDraft((current) => ({ ...current, tags: event.target.value }))}
+                    onChange={(event) => {
+                      setConnectorDraft((current) => ({ ...current, tags: event.target.value }));
+                      setDraftValidation(null);
+                    }}
                     placeholder="backend, graph, docs"
                   />
                 </label>
@@ -662,7 +953,10 @@ export function SettingsCapabilitiesManager() {
                   </span>
                   <Input
                     value={connectorDraft.scopes}
-                    onChange={(event) => setConnectorDraft((current) => ({ ...current, scopes: event.target.value }))}
+                    onChange={(event) => {
+                      setConnectorDraft((current) => ({ ...current, scopes: event.target.value }));
+                      setDraftValidation(null);
+                    }}
                     placeholder="network, database, browser"
                   />
                 </label>
@@ -672,18 +966,46 @@ export function SettingsCapabilitiesManager() {
                   </span>
                   <Textarea
                     value={connectorDraft.description}
-                    onChange={(event) => setConnectorDraft((current) => ({ ...current, description: event.target.value }))}
+                    onChange={(event) => {
+                      setConnectorDraft((current) => ({ ...current, description: event.target.value }));
+                      setDraftValidation(null);
+                    }}
                     placeholder="What this connector exposes to agents."
                     className="min-h-24"
                   />
                 </label>
+                {selectedConnectorType?.config_fields?.map((field) => (
+                  <label
+                    key={field.key}
+                    className={cn(
+                      "block",
+                      field.field_type === "textarea" ? "md:col-span-2" : ""
+                    )}
+                  >
+                    <span className="mb-1.5 block text-[11px] font-semibold uppercase tracking-[0.08em] text-[#9b9a97]">
+                      {field.label}
+                      {field.required ? " *" : ""}
+                    </span>
+                    {renderConnectorFieldInput(
+                      field,
+                      getConnectorConfigValue(connectorDraft.config, field),
+                      (value) => updateConnectorConfigField(field.key, value)
+                    )}
+                    {field.help_text ? (
+                      <span className="mt-1 block text-[12px] leading-relaxed text-[#9b9a97]">{field.help_text}</span>
+                    ) : null}
+                  </label>
+                ))}
                 <label className="block md:col-span-2">
                   <span className="mb-1.5 block text-[11px] font-semibold uppercase tracking-[0.08em] text-[#9b9a97]">
-                    Config JSON
+                    Advanced Config JSON
                   </span>
                   <Textarea
                     value={connectorDraft.config}
-                    onChange={(event) => setConnectorDraft((current) => ({ ...current, config: event.target.value }))}
+                    onChange={(event) => {
+                      setConnectorDraft((current) => ({ ...current, config: event.target.value }));
+                      setDraftValidation(null);
+                    }}
                     className="min-h-40 font-mono text-[12px]"
                     placeholder='{\n  "base_url": "https://..."\n}'
                   />
@@ -694,11 +1016,36 @@ export function SettingsCapabilitiesManager() {
                 <input
                   type="checkbox"
                   checked={connectorDraft.enabled}
-                  onChange={(event) => setConnectorDraft((current) => ({ ...current, enabled: event.target.checked }))}
+                  onChange={(event) => {
+                    setConnectorDraft((current) => ({ ...current, enabled: event.target.checked }));
+                    setDraftValidation(null);
+                  }}
                   className="h-4 w-4 rounded border-[#d0cfcc]"
                 />
                 Enabled for planning and assignment
               </label>
+
+              {activeValidation && (
+                <div className="mt-4 rounded-[12px] border border-[#ecebe8] bg-[#fbfbf9] p-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="text-[13px] font-medium text-[#37352f]">Validation result</p>
+                    <Badge className={cn("border-0 text-[11px]", statusTone(activeValidation.status))} variant="outline">
+                      {activeValidation.status}
+                    </Badge>
+                  </div>
+                  <p className="mt-2 text-[13px] text-[#6b6b6b]">{activeValidationSummary}</p>
+                  {activeValidationCheckedFields.length > 0 && (
+                    <p className="mt-2 text-[12px] text-[#9b9a97]">
+                      Checked: {activeValidationCheckedFields.join(", ")}
+                    </p>
+                  )}
+                  {activeValidationLog ? (
+                    <pre className="mt-3 overflow-x-auto rounded-[10px] bg-white p-3 text-[12px] leading-relaxed text-[#6b6b6b]">
+                      {activeValidationLog}
+                    </pre>
+                  ) : null}
+                </div>
+              )}
 
               <div className="mt-5 flex items-center justify-end gap-2">
                 {selectedConnector && !selectedConnector.built_in && (
@@ -712,6 +1059,15 @@ export function SettingsCapabilitiesManager() {
                     Delete connector
                   </Button>
                 )}
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-9 rounded-[8px] border-[#e5e5e3] text-[13px]"
+                  onClick={() => void validateCurrentConnector()}
+                  disabled={saving}
+                >
+                  {saving ? "Working..." : "Validate"}
+                </Button>
                 <Button
                   size="sm"
                   variant="outline"

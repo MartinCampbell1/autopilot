@@ -2,6 +2,7 @@ import type {
   CapabilitiesCatalog,
   AccountHealth,
   AccountsByProvider,
+  ConnectorValidationResult,
   CreateProjectResult,
   IntakeSession,
   LaunchResult,
@@ -172,7 +173,7 @@ export async function fetchConnectors(): Promise<{ connectors: MCPConnector[] }>
 }
 
 export async function createConnector(
-  connector: Omit<MCPConnector, "built_in" | "validation_status">
+  connector: Omit<MCPConnector, "built_in" | "validation_status" | "last_validation_result">
 ): Promise<{ status: string; connector: MCPConnector }> {
   const res = await fetch(`${API_BASE}/capabilities/connectors`, {
     method: "POST",
@@ -184,7 +185,7 @@ export async function createConnector(
 
 export async function updateConnector(
   connectorId: string,
-  connector: Omit<MCPConnector, "built_in" | "validation_status">
+  connector: Omit<MCPConnector, "built_in" | "validation_status" | "last_validation_result">
 ): Promise<{ status: string; connector: MCPConnector }> {
   const res = await fetch(`${API_BASE}/capabilities/connectors/${encodeURIComponent(connectorId)}`, {
     method: "PATCH",
@@ -199,6 +200,29 @@ export async function deleteConnector(connectorId: string): Promise<{ status: st
     method: "DELETE",
   });
   return jsonOrThrow<{ status: string; message: string }>(res, `Connector delete failed: ${res.status}`);
+}
+
+export async function validateConnectorDraft(
+  connector: Omit<MCPConnector, "built_in" | "validation_status" | "last_validation_result">
+): Promise<{ status: string; result: ConnectorValidationResult }> {
+  const res = await fetch(`${API_BASE}/capabilities/connectors/validate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(connector),
+  });
+  return jsonOrThrow<{ status: string; result: ConnectorValidationResult }>(res, `Connector validation failed: ${res.status}`);
+}
+
+export async function validateSavedConnector(
+  connectorId: string
+): Promise<{ status: string; result: ConnectorValidationResult; connector: MCPConnector }> {
+  const res = await fetch(`${API_BASE}/capabilities/connectors/${encodeURIComponent(connectorId)}/validate`, {
+    method: "POST",
+  });
+  return jsonOrThrow<{ status: string; result: ConnectorValidationResult; connector: MCPConnector }>(
+    res,
+    `Saved connector validation failed: ${res.status}`
+  );
 }
 
 export async function fetchSkillPacks(): Promise<{ skill_packs: SkillPack[] }> {

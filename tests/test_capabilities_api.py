@@ -27,6 +27,7 @@ def test_capabilities_catalog_lists_defaults(tmp_path: Path, monkeypatch) -> Non
     assert any(connector["id"] == "browser_devtools" for connector in payload["connectors"])
     assert any(skill_pack["id"] == "fastapi-backend" for skill_pack in payload["skill_packs"])
     assert any(role["id"] == "backend_worker" for role in payload["roles"])
+    assert any(connector_type["id"] == "mcp_server" for connector_type in payload["connector_types"])
 
 
 def test_create_and_update_connector_and_skill_pack(tmp_path: Path, monkeypatch) -> None:
@@ -159,6 +160,53 @@ def test_delete_custom_connector_and_skill_pack(tmp_path: Path, monkeypatch) -> 
         skill_pack["id"] == "temporary_skill"
         for skill_pack in client.get("/api/capabilities/skill-packs").json()["skill_packs"]
     )
+
+
+def test_validate_connector_and_persist_status(tmp_path: Path, monkeypatch) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    client = _build_client(config, monkeypatch)
+
+    invalid_response = client.post(
+        "/api/capabilities/connectors/validate",
+        json={
+            "id": "broken_api",
+            "name": "Broken API",
+            "connector_type": "http_api",
+            "description": "Broken http connector",
+            "transport": "http",
+            "tags": ["api"],
+            "providers": ["codex"],
+            "risk_level": "medium",
+            "scopes": ["network"],
+            "enabled": True,
+            "config": {},
+        },
+    )
+    assert invalid_response.status_code == 200
+    assert invalid_response.json()["result"]["status"] == "invalid"
+
+    create_response = client.post(
+        "/api/capabilities/connectors",
+        json={
+            "id": "valid_api",
+            "name": "Valid API",
+            "connector_type": "http_api",
+            "description": "Valid http connector",
+            "transport": "http",
+            "tags": ["api"],
+            "providers": ["codex"],
+            "risk_level": "medium",
+            "scopes": ["network"],
+            "enabled": True,
+            "config": {"base_url": "https://api.example.com"},
+        },
+    )
+    assert create_response.status_code == 200
+    assert create_response.json()["connector"]["validation_status"] == "valid"
+
+    validate_saved = client.post("/api/capabilities/connectors/valid_api/validate")
+    assert validate_saved.status_code == 200
+    assert validate_saved.json()["result"]["status"] == "valid"
 
 
 def test_update_routes_validate_mismatch_and_missing_ids(tmp_path: Path, monkeypatch) -> None:
