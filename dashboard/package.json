@@ -4,8 +4,8 @@
   "private": true,
   "scripts": {
     "dev": "concurrently -k -n frontend,backend -c magenta,cyan \"npm:dev:frontend\" \"npm:dev:backend\"",
-    "dev:frontend": "sh -c 'NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://localhost:${AUTOPILOT_API_PORT:-8420}/api} next dev --webpack --port ${AUTOPILOT_FRONTEND_PORT:-3020}'",
-    "dev:backend": "sh -c 'cd .. && AUTOPILOT_API_PORT=${AUTOPILOT_API_PORT:-8420} ./.venv/bin/python -m autopilot.api.serve'",
+    "dev:frontend": "sh -c 'NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://localhost:${AUTOPILOT_API_PORT:-8420}/api} next dev --webpack --hostname ${AUTOPILOT_FRONTEND_HOST:-127.0.0.1} --port ${AUTOPILOT_FRONTEND_PORT:-3020}'",
+    "dev:backend": "sh -c 'cd .. && AUTOPILOT_API_HOST=${AUTOPILOT_API_HOST:-127.0.0.1} AUTOPILOT_API_PORT=${AUTOPILOT_API_PORT:-8420} ./.venv/bin/python -m autopilot.api.serve'",
     "build": "next build --webpack",
     "start": "next start",
     "lint": "eslint"

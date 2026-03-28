@@ -705,7 +705,15 @@ def _resolve_story_runtime_metadata(
     team_members = runtime.get("team_members") or []
     connector_activation = runtime.get("connector_activation") or []
     activation_errors = runtime.get("activation_errors") or []
-    if team_members and connector_activation:
+    has_runtime_plan = bool(
+        team_members
+        or connector_activation
+        or activation_errors
+        or runtime.get("worktree_path")
+        or runtime.get("branch_name")
+        or (team_mode not in {None, "", "solo"})
+    )
+    if has_runtime_plan:
         return {
             "team_mode": team_mode or state.get("launch_profile", {}).get("story_execution_mode", "solo"),
             "team_members": team_members,
@@ -722,7 +730,7 @@ def _resolve_story_runtime_metadata(
         routing_policies=load_routing_policies_registry(config),
     )
     return {
-        "team_mode": runtime.get("team_mode") or resolved["team_mode"],
+        "team_mode": resolved["team_mode"],
         "team_members": runtime.get("team_members") or resolved["team_members"],
         "connector_activation": runtime.get("connector_activation") or resolved["active_connectors"],
         "activation_errors": runtime.get("activation_errors") or resolved["activation_errors"],

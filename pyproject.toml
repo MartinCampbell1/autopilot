@@ -23,6 +23,7 @@ api = [
     "uvicorn>=0.34.0",
     "aiosqlite>=0.20.0",
     "sqlalchemy>=2.0",
+    "httpx>=0.27.0,<1.0.0",
 ]
 notify = [
     "python-telegram-bot>=21.0",

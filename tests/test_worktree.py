@@ -16,10 +16,14 @@ class TestWorktree:
         mock_run.return_value = MagicMock(returncode=0)
         result = create_worktree(Path("/Users/martin/project"), story_id=3)
         assert result == Path("/Users/martin/project-story-3")
-        mock_run.assert_called_once()
-        call_args = mock_run.call_args[0][0]
-        assert "worktree" in call_args
-        assert "add" in call_args
+        assert mock_run.call_count == 2
+
+        cleanup_call = mock_run.call_args_list[0][0][0]
+        assert cleanup_call == ["git", "branch", "-D", "story-3"]
+
+        add_call = mock_run.call_args_list[1][0][0]
+        assert "worktree" in add_call
+        assert "add" in add_call
 
     @patch("autopilot.core.worktree.subprocess.run")
     def test_remove_worktree(self, mock_run: MagicMock) -> None:
