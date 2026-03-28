@@ -9,6 +9,7 @@ const COLUMNS: Array<{ key: StoryStatus; label: string; emptyText: string }> = [
   { key: "in_progress", label: "In Progress", emptyText: "Nothing running" },
   { key: "done", label: "Done", emptyText: "Nothing completed" },
   { key: "stuck", label: "Stuck", emptyText: "All clear" },
+  { key: "merge_blocked", label: "Merge Blocked", emptyText: "No merge issues" },
 ];
 
 interface KanbanBoardProps {
@@ -21,7 +22,7 @@ interface KanbanBoardProps {
 export function KanbanBoard({ project, selectedStoryId, onStoryClick, className }: KanbanBoardProps) {
   return (
     <div className={className}>
-      <div className="grid grid-cols-1 gap-3 xl:grid-cols-4">
+      <div className="grid grid-cols-1 gap-3 xl:grid-cols-5">
         {COLUMNS.map((col) => {
           const stories = project.stories.filter((s) => s.status === col.key);
           return (

@@ -6,10 +6,13 @@ import type {
   CreateProjectResult,
   IntakeSession,
   LaunchResult,
+  LaunchProfile,
+  LaunchPreset,
   PRD,
   ProjectDetail,
   ProjectSummary,
   MCPConnector,
+  RoutingPolicy,
   SkillPack,
 } from "@/lib/types";
 
@@ -64,9 +67,14 @@ export async function createProjectFromPrd(
   return jsonOrThrow<CreateProjectResult>(res, `Project creation failed: ${res.status}`);
 }
 
-export async function launchProject(projectId: string): Promise<LaunchResult> {
+export async function launchProject(
+  projectId: string,
+  launchProfile?: Partial<LaunchProfile>
+): Promise<LaunchResult> {
   const res = await fetch(`${API_BASE}/projects/${encodeURIComponent(projectId)}/launch`, {
     method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ launch_profile: launchProfile ?? null }),
   });
   return jsonOrThrow<LaunchResult>(res, `Launch failed: ${res.status}`);
 }
@@ -165,6 +173,31 @@ export async function importProviderSession(provider: string): Promise<{ status:
 export async function fetchCapabilitiesCatalog(): Promise<CapabilitiesCatalog> {
   const res = await fetch(`${API_BASE}/capabilities/catalog`);
   return jsonOrThrow<CapabilitiesCatalog>(res, `Failed to fetch capabilities catalog: ${res.status}`);
+}
+
+export async function fetchRoutingPolicies(): Promise<{ routing_policies: RoutingPolicy[] }> {
+  const res = await fetch(`${API_BASE}/capabilities/routing-policies`);
+  return jsonOrThrow<{ routing_policies: RoutingPolicy[] }>(res, `Failed to fetch routing policies: ${res.status}`);
+}
+
+export async function updateRoutingPolicy(
+  roleId: string,
+  policy: RoutingPolicy
+): Promise<{ status: string; routing_policy: RoutingPolicy }> {
+  const res = await fetch(`${API_BASE}/capabilities/routing-policies/${encodeURIComponent(roleId)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(policy),
+  });
+  return jsonOrThrow<{ status: string; routing_policy: RoutingPolicy }>(
+    res,
+    `Routing policy update failed: ${res.status}`
+  );
+}
+
+export async function fetchLaunchPresets(): Promise<{ launch_presets: LaunchPreset[] }> {
+  const res = await fetch(`${API_BASE}/capabilities/launch-presets`);
+  return jsonOrThrow<{ launch_presets: LaunchPreset[] }>(res, `Failed to fetch launch presets: ${res.status}`);
 }
 
 export async function fetchConnectors(): Promise<{ connectors: MCPConnector[] }> {

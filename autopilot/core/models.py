@@ -14,6 +14,7 @@ class StoryStatus(StrEnum):
     DONE = "done"
     STUCK = "stuck"
     SKIPPED = "skipped"
+    MERGE_BLOCKED = "merge_blocked"
 
 
 class Provider(StrEnum):

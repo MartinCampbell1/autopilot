@@ -21,13 +21,18 @@ from autopilot.core.capability_store import (
     DEFAULT_CONNECTORS,
     DEFAULT_SKILL_PACKS,
     enrich_story_plan,
+    load_connectors_registry,
+    load_routing_policies_registry,
+    load_skill_packs_registry,
+    normalize_launch_profile,
     normalize_phase_plan,
+    resolve_story_runtime_plan,
 )
 from autopilot.core.config import AutopilotConfig
 from autopilot.core.loop_runner import apply_autopilot_ralph_overrides, check_ralph_installed, init_ralph_project
 
 TIMELINE_LIMIT = 300
-TERMINAL_STORY_STATUSES = {"done", "skipped", "stuck"}
+TERMINAL_STORY_STATUSES = {"done", "skipped", "stuck", "merge_blocked"}
 PLACEHOLDER_ISSUE_PATTERN = re.compile(
     r"^-\s*(?:Issue\s+\d+:\s*specific description|<[^>]+>|concrete issue\b.*|second concrete issue\b.*)\s*$",
     re.IGNORECASE,
@@ -356,6 +361,12 @@ def _story_state_from_definition(story: dict[str, Any]) -> dict[str, Any]:
         "critic": None,
         "last_error": None,
         "requeue_count": 0,
+        "team_mode": "solo",
+        "team_members": [],
+        "connector_activation": [],
+        "activation_errors": [],
+        "worktree_path": None,
+        "branch_name": None,
     }
 
 
@@ -371,6 +382,12 @@ def _requeue_interrupted_stories(state: dict[str, Any], fallback_error: str) -> 
         story_state["agent"] = None
         story_state["critic"] = None
         story_state["last_error"] = _sanitize_message(story_state.get("last_error") or fallback_error)
+        story_state["team_mode"] = state.get("launch_profile", {}).get("story_execution_mode", "solo")
+        story_state["team_members"] = []
+        story_state["connector_activation"] = []
+        story_state["activation_errors"] = []
+        story_state["worktree_path"] = None
+        story_state["branch_name"] = None
         changed = True
 
     if changed:
@@ -398,6 +415,9 @@ def _default_runtime_state(project_id: str, prd: dict[str, Any]) -> dict[str, An
         "finished_at": None,
         "last_error": None,
         "log_path": "",
+        "launch_profile": normalize_launch_profile().model_dump(),
+        "activation_errors": [],
+        "parallel_story_ids": [],
         "story_state": {
             str(story["id"]): _story_state_from_definition(story) for story in prd.get("stories", [])
         },
@@ -452,6 +472,9 @@ def ensure_project_state(
     state.setdefault("finished_at", None)
     state.setdefault("last_error", None)
     state.setdefault("log_path", "")
+    state.setdefault("launch_profile", normalize_launch_profile().model_dump())
+    state.setdefault("activation_errors", [])
+    state.setdefault("parallel_story_ids", [])
     state.setdefault("timeline", [])
     state.setdefault("story_state", {})
 
@@ -473,6 +496,12 @@ def ensure_project_state(
         current.setdefault("critic", None)
         current.setdefault("last_error", None)
         current.setdefault("requeue_count", 0)
+        current.setdefault("team_mode", "solo")
+        current.setdefault("team_members", [])
+        current.setdefault("connector_activation", [])
+        current.setdefault("activation_errors", [])
+        current.setdefault("worktree_path", None)
+        current.setdefault("branch_name", None)
         synchronized_story_state[key] = current
     if synchronized_story_state != state["story_state"]:
         state["story_state"] = synchronized_story_state
@@ -644,6 +673,12 @@ def requeue_recoverable_stuck_stories(config: AutopilotConfig, project_id: str) 
         entry["critic"] = None
         entry["last_error"] = None
         entry["requeue_count"] = int(entry.get("requeue_count", 0)) + 1
+        entry["team_mode"] = state.get("launch_profile", {}).get("story_execution_mode", "solo")
+        entry["team_members"] = []
+        entry["connector_activation"] = []
+        entry["activation_errors"] = []
+        entry["worktree_path"] = None
+        entry["branch_name"] = None
         reopened.append(int(entry["story_id"]))
 
     if not reopened:
@@ -660,11 +695,50 @@ def requeue_recoverable_stuck_stories(config: AutopilotConfig, project_id: str) 
     return reopened
 
 
-def merge_project_stories(project: dict[str, Any], state: dict[str, Any]) -> list[dict[str, Any]]:
+def _resolve_story_runtime_metadata(
+    config: AutopilotConfig,
+    state: dict[str, Any],
+    story: dict[str, Any],
+    runtime: dict[str, Any],
+) -> dict[str, Any]:
+    team_mode = runtime.get("team_mode")
+    team_members = runtime.get("team_members") or []
+    connector_activation = runtime.get("connector_activation") or []
+    activation_errors = runtime.get("activation_errors") or []
+    if team_members and connector_activation:
+        return {
+            "team_mode": team_mode or state.get("launch_profile", {}).get("story_execution_mode", "solo"),
+            "team_members": team_members,
+            "connector_activation": connector_activation,
+            "activation_errors": activation_errors,
+        }
+
+    resolved = resolve_story_runtime_plan(
+        story,
+        launch_profile=state.get("launch_profile"),
+        provider="codex",
+        connectors=load_connectors_registry(config),
+        skill_packs=load_skill_packs_registry(config),
+        routing_policies=load_routing_policies_registry(config),
+    )
+    return {
+        "team_mode": runtime.get("team_mode") or resolved["team_mode"],
+        "team_members": runtime.get("team_members") or resolved["team_members"],
+        "connector_activation": runtime.get("connector_activation") or resolved["active_connectors"],
+        "activation_errors": runtime.get("activation_errors") or resolved["activation_errors"],
+    }
+
+
+def merge_project_stories(
+    config: AutopilotConfig,
+    project: dict[str, Any],
+    state: dict[str, Any],
+) -> list[dict[str, Any]]:
     prd = load_project_prd(project, seed_mode="migrate")
     merged: list[dict[str, Any]] = []
     for story in prd.get("stories", []):
         runtime = state.get("story_state", {}).get(str(story["id"]), {})
+        runtime_metadata = _resolve_story_runtime_metadata(config, state, story, runtime)
         merged.append(
             {
                 "id": story["id"],
@@ -678,6 +752,9 @@ def merge_project_stories(project: dict[str, Any], state: dict[str, Any]) -> lis
                 "role": story.get("role"),
                 "skill_packs": story.get("skill_packs", []),
                 "connectors": story.get("connectors", []),
+                "required_connectors": story.get("required_connectors", []),
+                "preferred_connectors": story.get("preferred_connectors", []),
+                "forbidden_connectors": story.get("forbidden_connectors", []),
                 "acceptance_criteria": story.get("acceptance_criteria", []),
                 "status": runtime.get("status", "open"),
                 "started_at": runtime.get("started_at"),
@@ -687,6 +764,12 @@ def merge_project_stories(project: dict[str, Any], state: dict[str, Any]) -> lis
                 "agent": runtime.get("agent"),
                 "critic": runtime.get("critic"),
                 "last_error": _sanitize_message(runtime.get("last_error") or ""),
+                "team_mode": runtime_metadata["team_mode"],
+                "team_members": runtime_metadata["team_members"],
+                "connector_activation": runtime_metadata["connector_activation"],
+                "activation_errors": runtime_metadata["activation_errors"],
+                "worktree_path": runtime.get("worktree_path"),
+                "branch_name": runtime.get("branch_name"),
             }
         )
     return merged
@@ -717,7 +800,7 @@ def _project_progress_counts(stories: list[dict[str, Any]]) -> tuple[int, int]:
 
 def build_project_summary(config: AutopilotConfig, project: dict[str, Any]) -> dict[str, Any]:
     state = ensure_project_state(config, project, seed_mode="migrate")
-    stories = merge_project_stories(project, state)
+    stories = merge_project_stories(config, project, state)
     stories_done, stories_total = _project_progress_counts(stories)
     current_story = next((story for story in stories if story["id"] == state.get("current_story_id")), None)
     last_event = state.get("timeline", [])[-1] if state.get("timeline") else None
@@ -736,6 +819,7 @@ def build_project_summary(config: AutopilotConfig, project: dict[str, Any]) -> d
         "last_activity_at": state.get("updated_at"),
         "last_message": _sanitize_message(last_event["message"]) if last_event else "",
         "pid": state.get("pid"),
+        "launch_profile": state.get("launch_profile", normalize_launch_profile().model_dump()),
     }
 
 
@@ -755,8 +839,26 @@ def build_project_detail(config: AutopilotConfig, project_id: str) -> dict[str, 
     touch_project_last_opened(config, project_id)
     state = ensure_project_state(config, project, seed_mode="migrate")
     prd = load_project_prd(project, seed_mode="migrate")
-    stories = merge_project_stories(project, state)
+    stories = merge_project_stories(config, project, state)
     summary = build_project_summary(config, project)
+    running_story_ids = {
+        story["id"] for story in stories if story["status"] in {"in_progress", "merge_blocked", "stuck"}
+    }
+    team_assignments = {
+        str(story["id"]): story.get("team_members", [])
+        for story in stories
+        if story["id"] in running_story_ids or story.get("team_members")
+    }
+    active_connectors = {
+        str(story["id"]): story.get("connector_activation", [])
+        for story in stories
+        if story["id"] in running_story_ids or story.get("connector_activation")
+    }
+    activation_errors = {
+        str(story["id"]): story.get("activation_errors", [])
+        for story in stories
+        if story.get("activation_errors")
+    }
 
     return {
         **summary,
@@ -773,6 +875,10 @@ def build_project_detail(config: AutopilotConfig, project_id: str) -> dict[str, 
         "active_worker": state.get("active_worker"),
         "active_critic": state.get("active_critic"),
         "current_iteration": state.get("current_iteration", 0),
+        "launch_profile": state.get("launch_profile", normalize_launch_profile().model_dump()),
+        "team_assignments": team_assignments,
+        "active_connectors": active_connectors,
+        "activation_errors": activation_errors,
     }
 
 
@@ -880,6 +986,7 @@ def launch_project_run(
     config: AutopilotConfig,
     project_id: str,
     *,
+    launch_profile: dict[str, Any] | None = None,
     event_name: str = "run_started",
     event_message: str = "Background run started.",
 ) -> tuple[bool, Path | None, str]:
@@ -891,6 +998,8 @@ def launch_project_run(
     existing_pid = state.get("pid")
     if _is_pid_running(existing_pid):
         return True, Path(state["log_path"]) if state.get("log_path") else None, "Project is already running."
+
+    state["launch_profile"] = normalize_launch_profile(launch_profile or state.get("launch_profile")).model_dump()
 
     if not check_ralph_installed():
         return False, None, "Project created, but Ralph is not installed. Install Ralph before launching."
@@ -930,6 +1039,8 @@ def launch_project_run(
             "finished_at": None,
             "log_path": str(log_path),
             "last_error": None,
+            "parallel_story_ids": [],
+            "activation_errors": [],
         }
     )
     save_project_state(config, project_id, state)
@@ -988,6 +1099,7 @@ def pause_project_run(config: AutopilotConfig, project_id: str) -> str:
             "paused": True,
             "active_worker": None,
             "active_critic": None,
+            "parallel_story_ids": [],
         }
     )
     save_project_state(config, project_id, state)

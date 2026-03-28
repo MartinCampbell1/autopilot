@@ -9,6 +9,7 @@ const STATUS_CONFIG: Record<StoryStatus, { label: string; badge: string }> = {
   done: { label: "Done", badge: "bg-[#dbeddb] text-[#2b6e3f]" },
   stuck: { label: "Stuck", badge: "bg-[#ffe2dd] text-[#93370d]" },
   skipped: { label: "Skipped", badge: "bg-[#f1f1ef] text-[#9b9b97]" },
+  merge_blocked: { label: "Merge Blocked", badge: "bg-[#fff1cc] text-[#9a6700]" },
 };
 
 interface StoryCardProps {
@@ -46,7 +47,7 @@ export function StoryCard({ story, onClick, isSelected }: StoryCardProps) {
       </p>
 
       {/* Metadata pills */}
-      {(story.agent || story.iteration !== undefined || updated) && (
+      {(story.agent || story.iteration !== undefined || updated || story.team_mode || story.connector_activation?.length) && (
         <div className="mt-2.5 flex items-center gap-1.5 flex-wrap">
           {story.agent && (
             <span className="rounded-[4px] bg-[#f1f1ef] px-2.5 py-[3px] text-[11px] text-[#6b6b6b] font-medium">
@@ -63,6 +64,16 @@ export function StoryCard({ story, onClick, isSelected }: StoryCardProps) {
               {updated}
             </span>
           )}
+          {story.team_mode && (
+            <span className="rounded-[4px] bg-[#f1f1ef] px-2.5 py-[3px] text-[11px] text-[#6b6b6b] font-medium">
+              {story.team_mode}
+            </span>
+          )}
+          {story.connector_activation?.length ? (
+            <span className="rounded-[4px] bg-[#f1f1ef] px-2.5 py-[3px] text-[11px] text-[#6b6b6b] font-medium">
+              {story.connector_activation.filter((item) => item.status === "active").length} active tools
+            </span>
+          ) : null}
         </div>
       )}
 

@@ -7,7 +7,9 @@ from pydantic import BaseModel, Field
 
 from autopilot.api.deps import get_config
 from autopilot.core.capability_store import (
+    DEFAULT_LAUNCH_PRESETS,
     MCPConnector,
+    RoutingPolicy,
     SkillPack,
     delete_connector,
     delete_skill_pack,
@@ -15,7 +17,9 @@ from autopilot.core.capability_store import (
     load_connector_type_catalog,
     load_connectors_registry,
     load_role_templates,
+    load_routing_policies_registry,
     load_skill_packs_registry,
+    upsert_routing_policy,
     upsert_connector,
     upsert_skill_pack,
     validate_connector_config,
@@ -49,6 +53,14 @@ class SkillPackRequest(BaseModel):
     enabled: bool = True
 
 
+class RoutingPolicyRequest(BaseModel):
+    role_id: str
+    preferred_skill_packs: list[str] = Field(default_factory=list)
+    required_connectors: list[str] = Field(default_factory=list)
+    preferred_connectors: list[str] = Field(default_factory=list)
+    forbidden_connectors: list[str] = Field(default_factory=list)
+
+
 @router.get("/catalog")
 async def get_capabilities_catalog() -> dict:
     config = get_config()
@@ -57,6 +69,8 @@ async def get_capabilities_catalog() -> dict:
         "skill_packs": [skill_pack.model_dump() for skill_pack in load_skill_packs_registry(config)],
         "roles": [role.model_dump() for role in load_role_templates()],
         "connector_types": [connector_type.model_dump() for connector_type in load_connector_type_catalog()],
+        "routing_policies": [policy.model_dump() for policy in load_routing_policies_registry(config)],
+        "launch_presets": [preset.model_dump() for preset in DEFAULT_LAUNCH_PRESETS],
     }
 
 
@@ -180,3 +194,26 @@ async def remove_skill_pack(skill_pack_id: str) -> dict[str, str]:
         raise HTTPException(400, f"Skill pack {skill_pack_id} is built in and cannot be deleted")
     delete_skill_pack(config, skill_pack_id)
     return {"status": "ok", "message": f"Skill pack {skill_pack_id} deleted."}
+
+
+@router.get("/routing-policies")
+async def list_routing_policies() -> dict[str, list[dict]]:
+    config = get_config()
+    return {"routing_policies": [policy.model_dump() for policy in load_routing_policies_registry(config)]}
+
+
+@router.patch("/routing-policies/{role_id}")
+async def update_routing_policy(role_id: str, request: RoutingPolicyRequest) -> dict:
+    if role_id != request.role_id:
+        raise HTTPException(400, "Routing policy role_id mismatch")
+    known_roles = {role.id for role in load_role_templates()}
+    if role_id not in known_roles:
+        raise HTTPException(404, f"Role {role_id} not found")
+    config = get_config()
+    stored = upsert_routing_policy(config, RoutingPolicy.model_validate(request.model_dump()))
+    return {"status": "ok", "routing_policy": stored.model_dump()}
+
+
+@router.get("/launch-presets")
+async def list_launch_presets() -> dict[str, list[dict]]:
+    return {"launch_presets": [preset.model_dump() for preset in DEFAULT_LAUNCH_PRESETS]}
