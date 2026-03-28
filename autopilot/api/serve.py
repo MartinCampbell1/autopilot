@@ -10,7 +10,7 @@ from autopilot.api.main import app
 
 
 def main() -> None:
-    host = os.getenv("AUTOPILOT_API_HOST", "0.0.0.0")
+    host = os.getenv("AUTOPILOT_API_HOST", "127.0.0.1")
     port = int(os.getenv("AUTOPILOT_API_PORT", "8420"))
     uvicorn.run(app, host=host, port=port, log_level="info")
 

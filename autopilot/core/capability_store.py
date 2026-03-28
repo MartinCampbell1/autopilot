@@ -640,18 +640,27 @@ def _slugify(value: str) -> str:
     return slug or "item"
 
 
+def _registry_item_key(item: BaseModel) -> str:
+    if hasattr(item, "id"):
+        return getattr(item, "id")
+    if hasattr(item, "role_id"):
+        return getattr(item, "role_id")
+    raise AttributeError(f"Unsupported registry item key for {type(item).__name__}")
+
+
 def _merge_registry(raw_items: list[dict], defaults: list[BaseModel], model_type):
-    merged = {item.id: item for item in defaults}
+    merged = {_registry_item_key(item): item for item in defaults}
     for raw in raw_items:
         item = model_type.model_validate(raw)
-        default = merged.get(item.id)
+        key = _registry_item_key(item)
+        default = merged.get(key)
         if default and getattr(default, "built_in", False):
             data = default.model_dump()
             data.update(item.model_dump(exclude_unset=False))
             data["built_in"] = True
-            merged[item.id] = model_type.model_validate(data)
+            merged[key] = model_type.model_validate(data)
         else:
-            merged[item.id] = item
+            merged[key] = item
     return list(merged.values())
 
 

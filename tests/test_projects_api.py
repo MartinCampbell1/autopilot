@@ -136,3 +136,37 @@ def test_launch_route_accepts_launch_profile(mock_launch_project_run, tmp_path: 
     assert response.status_code == 200
     assert response.json()["launch_profile"]["preset"] == "team"
     assert mock_launch_project_run.call_args.kwargs["launch_profile"]["preset"] == "parallel"
+
+
+@patch("autopilot.api.routes.projects.resume_project_run")
+def test_resume_route_serializes_launch_profile(mock_resume_project_run, tmp_path: Path, monkeypatch) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    client = _build_client(config, monkeypatch)
+
+    create_response = client.post(
+        "/api/projects/",
+        json={
+            "project_name": "Resume Project",
+            "project_path": str(tmp_path / "resume-project"),
+            "prd": {
+                "title": "Resume Project",
+                "stories": [{"id": 1, "title": "Bootstrap", "description": "Start"}],
+            },
+        },
+    )
+    project_id = create_response.json()["project_id"]
+    state = load_project_state(config, project_id)
+    state["launch_profile"] = {
+        "preset": "team",
+        "story_execution_mode": "team",
+        "project_concurrency_mode": "sequential",
+        "max_parallel_stories": 1,
+    }
+    (config.runtime_state_dir / f"{project_id}.json").write_text(json.dumps(state))
+
+    mock_resume_project_run.return_value = (True, config.autopilot_home / "logs" / "resume.log", "Background run started.")
+
+    response = client.post(f"/api/projects/{project_id}/resume")
+
+    assert response.status_code == 200
+    assert response.json()["launch_profile"]["preset"] == "team"

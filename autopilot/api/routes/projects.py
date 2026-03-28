@@ -125,7 +125,7 @@ async def pause_project(project_id: str) -> dict[str, str]:
 
 
 @router.post("/{project_id}/resume")
-async def resume_project(project_id: str) -> dict[str, str | bool]:
+async def resume_project(project_id: str) -> dict[str, str | bool | dict]:
     config = get_config()
     if get_project_entry(config, project_id=project_id, include_archived=True) is None:
         raise HTTPException(404, f"Project {project_id} not found")
