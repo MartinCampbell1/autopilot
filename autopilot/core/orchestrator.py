@@ -5,6 +5,7 @@ from __future__ import annotations
 import time
 from enum import StrEnum
 from pathlib import Path
+from typing import Callable
 
 from rich.console import Console
 
@@ -59,6 +60,7 @@ class Orchestrator:
         critic_env: dict[str, str],
         retry_only: bool = False,
         ralph_prd_path: str | None = None,
+        progress_callback: Callable[[int, str], None] | None = None,
     ) -> StoryOutcome:
         """Execute one worker iteration followed by gates and critic review."""
         started_at = time.time()
@@ -73,6 +75,7 @@ class Orchestrator:
                 story_title,
                 story_description,
                 self.config.codex_timeout_sec,
+                on_progress=progress_callback,
             )
         else:
             success, output, rate_limited = run_ralph_iteration(
@@ -80,6 +83,7 @@ class Orchestrator:
                 env,
                 self.config.codex_timeout_sec,
                 prd_path=ralph_prd_path,
+                on_progress=progress_callback,
             )
 
         if rate_limited:

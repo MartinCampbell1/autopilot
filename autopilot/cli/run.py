@@ -123,6 +123,45 @@ def _iteration_message(outcome: StoryOutcome, orchestrator: Orchestrator) -> str
     return "Iteration completed."
 
 
+def _emit_worker_progress(
+    config,
+    project_id: str,
+    story_id: int,
+    iteration: int,
+    worker_label: str,
+    critic_label: str,
+    elapsed_sec: int,
+    detail: str,
+) -> None:
+    detail = detail.strip() or "Worker is still running."
+    message = f"Worker running for {elapsed_sec}s. Last Ralph activity: {detail}"
+    update_project_runtime(
+        config,
+        project_id,
+        status="running",
+        paused=False,
+        current_story_id=story_id,
+        current_iteration=iteration,
+        active_worker=worker_label,
+        active_critic=critic_label,
+        last_error=None,
+    )
+    emit_project_event(
+        config,
+        project_id,
+        event="worker_progress",
+        status="running",
+        message=message,
+        story_id=story_id,
+        extra={
+            "iteration": iteration,
+            "worker": worker_label,
+            "critic": critic_label,
+            "elapsed_sec": elapsed_sec,
+        },
+    )
+
+
 def _mark_run_finished(config, project_id: str, *, failed: bool, message: str) -> None:
     state = load_project_state(config, project_id)
     state.update(
@@ -318,6 +357,8 @@ def run(
                         "critic": f"{critic_profile.provider}/{critic_profile.name}",
                     },
                 )
+                worker_label = f"{worker_profile.provider}/{worker_profile.name}"
+                critic_label = f"{critic_profile.provider}/{critic_profile.name}"
 
                 outcome = orchestrator.run_single_iteration(
                     profile=worker_profile,
@@ -330,6 +371,16 @@ def run(
                     critic_env=critic_env,
                     retry_only=iteration > 1,
                     ralph_prd_path=ralph_prd_path,
+                    progress_callback=lambda elapsed_sec, detail, *, _story_id=story_id, _iteration=iteration, _worker=worker_label, _critic=critic_label: _emit_worker_progress(
+                        config,
+                        project_id,
+                        _story_id,
+                        _iteration,
+                        _worker,
+                        _critic,
+                        elapsed_sec,
+                        detail,
+                    ),
                 )
 
                 if outcome == StoryOutcome.APPROVED:

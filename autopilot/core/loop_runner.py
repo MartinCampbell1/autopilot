@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import time
+import uuid
 from pathlib import Path
+from typing import Callable
 
 from autopilot.core.models import is_rate_limited
 from autopilot.core.providers import build_cli_command
@@ -22,6 +25,7 @@ This repository was bootstrapped by Autopilot from a PRD.
 - For non-documentation stories, a README-only or docs-only change is incomplete.
 - If the repository is greenfield, create the smallest real scaffold needed to satisfy the story.
 - If the story depends on an existing app, gateway, or file that is not present here, record the exact blocker in `.ralph/errors.log` and `.ralph/guardrails.md`, then stop without claiming success.
+- Treat transient verification artifacts such as `__pycache__/`, `.pytest_cache/`, and `*.egg-info/` as disposable. Prefer `.gitignore` over manual recursive cleanup.
 - Prefer the lightest verification that still proves the story works.
 - If you discover repeatable build/test commands, keep this file updated with concise operational notes.
 
@@ -45,6 +49,7 @@ ACTIVITY_CMD=".agents/ralph/log-activity.sh"
 AGENTS_PATH="AGENTS.md"
 PROMPT_BUILD=".agents/ralph/PROMPT_build.md"
 """
+DEFAULT_PROGRESS_INTERVAL_SEC = 15
 
 
 def check_ralph_installed() -> bool:
@@ -109,16 +114,114 @@ def init_ralph_project(project_path: Path) -> bool:
         return False
 
 
+def _last_nonempty_content_line(path: Path) -> str:
+    if not path.exists():
+        return ""
+
+    for raw_line in reversed(path.read_text().splitlines()):
+        line = raw_line.strip()
+        if not line:
+            continue
+        if line.startswith("#"):
+            continue
+        return line
+    return ""
+
+
+def _latest_worker_activity(project_path: Path) -> str:
+    activity_line = _last_nonempty_content_line(project_path / ".ralph" / "activity.log")
+    if activity_line:
+        if "] " in activity_line:
+            return activity_line.split("] ", 1)[1].strip()
+        return activity_line
+
+    progress_line = _last_nonempty_content_line(project_path / ".ralph" / "progress.md")
+    if progress_line:
+        return progress_line.lstrip("- ").strip()
+
+    return "Worker is still running."
+
+
+def _run_command_with_progress(
+    cmd: list[str],
+    *,
+    project_path: Path,
+    env: dict[str, str],
+    timeout: int,
+    on_progress: Callable[[int, str], None] | None,
+    progress_interval: int,
+) -> tuple[bool, str, bool]:
+    tmp_dir = project_path / ".ralph" / ".tmp"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    output_path = tmp_dir / f"autopilot-worker-{uuid.uuid4().hex}.log"
+
+    started_at = time.monotonic()
+    next_progress_at = started_at + max(1, progress_interval)
+
+    with output_path.open("w", encoding="utf-8") as output_file:
+        process = subprocess.Popen(
+            cmd,
+            cwd=str(project_path),
+            stdout=output_file,
+            stderr=subprocess.STDOUT,
+            text=True,
+            env=env,
+        )
+
+        timed_out = False
+        while True:
+            returncode = process.poll()
+            if returncode is not None:
+                break
+
+            elapsed = int(time.monotonic() - started_at)
+            if elapsed >= timeout:
+                timed_out = True
+                process.kill()
+                process.wait(timeout=5)
+                break
+
+            now = time.monotonic()
+            if on_progress is not None and now >= next_progress_at:
+                try:
+                    on_progress(elapsed, _latest_worker_activity(project_path))
+                except Exception:
+                    pass
+                next_progress_at = now + max(1, progress_interval)
+            time.sleep(1)
+
+    output = output_path.read_text(encoding="utf-8").strip() if output_path.exists() else ""
+    output_path.unlink(missing_ok=True)
+    if timed_out:
+        return False, f"Timeout after {timeout}s", False
+
+    success = process.returncode == 0
+    rate_limited = is_rate_limited(output)
+    return success, output, rate_limited
+
+
 def run_ralph_iteration(
     project_path: Path,
     env: dict[str, str],
     timeout: int = 1800,
     prd_path: str | None = None,
+    on_progress: Callable[[int, str], None] | None = None,
+    progress_interval: int = DEFAULT_PROGRESS_INTERVAL_SEC,
 ) -> tuple[bool, str, bool]:
     """Run one Ralph build iteration and report success/output/rate-limit state."""
     cmd = ["ralph", "build", "1"]
     if prd_path:
         cmd.extend(["--prd", prd_path])
+
+    if on_progress is not None:
+        return _run_command_with_progress(
+            cmd,
+            project_path=project_path,
+            env=env,
+            timeout=timeout,
+            on_progress=on_progress,
+            progress_interval=progress_interval,
+        )
 
     try:
         result = subprocess.run(
@@ -168,10 +271,22 @@ def run_retry_iteration(
     story_title: str,
     story_description: str,
     timeout: int = 1800,
+    on_progress: Callable[[int, str], None] | None = None,
+    progress_interval: int = DEFAULT_PROGRESS_INTERVAL_SEC,
 ) -> tuple[bool, str, bool]:
     """Run a focused retry prompt after a failed or rejected iteration."""
     prompt = build_retry_prompt(story_id, story_title, story_description)
     cmd = build_cli_command(provider, prompt, mode="exec")
+
+    if on_progress is not None:
+        return _run_command_with_progress(
+            cmd,
+            project_path=project_path,
+            env=env,
+            timeout=timeout,
+            on_progress=on_progress,
+            progress_interval=progress_interval,
+        )
 
     try:
         result = subprocess.run(

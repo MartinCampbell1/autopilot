@@ -52,9 +52,11 @@ class TestOrchestrator:
             gates_config=[{"name": "build", "cmd": "npm run build"}],
             critic_profile=profile,
             critic_env=env,
+            progress_callback=lambda *_: None,
         )
 
         assert outcome == StoryOutcome.APPROVED
+        assert callable(mock_ralph.call_args.kwargs["on_progress"])
 
     @patch("autopilot.core.orchestrator.check_git_diff_empty")
     @patch("autopilot.core.orchestrator.get_last_commit_diff")
@@ -93,11 +95,13 @@ class TestOrchestrator:
             critic_profile=profile,
             critic_env=env,
             retry_only=True,
+            progress_callback=lambda *_: None,
         )
 
         assert outcome == StoryOutcome.APPROVED
         mock_retry.assert_called_once()
         mock_ralph.assert_not_called()
+        assert callable(mock_retry.call_args.kwargs["on_progress"])
 
     @patch("autopilot.core.orchestrator.run_gates")
     @patch("autopilot.core.orchestrator.run_ralph_iteration")
