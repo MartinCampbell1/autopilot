@@ -65,6 +65,10 @@ class AutopilotConfig:
     def skill_packs_json_path(self) -> Path:
         return self.autopilot_home / "skill-packs.json"
 
+    @property
+    def routing_policies_json_path(self) -> Path:
+        return self.autopilot_home / "routing-policies.json"
+
 
 DEFAULT_CONFIG = AutopilotConfig()
 

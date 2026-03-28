@@ -35,6 +35,17 @@ class GuidanceRequest(BaseModel):
     payload: str
 
 
+class LaunchProfileRequest(BaseModel):
+    preset: str = "fast"
+    story_execution_mode: str | None = None
+    project_concurrency_mode: str | None = None
+    max_parallel_stories: int | None = None
+
+
+class LaunchRequest(BaseModel):
+    launch_profile: LaunchProfileRequest | None = None
+
+
 @router.get("/")
 async def list_projects(include_archived: bool = Query(False)) -> dict[str, list[dict]]:
     config = get_config()
@@ -85,19 +96,22 @@ async def create_project(request: CreateProjectRequest) -> dict[str, str | bool]
 
 
 @router.post("/{project_id}/launch")
-async def launch_project(project_id: str) -> dict[str, str | bool]:
+async def launch_project(project_id: str, request: LaunchRequest | None = None) -> dict[str, str | bool | dict]:
     config = get_config()
     project = get_project_entry(config, project_id=project_id, include_archived=True)
     if project is None:
         raise HTTPException(404, f"Project {project_id} not found")
 
-    launched, log_path, message = launch_project_run(config, project_id)
+    launch_profile = request.launch_profile.model_dump() if request and request.launch_profile else None
+    launched, log_path, message = launch_project_run(config, project_id, launch_profile=launch_profile)
+    state = load_project_state(config, project_id)
     return {
         "status": "ok" if launched else "error",
         "project_id": project_id,
         "launched": launched,
         "message": message,
         "log_path": str(log_path) if log_path else "",
+        "launch_profile": state.get("launch_profile"),
     }
 
 
@@ -117,12 +131,14 @@ async def resume_project(project_id: str) -> dict[str, str | bool]:
         raise HTTPException(404, f"Project {project_id} not found")
 
     launched, log_path, message = resume_project_run(config, project_id)
+    state = load_project_state(config, project_id)
     return {
         "status": "ok" if launched else "error",
         "project_id": project_id,
         "launched": launched,
         "message": message,
         "log_path": str(log_path) if log_path else "",
+        "launch_profile": state.get("launch_profile"),
     }
 
 

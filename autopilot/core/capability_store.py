@@ -92,6 +92,61 @@ class ConnectorValidationResult(BaseModel):
     checked_fields: list[str] = Field(default_factory=list)
 
 
+class RoutingPolicy(BaseModel):
+    """Per-role override policy for skill packs and connector routing."""
+
+    role_id: str
+    preferred_skill_packs: list[str] = Field(default_factory=list)
+    required_connectors: list[str] = Field(default_factory=list)
+    preferred_connectors: list[str] = Field(default_factory=list)
+    forbidden_connectors: list[str] = Field(default_factory=list)
+
+
+class LaunchProfile(BaseModel):
+    """Runtime launch profile chosen by the user for a project run."""
+
+    preset: str = "fast"
+    story_execution_mode: str = "solo"
+    project_concurrency_mode: str = "sequential"
+    max_parallel_stories: int = 1
+
+
+class LaunchPreset(BaseModel):
+    """Human-facing launch mode preset."""
+
+    id: str
+    label: str
+    description: str
+    launch_profile: LaunchProfile
+
+
+class ConnectorActivation(BaseModel):
+    """Resolved runtime activation state for one connector."""
+
+    id: str
+    name: str
+    connector_type: str
+    provider: str
+    required: bool = False
+    status: str = "disabled"
+    reason: str = ""
+    config: dict = Field(default_factory=dict)
+
+
+class TeamMemberAssignment(BaseModel):
+    """Resolved runtime assignment for one member of a story team."""
+
+    member_id: str
+    label: str
+    execution_role: str
+    role_id: str
+    provider: str
+    skill_packs: list[str] = Field(default_factory=list)
+    planned_connectors: list[str] = Field(default_factory=list)
+    active_connectors: list[ConnectorActivation] = Field(default_factory=list)
+    specialist: bool = False
+
+
 DEFAULT_CONNECTOR_TYPES: list[ConnectorTypeSchema] = [
     ConnectorTypeSchema(
         id="builtin",
@@ -478,6 +533,98 @@ DEFAULT_ROLE_TEMPLATES: list[RoleTemplate] = [
         default_connectors=["shell_exec", "python_exec", "http_api", "browser_devtools"],
         optional_connector_tags=["debug", "runtime", "database", "graph"],
     ),
+    RoleTemplate(
+        id="data_worker",
+        name="Data Worker",
+        description="Implement graph, analytics, and data-heavy stories.",
+        default_skill_packs=["graph-data"],
+        optional_skill_tags=["graph", "database", "analytics", "data"],
+        default_connectors=["python_exec", "postgres", "neo4j"],
+        optional_connector_tags=["graph", "database", "data", "research"],
+    ),
+    RoleTemplate(
+        id="api_researcher",
+        name="API Researcher",
+        description="Support backend stories with docs, API discovery, and integration context.",
+        default_skill_packs=["debug-investigation"],
+        optional_skill_tags=["backend", "api", "docs", "research"],
+        default_connectors=["web_docs", "http_api", "github"],
+        optional_connector_tags=["docs", "api", "research"],
+    ),
+]
+
+DEFAULT_ROUTING_POLICIES: list[RoutingPolicy] = [
+    RoutingPolicy(role_id="planner", preferred_skill_packs=["prd-intake"], preferred_connectors=["web_docs", "github"]),
+    RoutingPolicy(
+        role_id="backend_worker",
+        preferred_skill_packs=["fastapi-backend"],
+        preferred_connectors=["shell_exec", "python_exec", "web_docs", "http_api"],
+    ),
+    RoutingPolicy(
+        role_id="frontend_worker",
+        preferred_skill_packs=["nextjs-frontend"],
+        preferred_connectors=["browser_devtools", "twenty_first_dev", "web_docs"],
+    ),
+    RoutingPolicy(
+        role_id="fullstack_worker",
+        preferred_skill_packs=["fastapi-backend", "nextjs-frontend"],
+        preferred_connectors=["shell_exec", "python_exec", "browser_devtools", "web_docs"],
+    ),
+    RoutingPolicy(
+        role_id="qa_reviewer",
+        preferred_skill_packs=["qa-review"],
+        preferred_connectors=["github", "browser_devtools"],
+    ),
+    RoutingPolicy(
+        role_id="runtime_investigator",
+        preferred_skill_packs=["debug-investigation"],
+        preferred_connectors=["shell_exec", "python_exec", "http_api", "browser_devtools"],
+    ),
+    RoutingPolicy(
+        role_id="data_worker",
+        preferred_skill_packs=["graph-data"],
+        preferred_connectors=["neo4j", "postgres", "python_exec"],
+    ),
+    RoutingPolicy(
+        role_id="api_researcher",
+        preferred_connectors=["web_docs", "http_api", "github"],
+    ),
+]
+
+DEFAULT_LAUNCH_PRESETS: list[LaunchPreset] = [
+    LaunchPreset(
+        id="fast",
+        label="Fast",
+        description="One primary worker per story, sequential project execution.",
+        launch_profile=LaunchProfile(
+            preset="fast",
+            story_execution_mode="solo",
+            project_concurrency_mode="sequential",
+            max_parallel_stories=1,
+        ),
+    ),
+    LaunchPreset(
+        id="team",
+        label="Team",
+        description="Primary worker plus critic and optional specialist, sequential stories.",
+        launch_profile=LaunchProfile(
+            preset="team",
+            story_execution_mode="team",
+            project_concurrency_mode="sequential",
+            max_parallel_stories=1,
+        ),
+    ),
+    LaunchPreset(
+        id="parallel",
+        label="Parallel",
+        description="Story teams with multiple stories active in parallel worktrees.",
+        launch_profile=LaunchProfile(
+            preset="parallel",
+            story_execution_mode="team",
+            project_concurrency_mode="parallel",
+            max_parallel_stories=3,
+        ),
+    ),
 ]
 
 
@@ -587,6 +734,32 @@ def delete_skill_pack(config: AutopilotConfig, skill_pack_id: str) -> bool:
     return removed
 
 
+def load_routing_policies_registry(config: AutopilotConfig) -> list[RoutingPolicy]:
+    if not config.routing_policies_json_path.exists():
+        return list(DEFAULT_ROUTING_POLICIES)
+    raw = json.loads(config.routing_policies_json_path.read_text())
+    items = raw.get("routing_policies", []) if isinstance(raw, dict) else raw
+    return _merge_registry(items, DEFAULT_ROUTING_POLICIES, RoutingPolicy)
+
+
+def save_routing_policies_registry(config: AutopilotConfig, policies: list[RoutingPolicy]) -> None:
+    _atomic_write_json(
+        config.routing_policies_json_path,
+        {"routing_policies": [policy.model_dump() for policy in policies]},
+    )
+
+
+def upsert_routing_policy(config: AutopilotConfig, policy: RoutingPolicy) -> RoutingPolicy:
+    policies = {item.role_id: item for item in load_routing_policies_registry(config)}
+    policies[policy.role_id] = policy
+    save_routing_policies_registry(config, list(policies.values()))
+    return policy
+
+
+def load_launch_presets() -> list[LaunchPreset]:
+    return list(DEFAULT_LAUNCH_PRESETS)
+
+
 def load_role_templates() -> list[RoleTemplate]:
     return list(DEFAULT_ROLE_TEMPLATES)
 
@@ -597,6 +770,32 @@ def load_connector_type_catalog() -> list[ConnectorTypeSchema]:
 
 def get_connector_type_schema(connector_type: str) -> ConnectorTypeSchema | None:
     return next((schema for schema in DEFAULT_CONNECTOR_TYPES if schema.id == connector_type), None)
+
+
+def normalize_launch_profile(profile: dict | LaunchProfile | None = None) -> LaunchProfile:
+    if isinstance(profile, LaunchProfile):
+        raw = profile.model_dump()
+    else:
+        raw = dict(profile or {})
+
+    preset = str(raw.get("preset") or "fast").strip().lower() or "fast"
+    preset_match = next((item for item in DEFAULT_LAUNCH_PRESETS if item.id == preset), DEFAULT_LAUNCH_PRESETS[0])
+    resolved = preset_match.launch_profile.model_copy(deep=True)
+
+    if "story_execution_mode" in raw and raw["story_execution_mode"]:
+        resolved.story_execution_mode = str(raw["story_execution_mode"]).strip().lower()
+    if "project_concurrency_mode" in raw and raw["project_concurrency_mode"]:
+        resolved.project_concurrency_mode = str(raw["project_concurrency_mode"]).strip().lower()
+    if "max_parallel_stories" in raw and raw["max_parallel_stories"] is not None:
+        try:
+            resolved.max_parallel_stories = max(1, int(raw["max_parallel_stories"]))
+        except (TypeError, ValueError):
+            resolved.max_parallel_stories = preset_match.launch_profile.max_parallel_stories
+
+    resolved.preset = preset_match.id
+    if resolved.project_concurrency_mode != "parallel":
+        resolved.max_parallel_stories = 1
+    return resolved
 
 
 def validate_connector_config(connector: MCPConnector) -> ConnectorValidationResult:
@@ -713,8 +912,15 @@ def infer_story_role(tags: list[str]) -> str:
     return "backend_worker"
 
 
-def _collect_skill_packs(role_id: str, tags: list[str], skill_packs: list[SkillPack]) -> list[str]:
+def _collect_skill_packs(
+    role_id: str,
+    tags: list[str],
+    skill_packs: list[SkillPack],
+    *,
+    routing_policies: list[RoutingPolicy] | None = None,
+) -> list[str]:
     role_templates = {template.id: template for template in load_role_templates()}
+    policies = {policy.role_id: policy for policy in (routing_policies or DEFAULT_ROUTING_POLICIES)}
     role = role_templates.get(role_id)
     selected: list[str] = list(role.default_skill_packs if role else [])
     tag_set = set(tags)
@@ -725,11 +931,23 @@ def _collect_skill_packs(role_id: str, tags: list[str], skill_packs: list[SkillP
             continue
         if tag_set.intersection(skill_pack.tags):
             selected.append(skill_pack.id)
+    for skill_pack_id in policies.get(role_id, RoutingPolicy(role_id=role_id)).preferred_skill_packs:
+        if skill_pack_id not in selected:
+            selected.append(skill_pack_id)
     return selected
 
 
-def _collect_connectors(role_id: str, tags: list[str], skill_pack_ids: list[str], connectors: list[MCPConnector], skill_packs: list[SkillPack]) -> list[str]:
+def _collect_connectors(
+    role_id: str,
+    tags: list[str],
+    skill_pack_ids: list[str],
+    connectors: list[MCPConnector],
+    skill_packs: list[SkillPack],
+    *,
+    routing_policies: list[RoutingPolicy] | None = None,
+) -> list[str]:
     role_templates = {template.id: template for template in load_role_templates()}
+    policies = {policy.role_id: policy for policy in (routing_policies or DEFAULT_ROUTING_POLICIES)}
     role = role_templates.get(role_id)
     selected: list[str] = list(role.default_connectors if role else [])
     tag_set = set(tags)
@@ -748,6 +966,16 @@ def _collect_connectors(role_id: str, tags: list[str], skill_pack_ids: list[str]
             if connector_id not in selected:
                 selected.append(connector_id)
 
+    policy = policies.get(role_id)
+    if policy:
+        for connector_id in policy.preferred_connectors:
+            if connector_id not in selected:
+                selected.append(connector_id)
+        for connector_id in policy.required_connectors:
+            if connector_id not in selected:
+                selected.append(connector_id)
+        selected = [connector_id for connector_id in selected if connector_id not in set(policy.forbidden_connectors)]
+
     return selected
 
 
@@ -756,6 +984,7 @@ def enrich_story_plan(
     *,
     skill_packs: list[SkillPack] | None = None,
     connectors: list[MCPConnector] | None = None,
+    routing_policies: list[RoutingPolicy] | None = None,
 ) -> dict:
     """Add routing metadata to a story definition."""
     available_skills = skill_packs or list(DEFAULT_SKILL_PACKS)
@@ -765,16 +994,46 @@ def enrich_story_plan(
     description = str(story.get("description") or "").strip()
     tags = [str(tag).strip() for tag in story.get("tags", []) if str(tag).strip()] or infer_story_tags(title, description)
     role = str(story.get("role") or "").strip() or infer_story_role(tags)
-    story_skill_packs = [
+    explicit_skill_packs = [
         str(skill_pack_id).strip()
         for skill_pack_id in story.get("skill_packs", [])
         if str(skill_pack_id).strip()
-    ] or _collect_skill_packs(role, tags, available_skills)
-    story_connectors = [
+    ]
+    story_skill_packs = [
+        str(skill_pack_id).strip()
+        for skill_pack_id in explicit_skill_packs
+    ] or _collect_skill_packs(role, tags, available_skills, routing_policies=routing_policies)
+    explicit_connectors = [
         str(connector_id).strip()
         for connector_id in story.get("connectors", [])
         if str(connector_id).strip()
-    ] or _collect_connectors(role, tags, story_skill_packs, available_connectors, available_skills)
+    ]
+    story_connectors = [
+        str(connector_id).strip()
+        for connector_id in explicit_connectors
+    ] or _collect_connectors(
+        role,
+        tags,
+        story_skill_packs,
+        available_connectors,
+        available_skills,
+        routing_policies=routing_policies,
+    )
+    required_connectors = [
+        str(connector_id).strip()
+        for connector_id in story.get("required_connectors", [])
+        if str(connector_id).strip()
+    ]
+    preferred_connectors = [
+        str(connector_id).strip()
+        for connector_id in story.get("preferred_connectors", [])
+        if str(connector_id).strip()
+    ]
+    forbidden_connectors = [
+        str(connector_id).strip()
+        for connector_id in story.get("forbidden_connectors", [])
+        if str(connector_id).strip()
+    ]
 
     acceptance = [
         str(item).strip()
@@ -790,7 +1049,244 @@ def enrich_story_plan(
         "role": role,
         "skill_packs": story_skill_packs,
         "connectors": story_connectors,
+        "required_connectors": required_connectors,
+        "preferred_connectors": preferred_connectors,
+        "forbidden_connectors": forbidden_connectors,
         "acceptance_criteria": acceptance,
+    }
+
+
+def _policy_for_role(role_id: str, routing_policies: list[RoutingPolicy] | None = None) -> RoutingPolicy:
+    policies = {policy.role_id: policy for policy in (routing_policies or DEFAULT_ROUTING_POLICIES)}
+    return policies.get(role_id, RoutingPolicy(role_id=role_id))
+
+
+def _specialist_blueprint(tags: list[str]) -> dict[str, list[str] | str] | None:
+    tag_set = set(tags)
+    if tag_set.intersection({"frontend", "ui", "design"}):
+        return {
+            "role_id": "frontend_worker",
+            "label": "UI Specialist",
+            "skill_packs": ["nextjs-frontend"],
+            "connectors": ["browser_devtools", "twenty_first_dev", "web_docs"],
+        }
+    if tag_set.intersection({"graph", "database", "data", "analytics"}):
+        return {
+            "role_id": "data_worker",
+            "label": "Data Specialist",
+            "skill_packs": ["graph-data"],
+            "connectors": ["neo4j", "postgres", "python_exec"],
+        }
+    if tag_set.intersection({"backend", "api", "docs", "research"}):
+        return {
+            "role_id": "api_researcher",
+            "label": "API Specialist",
+            "skill_packs": ["debug-investigation"],
+            "connectors": ["web_docs", "http_api", "github"],
+        }
+    return None
+
+
+def activate_connector_set(
+    connector_ids: list[str],
+    *,
+    provider: str,
+    available_connectors: list[MCPConnector] | None = None,
+    required_connectors: list[str] | None = None,
+) -> tuple[list[ConnectorActivation], list[str]]:
+    connectors_by_id = {
+        connector.id: connector for connector in (available_connectors or list(DEFAULT_CONNECTORS))
+    }
+    required = set(required_connectors or [])
+    activations: list[ConnectorActivation] = []
+    blocking_errors: list[str] = []
+
+    for connector_id in list(dict.fromkeys(connector_ids)):
+        connector = connectors_by_id.get(connector_id)
+        if connector is None:
+            activation = ConnectorActivation(
+                id=connector_id,
+                name=connector_id,
+                connector_type="unknown",
+                provider=provider,
+                required=connector_id in required,
+                status="disabled",
+                reason="Connector is not present in the registry.",
+            )
+        elif not connector.enabled:
+            activation = ConnectorActivation(
+                id=connector.id,
+                name=connector.name,
+                connector_type=connector.connector_type,
+                provider=provider,
+                required=connector.id in required,
+                status="disabled",
+                reason="Connector is disabled in Settings.",
+                config=connector.config,
+            )
+        elif provider not in connector.providers:
+            activation = ConnectorActivation(
+                id=connector.id,
+                name=connector.name,
+                connector_type=connector.connector_type,
+                provider=provider,
+                required=connector.id in required,
+                status="unsupported_for_provider",
+                reason=f"Connector does not support provider `{provider}`.",
+                config=connector.config,
+            )
+        elif connector.validation_status == "invalid":
+            summary = connector.last_validation_result.get("summary") if connector.last_validation_result else ""
+            activation = ConnectorActivation(
+                id=connector.id,
+                name=connector.name,
+                connector_type=connector.connector_type,
+                provider=provider,
+                required=connector.id in required,
+                status="validation_failed",
+                reason=summary or "Connector validation failed.",
+                config=connector.config,
+            )
+        else:
+            activation = ConnectorActivation(
+                id=connector.id,
+                name=connector.name,
+                connector_type=connector.connector_type,
+                provider=provider,
+                required=connector.id in required,
+                status="active",
+                reason="Connector activated for runtime planning.",
+                config=connector.config,
+            )
+
+        if activation.required and activation.status != "active":
+            blocking_errors.append(f"{activation.name}: {activation.reason}")
+        activations.append(activation)
+
+    return activations, blocking_errors
+
+
+def resolve_story_runtime_plan(
+    story: dict,
+    *,
+    launch_profile: dict | LaunchProfile | None = None,
+    provider: str = "codex",
+    connectors: list[MCPConnector] | None = None,
+    skill_packs: list[SkillPack] | None = None,
+    routing_policies: list[RoutingPolicy] | None = None,
+) -> dict:
+    available_connectors = connectors or list(DEFAULT_CONNECTORS)
+    available_skill_packs = skill_packs or list(DEFAULT_SKILL_PACKS)
+    policies = routing_policies or list(DEFAULT_ROUTING_POLICIES)
+    normalized_story = enrich_story_plan(
+        dict(story),
+        skill_packs=available_skill_packs,
+        connectors=available_connectors,
+        routing_policies=policies,
+    )
+    profile = normalize_launch_profile(launch_profile)
+    role_id = str(normalized_story.get("role") or "backend_worker")
+    policy = _policy_for_role(role_id, policies)
+    explicit_connector_override = bool(story.get("connectors"))
+
+    selected_skill_packs = list(dict.fromkeys(
+        list(normalized_story.get("skill_packs", [])) + list(policy.preferred_skill_packs)
+    ))
+    planned_connectors = list(normalized_story.get("connectors", []))
+    for connector_id in list(policy.preferred_connectors) + list(normalized_story.get("preferred_connectors", [])):
+        if connector_id not in planned_connectors:
+            planned_connectors.append(connector_id)
+    required_connectors = list(
+        dict.fromkeys(
+            list(policy.required_connectors)
+            + list(normalized_story.get("required_connectors", []))
+        )
+    )
+    if not explicit_connector_override:
+        forbidden = set(policy.forbidden_connectors + list(normalized_story.get("forbidden_connectors", [])))
+        planned_connectors = [
+            connector_id for connector_id in planned_connectors if connector_id not in forbidden or connector_id in required_connectors
+        ]
+    for connector_id in required_connectors:
+        if connector_id not in planned_connectors:
+            planned_connectors.append(connector_id)
+
+    primary_activations, activation_errors = activate_connector_set(
+        planned_connectors,
+        provider=provider,
+        available_connectors=available_connectors,
+        required_connectors=required_connectors,
+    )
+    team_members: list[TeamMemberAssignment] = [
+        TeamMemberAssignment(
+            member_id="primary",
+            label="Primary Worker",
+            execution_role="primary_worker",
+            role_id=role_id,
+            provider=provider,
+            skill_packs=selected_skill_packs,
+            planned_connectors=planned_connectors,
+            active_connectors=primary_activations,
+        ),
+        TeamMemberAssignment(
+            member_id="critic",
+            label="Critic",
+            execution_role="critic",
+            role_id="qa_reviewer",
+            provider=provider,
+            skill_packs=_collect_skill_packs("qa_reviewer", normalized_story.get("tags", []), available_skill_packs, routing_policies=policies),
+            planned_connectors=_collect_connectors(
+                "qa_reviewer",
+                normalized_story.get("tags", []),
+                ["qa-review"],
+                available_connectors,
+                available_skill_packs,
+                routing_policies=policies,
+            ),
+            active_connectors=activate_connector_set(
+                _collect_connectors(
+                    "qa_reviewer",
+                    normalized_story.get("tags", []),
+                    ["qa-review"],
+                    available_connectors,
+                    available_skill_packs,
+                    routing_policies=policies,
+                ),
+                provider=provider,
+                available_connectors=available_connectors,
+            )[0],
+        ),
+    ]
+
+    specialist = _specialist_blueprint(normalized_story.get("tags", []))
+    if profile.story_execution_mode == "team" and specialist:
+        specialist_connectors = list(dict.fromkeys(specialist["connectors"]))  # type: ignore[index]
+        team_members.append(
+            TeamMemberAssignment(
+                member_id="specialist",
+                label=str(specialist["label"]),
+                execution_role="specialist",
+                role_id=str(specialist["role_id"]),
+                provider=provider,
+                skill_packs=list(specialist["skill_packs"]),  # type: ignore[arg-type]
+                planned_connectors=specialist_connectors,
+                active_connectors=activate_connector_set(
+                    specialist_connectors,
+                    provider=provider,
+                    available_connectors=available_connectors,
+                )[0],
+                specialist=True,
+            )
+        )
+
+    return {
+        "story": normalized_story,
+        "launch_profile": profile.model_dump(),
+        "team_mode": profile.story_execution_mode,
+        "team_members": [member.model_dump() for member in team_members],
+        "planned_connectors": planned_connectors,
+        "active_connectors": [activation.model_dump() for activation in primary_activations],
+        "activation_errors": activation_errors,
     }
 
 
@@ -844,6 +1340,7 @@ def build_planning_context(
     connectors: list[MCPConnector] | None = None,
     skill_packs: list[SkillPack] | None = None,
     role_templates: list[RoleTemplate] | None = None,
+    routing_policies: list[RoutingPolicy] | None = None,
 ) -> str:
     """Render the available routing catalog for intake/planning prompts."""
     rendered_roles = "\n".join(
@@ -860,11 +1357,19 @@ def build_planning_context(
         for connector in (connectors or list(DEFAULT_CONNECTORS))
         if connector.enabled
     )
+    rendered_policies = "\n".join(
+        f"- {policy.role_id}: required={', '.join(policy.required_connectors) or 'none'}; "
+        f"preferred={', '.join(policy.preferred_connectors) or 'none'}; "
+        f"forbidden={', '.join(policy.forbidden_connectors) or 'none'}."
+        for policy in (routing_policies or list(DEFAULT_ROUTING_POLICIES))
+    )
     return (
         "Available roles:\n"
         f"{rendered_roles}\n\n"
         "Available skill packs:\n"
         f"{rendered_skills}\n\n"
         "Available MCP connectors / tools:\n"
-        f"{rendered_connectors}"
+        f"{rendered_connectors}\n\n"
+        "Role routing policies:\n"
+        f"{rendered_policies}"
     )

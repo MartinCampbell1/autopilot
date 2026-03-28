@@ -128,12 +128,23 @@ export default function ProjectWorkspacePage() {
                   <span className="text-[#9b9a97]">Run status</span>
                   <span className="font-semibold text-[#37352f]">{STATUS_COPY[project.status]}</span>
                 </div>
+                <div className="flex items-center justify-between text-[13px]">
+                  <span className="text-[#9b9a97]">Launch mode</span>
+                  <span className="font-semibold text-[#37352f]">
+                    {project.launch_profile?.preset || "fast"}
+                  </span>
+                </div>
                 <div className="flex items-center gap-3">
                   <div className="h-[8px] flex-1 overflow-hidden rounded-full bg-[#ecebe8]">
                     <div className="h-full rounded-full bg-[#37352f]" style={{ width: `${progress}%` }} />
                   </div>
                   <span className="text-[13px] font-semibold text-[#37352f]">{progress}%</span>
                 </div>
+                <p className="text-[12px] text-[#787774]">
+                  {project.launch_profile?.story_execution_mode || "solo"} stories ·{" "}
+                  {project.launch_profile?.project_concurrency_mode || "sequential"} execution ·{" "}
+                  {project.launch_profile?.max_parallel_stories ?? 1} slot(s)
+                </p>
                 <div className="flex flex-wrap gap-2">
                   {project.status === "running" ? (
                     <Button

@@ -16,6 +16,15 @@ def create_worktree(project_path: Path, story_id: int) -> Path:
     wt_path = worktree_path(project_path, story_id)
     branch = f"story-{story_id}"
 
+    if wt_path.exists():
+        remove_worktree(project_path, wt_path)
+    subprocess.run(
+        ["git", "branch", "-D", branch],
+        cwd=str(project_path),
+        capture_output=True,
+        text=True,
+    )
+
     subprocess.run(
         ["git", "worktree", "add", "-b", branch, str(wt_path)],
         cwd=str(project_path),
@@ -39,6 +48,18 @@ def remove_worktree(project_path: Path, wt_path: Path) -> None:
 
 def merge_worktree(main_path: Path, worktree_path: Path, branch_name: str) -> bool:
     """Merge a worktree branch back into main and clean it up."""
+    subprocess.run(
+        ["git", "add", "-A"],
+        cwd=str(worktree_path),
+        capture_output=True,
+        text=True,
+    )
+    subprocess.run(
+        ["git", "commit", "-m", f"Autopilot story merge: {branch_name}"],
+        cwd=str(worktree_path),
+        capture_output=True,
+        text=True,
+    )
     result = subprocess.run(
         ["git", "merge", branch_name, "--no-edit"],
         cwd=str(main_path),

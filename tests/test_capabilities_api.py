@@ -28,6 +28,8 @@ def test_capabilities_catalog_lists_defaults(tmp_path: Path, monkeypatch) -> Non
     assert any(skill_pack["id"] == "fastapi-backend" for skill_pack in payload["skill_packs"])
     assert any(role["id"] == "backend_worker" for role in payload["roles"])
     assert any(connector_type["id"] == "mcp_server" for connector_type in payload["connector_types"])
+    assert any(policy["role_id"] == "frontend_worker" for policy in payload["routing_policies"])
+    assert any(preset["id"] == "parallel" for preset in payload["launch_presets"])
 
 
 def test_create_and_update_connector_and_skill_pack(tmp_path: Path, monkeypatch) -> None:
@@ -236,3 +238,33 @@ def test_update_routes_validate_mismatch_and_missing_ids(tmp_path: Path, monkeyp
 
     built_in_delete = client.delete("/api/capabilities/connectors/shell_exec")
     assert built_in_delete.status_code == 400
+
+
+def test_update_routing_policy_and_launch_presets(tmp_path: Path, monkeypatch) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    client = _build_client(config, monkeypatch)
+
+    update_response = client.patch(
+        "/api/capabilities/routing-policies/backend_worker",
+        json={
+            "role_id": "backend_worker",
+            "preferred_skill_packs": ["fastapi-backend"],
+            "required_connectors": ["context7"],
+            "preferred_connectors": ["http_api", "web_docs"],
+            "forbidden_connectors": ["browser_devtools"],
+        },
+    )
+    assert update_response.status_code == 200
+    payload = update_response.json()["routing_policy"]
+    assert payload["required_connectors"] == ["context7"]
+
+    routing_response = client.get("/api/capabilities/routing-policies")
+    assert routing_response.status_code == 200
+    assert any(
+        policy["role_id"] == "backend_worker" and policy["required_connectors"] == ["context7"]
+        for policy in routing_response.json()["routing_policies"]
+    )
+
+    launch_presets = client.get("/api/capabilities/launch-presets")
+    assert launch_presets.status_code == 200
+    assert any(preset["id"] == "team" for preset in launch_presets.json()["launch_presets"])

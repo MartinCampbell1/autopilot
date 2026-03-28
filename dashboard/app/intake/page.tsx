@@ -6,8 +6,43 @@ import { AppSidebar } from "@/components/app-sidebar";
 import { IntakeChat } from "@/components/intake-chat";
 import { SpecImportPanel } from "@/components/spec-import-panel";
 import { Button } from "@/components/ui/button";
-import { createProjectFromPrd, fetchAccountsHealth, fetchProjects, launchProject as launchProjectRun } from "@/lib/api";
-import type { PRD, ProjectSummary } from "@/lib/types";
+import {
+  createProjectFromPrd,
+  fetchAccountsHealth,
+  fetchCapabilitiesCatalog,
+  fetchProjects,
+  launchProject as launchProjectRun,
+} from "@/lib/api";
+import type { LaunchPreset, PRD, ProjectSummary } from "@/lib/types";
+
+const FALLBACK_PRESETS: LaunchPreset[] = [
+  {
+    id: "fast",
+    label: "Fast",
+    description: "One primary worker per story, sequential execution.",
+    launch_profile: { preset: "fast", story_execution_mode: "solo", project_concurrency_mode: "sequential", max_parallel_stories: 1 },
+  },
+  {
+    id: "team",
+    label: "Team",
+    description: "Primary worker, critic, and optional specialist.",
+    launch_profile: { preset: "team", story_execution_mode: "team", project_concurrency_mode: "sequential", max_parallel_stories: 1 },
+  },
+  {
+    id: "parallel",
+    label: "Parallel",
+    description: "Story teams with parallel worktrees.",
+    launch_profile: { preset: "parallel", story_execution_mode: "team", project_concurrency_mode: "parallel", max_parallel_stories: 3 },
+  },
+];
+
+function inferSpecialist(tags: string[] = []) {
+  const set = new Set(tags);
+  if (["frontend", "ui", "design"].some((tag) => set.has(tag))) return "UI Specialist";
+  if (["graph", "database", "data", "analytics"].some((tag) => set.has(tag))) return "Data Specialist";
+  if (["backend", "api", "docs", "research"].some((tag) => set.has(tag))) return "API Specialist";
+  return null;
+}
 
 export default function IntakePage() {
   const router = useRouter();
@@ -21,16 +56,21 @@ export default function IntakePage() {
   const [prdDraft, setPrdDraft] = useState("");
   const [health, setHealth] = useState<{ total: number; available: number; on_cooldown: number } | null>(null);
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
+  const [launchPresetId, setLaunchPresetId] = useState<"fast" | "team" | "parallel">("fast");
+  const [launchPresets, setLaunchPresets] = useState<LaunchPreset[]>(FALLBACK_PRESETS);
 
   useEffect(() => {
-    void Promise.all([fetchAccountsHealth(), fetchProjects(false)])
-      .then(([healthData, projectsData]) => {
+    void Promise.all([fetchAccountsHealth(), fetchProjects(false), fetchCapabilitiesCatalog()])
+      .then(([healthData, projectsData, catalog]) => {
         setHealth(healthData);
         setProjects((projectsData.projects || []) as ProjectSummary[]);
+        const presets = (catalog.launch_presets || []) as LaunchPreset[];
+        setLaunchPresets(presets.length ? presets : FALLBACK_PRESETS);
       })
       .catch(() => {
         setHealth(null);
         setProjects([]);
+        setLaunchPresets(FALLBACK_PRESETS);
       });
   }, []);
 
@@ -70,7 +110,11 @@ export default function IntakePage() {
         projectName.trim() || prd.title,
         projectPath.trim() || undefined
       );
-      const launch = await launchProjectRun(data.project_id);
+      const activePreset =
+        launchPresets.find((preset) => preset.id === launchPresetId) ||
+        FALLBACK_PRESETS.find((preset) => preset.id === launchPresetId) ||
+        FALLBACK_PRESETS[0];
+      const launch = await launchProjectRun(data.project_id, activePreset.launch_profile);
       setMessage(launch.message);
       router.push(`/projects/${data.project_id}`);
       router.refresh();
@@ -80,6 +124,16 @@ export default function IntakePage() {
       setLaunching(false);
     }
   };
+
+  const activeLaunchPreset =
+    launchPresets.find((preset) => preset.id === launchPresetId) ||
+    FALLBACK_PRESETS.find((preset) => preset.id === launchPresetId) ||
+    FALLBACK_PRESETS[0];
+  const launchPreviewStory = prd?.stories?.[0];
+  const launchPreviewSpecialist =
+    activeLaunchPreset.launch_profile.story_execution_mode === "team"
+      ? inferSpecialist(launchPreviewStory?.tags || [])
+      : null;
 
   return (
     <div className="flex min-h-screen bg-[#fafaf9]">
@@ -152,6 +206,77 @@ export default function IntakePage() {
                       className="h-10 w-full rounded-[8px] border border-[#e3e2e0] bg-[#fbfbf9] px-3 text-[14px] text-[#37352f] outline-none focus:border-[#37352f] focus:bg-white"
                     />
                   </label>
+                </div>
+              </div>
+
+              <div className="border-t border-[#e5e5e3] px-5 py-5">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <h4 className="text-[12px] font-semibold uppercase tracking-wider text-[#9ca3af]">
+                      Launch Mode
+                    </h4>
+                    <p className="mt-1 text-[13px] text-[#787774]">
+                      Choose how Autopilot assigns teams and runs stories.
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2 rounded-[8px] bg-[#f1f1ef] p-1">
+                    {launchPresets.map((preset) => (
+                      <button
+                        key={preset.id}
+                        type="button"
+                        onClick={() => setLaunchPresetId(preset.id as "fast" | "team" | "parallel")}
+                        className={
+                          launchPresetId === preset.id
+                            ? "rounded-[6px] bg-white px-3 py-1.5 text-[13px] font-medium text-[#37352f] shadow-sm"
+                            : "rounded-[6px] px-3 py-1.5 text-[13px] text-[#787774]"
+                        }
+                      >
+                        {preset.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="mt-4 rounded-[12px] border border-[#e5e5e3] bg-[#fbfbf9] p-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <p className="text-[14px] font-semibold text-[#37352f]">{activeLaunchPreset.label}</p>
+                      <p className="mt-1 text-[13px] text-[#787774]">{activeLaunchPreset.description}</p>
+                    </div>
+                    <span className="rounded-full bg-white px-3 py-1 text-[11px] font-semibold text-[#6b6b6b]">
+                      {activeLaunchPreset.launch_profile.story_execution_mode}/{activeLaunchPreset.launch_profile.project_concurrency_mode}
+                    </span>
+                  </div>
+
+                  {launchPreviewStory && (
+                    <div className="mt-4 grid gap-3 md:grid-cols-2">
+                      <div className="rounded-[10px] border border-[#ecebe8] bg-white px-3 py-3">
+                        <p className="text-[11px] uppercase tracking-[0.08em] text-[#9b9a97]">Primary role</p>
+                        <p className="mt-1 text-[13px] font-medium text-[#37352f]">
+                          {launchPreviewStory.role || "backend_worker"}
+                        </p>
+                        <p className="mt-2 text-[12px] text-[#787774]">
+                          Skills: {(launchPreviewStory.skill_packs || []).join(", ") || "none"}
+                        </p>
+                        <p className="mt-1 text-[12px] text-[#787774]">
+                          Connectors: {(launchPreviewStory.connectors || []).join(", ") || "none"}
+                        </p>
+                      </div>
+                      <div className="rounded-[10px] border border-[#ecebe8] bg-white px-3 py-3">
+                        <p className="text-[11px] uppercase tracking-[0.08em] text-[#9b9a97]">Launch preview</p>
+                        <p className="mt-1 text-[13px] font-medium text-[#37352f]">
+                          {activeLaunchPreset.launch_profile.max_parallel_stories} active story slot
+                          {activeLaunchPreset.launch_profile.max_parallel_stories > 1 ? "s" : ""}
+                        </p>
+                        <p className="mt-2 text-[12px] text-[#787774]">
+                          Critic: always attached for review.
+                        </p>
+                        <p className="mt-1 text-[12px] text-[#787774]">
+                          Specialist: {launchPreviewSpecialist || "Not required for the first story."}
+                        </p>
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
 

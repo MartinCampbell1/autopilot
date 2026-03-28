@@ -10,6 +10,7 @@ const STATUS_LABELS: Record<Story["status"], string> = {
   done: "Done",
   stuck: "Stuck",
   skipped: "Skipped",
+  merge_blocked: "Merge Blocked",
 };
 
 const STATUS_STYLES: Record<Story["status"], string> = {
@@ -18,6 +19,7 @@ const STATUS_STYLES: Record<Story["status"], string> = {
   done: "bg-emerald-50 text-emerald-600",
   stuck: "bg-red-50 text-red-600",
   skipped: "bg-neutral-100 text-neutral-500",
+  merge_blocked: "bg-amber-50 text-amber-700",
 };
 
 interface StoryDetailPanelProps {
@@ -136,6 +138,76 @@ export function StoryDetailPanel({
                   {story.last_error || "No story-scoped errors yet."}
                 </p>
               </div>
+              <div>
+                <p className="text-[11px] uppercase tracking-[0.08em] text-[#9b9a97]">Team Mode</p>
+                <p className="mt-1 text-[#37352f]">{story.team_mode || "solo"}</p>
+              </div>
+              <div>
+                <p className="text-[11px] uppercase tracking-[0.08em] text-[#9b9a97]">Worktree</p>
+                <p className="mt-1 break-all text-[#37352f]">{story.worktree_path || "Main workspace"}</p>
+              </div>
+              <div>
+                <p className="text-[11px] uppercase tracking-[0.08em] text-[#9b9a97]">Branch</p>
+                <p className="mt-1 text-[#37352f]">{story.branch_name || "main"}</p>
+              </div>
+            </div>
+
+            <div className="mt-4 space-y-3 rounded-xl border border-[#ecebe8] bg-[#fbfbf9] p-4 text-[13px] text-[#6b6b6b]">
+              <div>
+                <p className="text-[11px] uppercase tracking-[0.08em] text-[#9b9a97]">Planned Connectors</p>
+                <p className="mt-1 text-[#37352f]">{story.connectors?.join(", ") || "None"}</p>
+              </div>
+              <div>
+                <p className="text-[11px] uppercase tracking-[0.08em] text-[#9b9a97]">Activation Errors</p>
+                <p className="mt-1 whitespace-pre-wrap text-[#37352f]">
+                  {story.activation_errors?.length ? story.activation_errors.join("\n") : "No connector activation errors."}
+                </p>
+              </div>
+            </div>
+
+            <div className="mt-4 space-y-3 rounded-xl border border-[#ecebe8] bg-[#fbfbf9] p-4 text-[13px] text-[#6b6b6b]">
+              <p className="text-[11px] uppercase tracking-[0.08em] text-[#9b9a97]">Team Assignments</p>
+              {story.team_members?.length ? (
+                story.team_members.map((member) => (
+                  <div key={member.member_id} className="rounded-[10px] border border-[#ecebe8] bg-white px-3 py-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <p className="text-[13px] font-medium text-[#37352f]">{member.label}</p>
+                      <span className="rounded-full bg-[#f1f1ef] px-2.5 py-1 text-[11px] text-[#787774]">
+                        {member.provider}
+                      </span>
+                    </div>
+                    <p className="mt-1 text-[12px] text-[#787774]">{member.role_id}</p>
+                    <p className="mt-2 text-[12px] text-[#6b6b6b]">
+                      Skills: {member.skill_packs.join(", ") || "none"}
+                    </p>
+                    <p className="mt-1 text-[12px] text-[#6b6b6b]">
+                      Planned connectors: {member.planned_connectors.join(", ") || "none"}
+                    </p>
+                  </div>
+                ))
+              ) : (
+                <p className="text-[#9b9a97]">No team assignments resolved yet.</p>
+              )}
+            </div>
+
+            <div className="mt-4 space-y-3 rounded-xl border border-[#ecebe8] bg-[#fbfbf9] p-4 text-[13px] text-[#6b6b6b]">
+              <p className="text-[11px] uppercase tracking-[0.08em] text-[#9b9a97]">Runtime-Active Connectors</p>
+              {story.connector_activation?.length ? (
+                story.connector_activation.map((connector) => (
+                  <div key={connector.id} className="rounded-[10px] border border-[#ecebe8] bg-white px-3 py-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <p className="text-[13px] font-medium text-[#37352f]">{connector.name}</p>
+                      <span className="rounded-full bg-[#f1f1ef] px-2.5 py-1 text-[11px] text-[#787774]">
+                        {connector.status}
+                      </span>
+                    </div>
+                    <p className="mt-1 text-[12px] text-[#787774]">{connector.id}</p>
+                    <p className="mt-2 text-[12px] text-[#6b6b6b]">{connector.reason || "No activation note."}</p>
+                  </div>
+                ))
+              ) : (
+                <p className="text-[#9b9a97]">No connector activation recorded yet.</p>
+              )}
             </div>
           </TabsContent>
 

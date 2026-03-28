@@ -307,6 +307,47 @@ def run_retry_iteration(
         return False, str(exc), False
 
 
+def run_prompt_iteration(
+    project_path: Path,
+    env: dict[str, str],
+    provider: str,
+    prompt: str,
+    timeout: int = 1800,
+    on_progress: Callable[[int, str], None] | None = None,
+    progress_interval: int = DEFAULT_PROGRESS_INTERVAL_SEC,
+) -> tuple[bool, str, bool]:
+    """Run one generic provider prompt without invoking Ralph build mode."""
+    cmd = build_cli_command(provider, prompt, mode="exec")
+
+    if on_progress is not None:
+        return _run_command_with_progress(
+            cmd,
+            project_path=project_path,
+            env=env,
+            timeout=timeout,
+            on_progress=on_progress,
+            progress_interval=progress_interval,
+        )
+
+    try:
+        result = subprocess.run(
+            cmd,
+            cwd=str(project_path),
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            env=env,
+        )
+        output = f"{result.stdout}\n{result.stderr}".strip()
+        success = result.returncode == 0
+        rate_limited = is_rate_limited(output)
+        return success, output, rate_limited
+    except subprocess.TimeoutExpired:
+        return False, f"Timeout after {timeout}s", False
+    except Exception as exc:
+        return False, str(exc), False
+
+
 def read_progress(project_path: Path) -> str:
     """Read `.ralph/progress.md` if it exists."""
     progress_file = project_path / ".ralph" / "progress.md"

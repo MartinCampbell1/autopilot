@@ -1,5 +1,50 @@
-export type StoryStatus = "open" | "in_progress" | "done" | "stuck" | "skipped";
+export type StoryStatus = "open" | "in_progress" | "done" | "stuck" | "skipped" | "merge_blocked";
 export type ProjectRunStatus = "idle" | "running" | "paused" | "completed" | "failed";
+
+export interface LaunchProfile {
+  preset: "fast" | "team" | "parallel" | string;
+  story_execution_mode: "solo" | "team" | string;
+  project_concurrency_mode: "sequential" | "parallel" | string;
+  max_parallel_stories: number;
+}
+
+export interface LaunchPreset {
+  id: string;
+  label: string;
+  description: string;
+  launch_profile: LaunchProfile;
+}
+
+export interface RoutingPolicy {
+  role_id: string;
+  preferred_skill_packs: string[];
+  required_connectors: string[];
+  preferred_connectors: string[];
+  forbidden_connectors: string[];
+}
+
+export interface ConnectorActivation {
+  id: string;
+  name: string;
+  connector_type: string;
+  provider: string;
+  required: boolean;
+  status: "active" | "disabled" | "validation_failed" | "unsupported_for_provider" | string;
+  reason: string;
+  config: Record<string, unknown>;
+}
+
+export interface TeamMemberAssignment {
+  member_id: string;
+  label: string;
+  execution_role: string;
+  role_id: string;
+  provider: string;
+  skill_packs: string[];
+  planned_connectors: string[];
+  active_connectors: ConnectorActivation[];
+  specialist: boolean;
+}
 
 export interface Story {
   id: number;
@@ -13,6 +58,9 @@ export interface Story {
   role?: string | null;
   skill_packs?: string[];
   connectors?: string[];
+  required_connectors?: string[];
+  preferred_connectors?: string[];
+  forbidden_connectors?: string[];
   acceptance_criteria?: string[];
   status: StoryStatus;
   started_at?: string | null;
@@ -22,6 +70,12 @@ export interface Story {
   agent?: string | null;
   critic?: string | null;
   last_error?: string | null;
+  team_mode?: "solo" | "team" | string;
+  team_members?: TeamMemberAssignment[];
+  connector_activation?: ConnectorActivation[];
+  activation_errors?: string[];
+  worktree_path?: string | null;
+  branch_name?: string | null;
 }
 
 export interface TimelineEvent {
@@ -51,6 +105,7 @@ export interface ProjectSummary {
   last_activity_at?: string | null;
   last_message?: string;
   pid?: number | null;
+  launch_profile?: LaunchProfile;
 }
 
 export interface ProjectDetail extends ProjectSummary {
@@ -71,6 +126,10 @@ export interface ProjectDetail extends ProjectSummary {
   active_worker?: string | null;
   active_critic?: string | null;
   current_iteration?: number;
+  launch_profile: LaunchProfile;
+  team_assignments: Record<string, TeamMemberAssignment[]>;
+  active_connectors: Record<string, ConnectorActivation[]>;
+  activation_errors: Record<string, string[]>;
 }
 
 export interface AccountHealth {
@@ -118,6 +177,9 @@ export interface PRD {
     role?: string;
     skill_packs?: string[];
     connectors?: string[];
+    required_connectors?: string[];
+    preferred_connectors?: string[];
+    forbidden_connectors?: string[];
     status?: string;
   }>;
 }
@@ -196,6 +258,8 @@ export interface CapabilitiesCatalog {
   skill_packs: SkillPack[];
   roles: RoleTemplate[];
   connector_types: ConnectorTypeSchema[];
+  routing_policies: RoutingPolicy[];
+  launch_presets: LaunchPreset[];
 }
 
 export interface CreateProjectResult {
@@ -214,4 +278,5 @@ export interface LaunchResult {
   launched: boolean;
   message: string;
   log_path: string;
+  launch_profile?: LaunchProfile;
 }

@@ -8,6 +8,7 @@ import yaml
 
 from autopilot.core.config import AutopilotConfig
 from autopilot.core.project_store import (
+    build_project_detail,
     ensure_project_state,
     get_project_entry,
     launch_project_run,
@@ -262,6 +263,45 @@ def test_requeue_recoverable_stuck_stories_reopens_older_stuck_story(tmp_path: P
     assert repaired["story_state"]["1"]["iteration"] == 0
     assert repaired["story_state"]["1"]["last_error"] is None
     assert repaired["story_state"]["1"]["requeue_count"] == 1
+
+
+def test_build_project_detail_resolves_launch_profile_team_and_connectors(tmp_path: Path) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    project_dir = tmp_path / "frontend-project"
+    project_dir.mkdir(parents=True)
+
+    project = register_project(config, name="Frontend Project", project_path=project_dir)
+    prd = normalize_prd(
+        {
+            "title": "Frontend Project",
+            "stories": [
+                {
+                    "id": 1,
+                    "title": "Build dashboard shell",
+                    "description": "Create the main UI shell and verify in browser.",
+                    "tags": ["frontend", "ui"],
+                    "role": "frontend_worker",
+                }
+            ],
+        }
+    )
+    save_project_prd(project, prd)
+    state = ensure_project_state(config, project, seed_mode="new")
+    state["launch_profile"] = {
+        "preset": "team",
+        "story_execution_mode": "team",
+        "project_concurrency_mode": "sequential",
+        "max_parallel_stories": 1,
+    }
+    save_project_state(config, project["id"], state)
+
+    detail = build_project_detail(config, project["id"])
+
+    assert detail["launch_profile"]["preset"] == "team"
+    story = detail["stories"][0]
+    assert story["team_mode"] == "team"
+    assert any(member["execution_role"] == "specialist" for member in story["team_members"])
+    assert any(connector["id"] == "browser_devtools" for connector in story["connector_activation"])
 
 
 @patch("autopilot.core.project_store.subprocess.Popen")
