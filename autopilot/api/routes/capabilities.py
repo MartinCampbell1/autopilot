@@ -11,11 +11,14 @@ from autopilot.core.capability_store import (
     SkillPack,
     delete_connector,
     delete_skill_pack,
+    get_connector_type_schema,
+    load_connector_type_catalog,
     load_connectors_registry,
     load_role_templates,
     load_skill_packs_registry,
     upsert_connector,
     upsert_skill_pack,
+    validate_connector_config,
 )
 
 router = APIRouter()
@@ -53,7 +56,13 @@ async def get_capabilities_catalog() -> dict:
         "connectors": [connector.model_dump() for connector in load_connectors_registry(config)],
         "skill_packs": [skill_pack.model_dump() for skill_pack in load_skill_packs_registry(config)],
         "roles": [role.model_dump() for role in load_role_templates()],
+        "connector_types": [connector_type.model_dump() for connector_type in load_connector_type_catalog()],
     }
+
+
+@router.get("/connector-types")
+async def list_connector_types() -> dict:
+    return {"connector_types": [connector_type.model_dump() for connector_type in load_connector_type_catalog()]}
 
 
 @router.get("/connectors")
@@ -65,6 +74,8 @@ async def list_connectors() -> dict[str, list[dict]]:
 @router.post("/connectors")
 async def create_connector(request: ConnectorRequest) -> dict:
     config = get_config()
+    if get_connector_type_schema(request.connector_type) is None:
+        raise HTTPException(400, f"Unknown connector type: {request.connector_type}")
     connector = MCPConnector.model_validate({**request.model_dump(), "built_in": False})
     stored = upsert_connector(config, connector)
     return {"status": "ok", "connector": stored.model_dump()}
@@ -78,9 +89,44 @@ async def update_connector(connector_id: str, request: ConnectorRequest) -> dict
     existing = {connector.id for connector in load_connectors_registry(config)}
     if connector_id not in existing:
         raise HTTPException(404, f"Connector {connector_id} not found")
+    if get_connector_type_schema(request.connector_type) is None:
+        raise HTTPException(400, f"Unknown connector type: {request.connector_type}")
     connector = MCPConnector.model_validate({**request.model_dump(), "built_in": False})
     stored = upsert_connector(config, connector)
     return {"status": "ok", "connector": stored.model_dump()}
+
+
+@router.post("/connectors/validate")
+async def validate_connector(request: ConnectorRequest) -> dict:
+    if get_connector_type_schema(request.connector_type) is None:
+        raise HTTPException(400, f"Unknown connector type: {request.connector_type}")
+    connector = MCPConnector.model_validate({**request.model_dump(), "built_in": False})
+    result = validate_connector_config(connector)
+    return {"status": "ok", "result": result.model_dump()}
+
+
+@router.post("/connectors/{connector_id}/validate")
+async def validate_saved_connector(connector_id: str) -> dict:
+    config = get_config()
+    existing = {connector.id: connector for connector in load_connectors_registry(config)}
+    connector = existing.get(connector_id)
+    if connector is None:
+        raise HTTPException(404, f"Connector {connector_id} not found")
+    result = validate_connector_config(connector)
+    stored = upsert_connector(
+        config,
+        connector.model_copy(
+            update={
+                "validation_status": result.status,
+                "last_validation_result": result.model_dump(),
+            }
+        ),
+    )
+    return {
+        "status": "ok",
+        "connector": stored.model_dump(),
+        "result": result.model_dump(),
+    }
 
 
 @router.delete("/connectors/{connector_id}")

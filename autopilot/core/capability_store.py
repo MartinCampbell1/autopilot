@@ -27,6 +27,7 @@ class MCPConnector(BaseModel):
     built_in: bool = False
     config: dict = Field(default_factory=dict)
     validation_status: str = "unknown"
+    last_validation_result: dict = Field(default_factory=dict)
 
 
 class SkillPack(BaseModel):
@@ -53,6 +54,193 @@ class RoleTemplate(BaseModel):
     optional_skill_tags: list[str] = Field(default_factory=list)
     default_connectors: list[str] = Field(default_factory=list)
     optional_connector_tags: list[str] = Field(default_factory=list)
+
+
+class ConnectorFieldSchema(BaseModel):
+    """Declarative UI schema for one connector config field."""
+
+    key: str
+    label: str
+    field_type: str = "text"
+    required: bool = False
+    placeholder: str = ""
+    help_text: str = ""
+    options: list[str] = Field(default_factory=list)
+    sensitive: bool = False
+
+
+class ConnectorTypeSchema(BaseModel):
+    """Typed schema for one configurable connector family."""
+
+    id: str
+    name: str
+    description: str
+    transport_options: list[str] = Field(default_factory=list)
+    default_transport: str = "stdio"
+    suggested_tags: list[str] = Field(default_factory=list)
+    suggested_scopes: list[str] = Field(default_factory=list)
+    config_fields: list[ConnectorFieldSchema] = Field(default_factory=list)
+
+
+class ConnectorValidationResult(BaseModel):
+    """Result of validating a connector configuration."""
+
+    ok: bool
+    status: str
+    summary: str
+    log: str = ""
+    checked_fields: list[str] = Field(default_factory=list)
+
+
+DEFAULT_CONNECTOR_TYPES: list[ConnectorTypeSchema] = [
+    ConnectorTypeSchema(
+        id="builtin",
+        name="Built-in Runtime",
+        description="Autopilot-provided local runtime tool with no external setup.",
+        transport_options=["builtin"],
+        default_transport="builtin",
+        suggested_tags=["execution", "local"],
+        suggested_scopes=["workspace"],
+    ),
+    ConnectorTypeSchema(
+        id="mcp_server",
+        name="External MCP Server",
+        description="Attach an MCP-compatible server over stdio or HTTP.",
+        transport_options=["stdio", "http"],
+        default_transport="stdio",
+        suggested_tags=["mcp", "integration"],
+        suggested_scopes=["network"],
+        config_fields=[
+            ConnectorFieldSchema(
+                key="command",
+                label="Command",
+                required=False,
+                placeholder="npx your-mcp-server",
+                help_text="Required for stdio transport.",
+            ),
+            ConnectorFieldSchema(
+                key="args",
+                label="Args JSON",
+                field_type="textarea",
+                placeholder='["--stdio"]',
+                help_text="Optional argument list for the stdio command.",
+            ),
+            ConnectorFieldSchema(
+                key="url",
+                label="HTTP URL",
+                field_type="url",
+                placeholder="https://mcp.example.com",
+                help_text="Required for HTTP transport.",
+            ),
+            ConnectorFieldSchema(
+                key="headers",
+                label="Headers JSON",
+                field_type="textarea",
+                placeholder='{"Authorization":"Bearer ..."}',
+                help_text="Optional HTTP headers.",
+            ),
+        ],
+    ),
+    ConnectorTypeSchema(
+        id="http_api",
+        name="HTTP API",
+        description="REST/JSON endpoint exposed as a connector to workers.",
+        transport_options=["http"],
+        default_transport="http",
+        suggested_tags=["api", "integration", "backend"],
+        suggested_scopes=["network"],
+        config_fields=[
+            ConnectorFieldSchema(
+                key="base_url",
+                label="Base URL",
+                field_type="url",
+                required=True,
+                placeholder="https://api.example.com",
+            ),
+            ConnectorFieldSchema(
+                key="auth_strategy",
+                label="Auth Strategy",
+                field_type="select",
+                options=["none", "bearer", "basic", "header"],
+                placeholder="bearer",
+            ),
+            ConnectorFieldSchema(
+                key="headers",
+                label="Headers JSON",
+                field_type="textarea",
+                placeholder='{"X-API-Key":"..."}',
+                help_text="Optional static headers.",
+            ),
+        ],
+    ),
+    ConnectorTypeSchema(
+        id="neo4j",
+        name="Neo4j Graph",
+        description="Graph database connection for topology, relationships, and graph RAG work.",
+        transport_options=["stdio"],
+        default_transport="stdio",
+        suggested_tags=["graph", "database", "research"],
+        suggested_scopes=["database"],
+        config_fields=[
+            ConnectorFieldSchema(
+                key="uri",
+                label="Neo4j URI",
+                required=True,
+                placeholder="bolt://localhost:7687",
+            ),
+            ConnectorFieldSchema(
+                key="database",
+                label="Database",
+                placeholder="neo4j",
+            ),
+            ConnectorFieldSchema(
+                key="username",
+                label="Username",
+                placeholder="neo4j",
+            ),
+            ConnectorFieldSchema(
+                key="password",
+                label="Password",
+                field_type="password",
+                sensitive=True,
+            ),
+        ],
+    ),
+    ConnectorTypeSchema(
+        id="postgres",
+        name="Postgres",
+        description="Relational database connection for backend and data verification.",
+        transport_options=["stdio"],
+        default_transport="stdio",
+        suggested_tags=["database", "backend", "data"],
+        suggested_scopes=["database"],
+        config_fields=[
+            ConnectorFieldSchema(
+                key="dsn",
+                label="Postgres DSN",
+                required=True,
+                placeholder="postgresql://user:pass@localhost:5432/app",
+            ),
+        ],
+    ),
+    ConnectorTypeSchema(
+        id="custom",
+        name="Custom Connector",
+        description="Freeform connector profile for specialized integrations.",
+        transport_options=["stdio", "http", "builtin"],
+        default_transport="stdio",
+        suggested_tags=["custom", "integration"],
+        suggested_scopes=["workspace"],
+        config_fields=[
+            ConnectorFieldSchema(
+                key="notes",
+                label="Notes",
+                field_type="textarea",
+                placeholder="What this connector does and how agents should use it.",
+            ),
+        ],
+    ),
+]
 
 
 DEFAULT_CONNECTORS: list[MCPConnector] = [
@@ -336,6 +524,13 @@ def save_connectors_registry(config: AutopilotConfig, connectors: list[MCPConnec
 
 
 def upsert_connector(config: AutopilotConfig, connector: MCPConnector) -> MCPConnector:
+    validation = validate_connector_config(connector)
+    connector = connector.model_copy(
+        update={
+            "validation_status": validation.status,
+            "last_validation_result": validation.model_dump(),
+        }
+    )
     connectors = {item.id: item for item in load_connectors_registry(config)}
     connectors[connector.id] = connector
     save_connectors_registry(config, list(connectors.values()))
@@ -394,6 +589,81 @@ def delete_skill_pack(config: AutopilotConfig, skill_pack_id: str) -> bool:
 
 def load_role_templates() -> list[RoleTemplate]:
     return list(DEFAULT_ROLE_TEMPLATES)
+
+
+def load_connector_type_catalog() -> list[ConnectorTypeSchema]:
+    return list(DEFAULT_CONNECTOR_TYPES)
+
+
+def get_connector_type_schema(connector_type: str) -> ConnectorTypeSchema | None:
+    return next((schema for schema in DEFAULT_CONNECTOR_TYPES if schema.id == connector_type), None)
+
+
+def validate_connector_config(connector: MCPConnector) -> ConnectorValidationResult:
+    schema = get_connector_type_schema(connector.connector_type)
+    if schema is None:
+        return ConnectorValidationResult(
+            ok=False,
+            status="invalid",
+            summary=f"Unknown connector type: {connector.connector_type}",
+            log=f"Connector type `{connector.connector_type}` is not in the type catalog.",
+        )
+
+    issues: list[str] = []
+    checked_fields = [field.key for field in schema.config_fields]
+    config = connector.config or {}
+
+    if connector.transport not in schema.transport_options:
+        issues.append(
+            f"Transport `{connector.transport}` is not allowed for `{connector.connector_type}`. "
+            f"Allowed: {', '.join(schema.transport_options)}."
+        )
+
+    for field in schema.config_fields:
+        raw_value = config.get(field.key, "")
+        value = str(raw_value).strip() if raw_value is not None else ""
+        if field.required and not value:
+            issues.append(f"Missing required field `{field.key}`.")
+            continue
+        if not value:
+            continue
+        if field.field_type == "url" and not re.match(r"^(https?|bolt|neo4j|postgres(?:ql)?)://", value):
+            issues.append(f"Field `{field.key}` must be a valid URL/DSN.")
+
+    if connector.connector_type == "mcp_server":
+        command = str(config.get("command", "")).strip()
+        url = str(config.get("url", "")).strip()
+        if connector.transport == "stdio" and not command:
+            issues.append("`command` is required for stdio MCP connectors.")
+        if connector.transport == "http" and not url:
+            issues.append("`url` is required for HTTP MCP connectors.")
+
+    if connector.connector_type == "http_api" and not str(config.get("base_url", "")).strip():
+        issues.append("`base_url` is required for HTTP API connectors.")
+
+    if connector.connector_type == "neo4j" and not str(config.get("uri", "")).strip():
+        issues.append("`uri` is required for Neo4j connectors.")
+
+    if connector.connector_type == "postgres" and not str(config.get("dsn", "")).strip():
+        issues.append("`dsn` is required for Postgres connectors.")
+
+    if issues:
+        return ConnectorValidationResult(
+            ok=False,
+            status="invalid",
+            summary=f"{len(issues)} validation issue(s) found.",
+            log="\n".join(f"- {issue}" for issue in issues),
+            checked_fields=checked_fields,
+        )
+
+    summary = "Built-in connector is available." if connector.built_in else "Connector config looks valid."
+    return ConnectorValidationResult(
+        ok=True,
+        status="valid",
+        summary=summary,
+        log="Validation completed successfully.",
+        checked_fields=checked_fields,
+    )
 
 
 TAG_KEYWORDS: dict[str, tuple[str, ...]] = {
