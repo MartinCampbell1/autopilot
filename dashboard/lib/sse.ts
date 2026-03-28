@@ -32,6 +32,7 @@ export function useSSE(onEvent: (event: string, data: unknown) => void) {
         "run_started",
         "story_started",
         "iteration_started",
+        "worker_progress",
         "worker_failed",
         "critic_rejected",
         "story_done",

@@ -102,6 +102,25 @@ class TestLoopRunner:
         mock_run.assert_called_once()
         assert mock_run.call_args.args[0] == ["ralph", "build", "1"]
 
+    @patch("autopilot.core.loop_runner._run_command_with_progress")
+    def test_run_ralph_iteration_uses_progress_runner_when_callback_provided(
+        self,
+        mock_progress: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        mock_progress.return_value = (True, "done", False)
+
+        success, output, rate_limited = run_ralph_iteration(
+            tmp_path,
+            {"PATH": "/usr/bin"},
+            on_progress=lambda *_: None,
+        )
+
+        assert success is True
+        assert output == "done"
+        assert rate_limited is False
+        mock_progress.assert_called_once()
+
     @patch("autopilot.core.loop_runner._committed_diff")
     @patch("autopilot.core.loop_runner._working_tree_diff")
     def test_get_last_commit_diff_prefers_worktree(self, mock_worktree: MagicMock, mock_committed: MagicMock) -> None:

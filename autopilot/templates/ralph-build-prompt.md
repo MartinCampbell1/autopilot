@@ -43,6 +43,7 @@ If the story details are empty or missing, STOP and report that the PRD story fo
 - Do not edit the PRD JSON; status is handled by the loop.
 - All changes made during the run must be committed, including progress and operational notes.
 - Do not chase a perfectly clean tree if the only remaining change is the active run log under `.ralph/runs/`; that file is still being written by the current session and is not a blocker for completion.
+- Do not waste time manually deleting transient local artifacts such as `__pycache__/`, `.pytest_cache/`, or `*.egg-info/`. Add or update `.gitignore` when needed and move on.
 - Treat `.ralph/critic-feedback.md` as the highest-priority delta when it contains feedback from a previous failed iteration.
 - For non-documentation stories, a README-only or docs-only change is incomplete.
 - If the repository is greenfield, create the minimum real scaffold required by the story instead of restating the PRD.
@@ -115,6 +116,7 @@ Otherwise, end normally without the signal.
 - If you learn how to run, build, or test the project, update {{AGENTS_PATH}} briefly.
 - If you hit repeated errors, log them in {{ERRORS_LOG_PATH}} and add a Sign to {{GUARDRAILS_PATH}} using {{GUARDRAILS_REF}} as the template.
 - Avoid extra cleanup commits that only try to absorb more changes from the still-active run log; one committed implementation pass plus the progress metadata is enough.
+- If verification generates transient local artifacts, ignore them or add them to `.gitignore`; do not block completion on recursively cleaning every generated file.
 
 ## Activity Logging (Required)
 Log major actions to {{ACTIVITY_LOG_PATH}} using the helper:
