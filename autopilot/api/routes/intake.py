@@ -68,6 +68,7 @@ async def intake_message(msg: ChatMessage) -> ChatResponse:
         provider="codex",
         env=env,
         planning_context=planning_context,
+        timeout_sec=min(config.codex_timeout_sec, 300),
     )
 
     return ChatResponse(
@@ -107,7 +108,13 @@ async def import_spec(req: SpecImportRequest) -> SpecImportResponse:
         role_templates=load_role_templates(),
     )
     try:
-        prd = generate_prd_from_spec(req.spec, provider="codex", env=env, planning_context=planning_context)
+        prd = generate_prd_from_spec(
+            req.spec,
+            provider="codex",
+            env=env,
+            planning_context=planning_context,
+            timeout_sec=config.codex_timeout_sec,
+        )
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
 

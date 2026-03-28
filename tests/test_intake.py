@@ -1,6 +1,7 @@
 """Tests for intake backend."""
 
 import json
+import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -140,6 +141,56 @@ class TestIntake:
         assert parsed["title"] == "Spec Import"
 
     @patch("autopilot.core.intake.subprocess.run")
+    def test_generate_prd_from_structured_plan_without_subprocess(self, mock_run: MagicMock) -> None:
+        spec = """
+# Multi-Agent Orchestration Engine
+
+Build a LangGraph-based orchestration engine with multiple orchestration modes.
+
+### Task 1: Install dependencies and add GatewayMiniMax
+
+- [ ] **Step 1: Install langchain-openai**
+
+Run: `pip3 install langchain-openai`
+Expected: package installs successfully
+
+- [ ] **Step 2: Add GatewayMiniMax class**
+
+Modify the gateway layer to add a MiniMax client via OpenRouter.
+
+### Task 2: Create orchestrator package and models
+
+- [ ] **Step 1: Create orchestrator package**
+
+Create `/Users/martin/multi-agent/orchestrator/__init__.py` and `models.py`.
+
+- [ ] **Step 2: Verify imports**
+
+Run: `python3 -c "from orchestrator.models import store; print('ok')"`
+Expected: `ok`
+
+### Task 3: Smoke test — run a real session
+
+- [ ] **Step 1: Run a debate session**
+
+Expected: returns a session id and running status
+
+- [ ] **Step 2: Poll for completion**
+
+Expected: session completes with debate messages
+"""
+
+        parsed = generate_prd_from_spec(spec, provider="codex", env={"PATH": "/usr/bin"})
+
+        assert parsed["title"] == "Multi-Agent Orchestration Engine"
+        assert len(parsed["stories"]) == 6
+        assert len(parsed["phases"]) >= 2
+        assert parsed["stories"][0]["status"] == "open"
+        assert parsed["stories"][0]["role"] == "backend_worker"
+        assert parsed["stories"][-1]["phase_title"] == "Validation"
+        mock_run.assert_not_called()
+
+    @patch("autopilot.core.intake.subprocess.run")
     def test_generate_prd_from_spec_normalizes_rich_planning_output(self, mock_run: MagicMock) -> None:
         prd = {
             "title": "Spec Import",
@@ -222,3 +273,22 @@ class TestIntake:
         assert mock_run.call_count == 2
         assert len(parsed["stories"]) == 18
         assert len(parsed["phases"]) == 3
+
+    @patch("autopilot.core.intake.subprocess.run")
+    def test_generate_prd_from_spec_surfaces_timeout_cleanly(self, mock_run: MagicMock) -> None:
+        mock_run.side_effect = subprocess.TimeoutExpired(cmd=["codex", "exec", "huge prompt"], timeout=120)
+
+        try:
+            generate_prd_from_spec(
+                "Short spec that still uses the model",
+                provider="codex",
+                env={"PATH": "/usr/bin"},
+                timeout_sec=120,
+            )
+        except ValueError as exc:
+            message = str(exc)
+        else:
+            raise AssertionError("Expected ValueError for timeout")
+
+        assert "timed out after 120s" in message
+        assert "codex', 'exec'" not in message

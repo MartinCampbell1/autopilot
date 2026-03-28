@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -150,6 +151,20 @@ COMPLEXITY_SIGNALS: dict[str, tuple[str, ...]] = {
     "very_high": ("exchange", "autotrading", "multi-tenant", "market making", "distributed", "real-time"),
 }
 
+TASK_HEADING_RE = re.compile(r"^(#{2,6})\s*Task\s+(\d+)\s*[:\-—]\s*(.+?)\s*$", re.MULTILINE | re.IGNORECASE)
+STEP_HEADING_RE = re.compile(
+    r"^\s*-\s*\[[ xX]\]\s*(?:\*\*)?Step\s+(\d+)\s*:\s*(.+?)(?:\*\*)?\s*$",
+    re.MULTILINE | re.IGNORECASE,
+)
+H1_RE = re.compile(r"^#\s+(.+?)\s*$", re.MULTILINE)
+
+PHASE_BUCKETS: dict[str, tuple[str, str]] = {
+    "foundation": ("Foundation", "Set up shared dependencies, models, and execution primitives."),
+    "core-modes": ("Core Modes", "Implement the orchestration behaviors and graph logic."),
+    "integration": ("Integration", "Route the engine through APIs and existing gateway surfaces."),
+    "validation": ("Validation", "Verify the engine with smoke tests and real session checks."),
+}
+
 
 def _extract_json_blob(text: str) -> str:
     """Extract the first top-level JSON object from model output."""
@@ -165,11 +180,290 @@ def _extract_json_blob(text: str) -> str:
     return cleaned
 
 
+def _strip_markdown(text: str) -> str:
+    cleaned = text.strip()
+    cleaned = re.sub(r"^>\s*", "", cleaned)
+    cleaned = re.sub(r"`([^`]+)`", r"\1", cleaned)
+    cleaned = re.sub(r"\*\*([^*]+)\*\*", r"\1", cleaned)
+    cleaned = re.sub(r"__([^_]+)__", r"\1", cleaned)
+    cleaned = re.sub(r"^\s*[-*+]\s+", "", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned)
+    return cleaned.strip()
+
+
+def _compact_lines(lines: list[str], *, max_lines: int = 4) -> str:
+    cleaned: list[str] = []
+    for raw in lines:
+        text = _strip_markdown(raw)
+        if not text:
+            continue
+        if text.lower() in {"files:", "expected:", "run:"}:
+            continue
+        if text.startswith("```"):
+            continue
+        cleaned.append(text)
+        if len(cleaned) >= max_lines:
+            break
+    return " ".join(cleaned).strip()
+
+
+def _extract_task_sections(spec: str) -> list[dict]:
+    matches = list(TASK_HEADING_RE.finditer(spec))
+    if not matches:
+        return []
+
+    sections: list[dict] = []
+    for index, match in enumerate(matches, start=1):
+        body_start = match.end()
+        body_end = matches[index].start() if index < len(matches) else len(spec)
+        sections.append(
+            {
+                "index": index,
+                "task_number": int(match.group(2)),
+                "title": _strip_markdown(match.group(3)),
+                "body": spec[body_start:body_end].strip(),
+            }
+        )
+    return sections
+
+
+def _extract_step_sections(task_body: str) -> list[dict]:
+    matches = list(STEP_HEADING_RE.finditer(task_body))
+    if not matches:
+        return []
+
+    sections: list[dict] = []
+    for index, match in enumerate(matches, start=1):
+        body_start = match.end()
+        body_end = matches[index].start() if index < len(matches) else len(task_body)
+        sections.append(
+            {
+                "index": index,
+                "step_number": int(match.group(1)),
+                "title": _strip_markdown(match.group(2)),
+                "body": task_body[body_start:body_end].strip(),
+            }
+        )
+    return sections
+
+
+def _extract_spec_title(spec: str) -> str:
+    match = H1_RE.search(spec)
+    if match:
+        title = _strip_markdown(match.group(1))
+        title = re.sub(r"\s+[—-]\s+(implementation plan|plan|prd)\s*$", "", title, flags=re.IGNORECASE)
+        return title.strip() or "Imported Project"
+    for line in spec.splitlines():
+        stripped = _strip_markdown(line)
+        if stripped:
+            return stripped[:80]
+    return "Imported Project"
+
+
+def _extract_spec_description(spec: str, title: str) -> str:
+    description_lines: list[str] = []
+    for raw in spec.splitlines():
+        stripped = raw.strip()
+        if not stripped:
+            if description_lines:
+                break
+            continue
+        if stripped.startswith("#"):
+            continue
+        if TASK_HEADING_RE.match(stripped):
+            break
+        text = _strip_markdown(stripped)
+        if not text or text == title:
+            continue
+        description_lines.append(text)
+        if len(description_lines) >= 4:
+            break
+
+    if description_lines:
+        return " ".join(description_lines)
+    return f"Imported project plan for {title}."
+
+
+def _phase_bucket_for_task(task_title: str, task_body: str, order: int, total: int) -> str:
+    lowered = f"{task_title} {task_body}".lower()
+    if any(keyword in lowered for keyword in ("smoke", "verify", "test", "poll", "real session", "session list")):
+        return "validation"
+    if any(keyword in lowered for keyword in ("router", "endpoint", "api", "gateway", "mount", "engine")):
+        return "integration"
+    if any(
+        keyword in lowered
+        for keyword in (
+            "dictator",
+            "board",
+            "democracy",
+            "debate",
+            "map_reduce",
+            "map-reduce",
+            "creator_critic",
+            "creator-critic",
+            "tournament",
+            "mode",
+        )
+    ):
+        return "core-modes"
+    if any(
+        keyword in lowered
+        for keyword in (
+            "install",
+            "dependenc",
+            "gatewayminimax",
+            "package",
+            "models",
+            "base class",
+            "agent factory",
+            "__init__",
+            "shared models",
+        )
+    ):
+        return "foundation"
+    if order <= max(2, total // 5):
+        return "foundation"
+    if order >= max(total - 1, 1):
+        return "validation"
+    return "integration"
+
+
+def _acceptance_criteria_from_step(step_title: str, step_body: str) -> list[str]:
+    criteria: list[str] = []
+    for line in step_body.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        normalized = _strip_markdown(stripped)
+        lowered = normalized.lower()
+        if lowered.startswith("expected:"):
+            criteria.append(normalized.split(":", 1)[1].strip())
+        elif lowered.startswith("run:"):
+            criteria.append(f"Command succeeds: {normalized.split(':', 1)[1].strip()}")
+    if not criteria:
+        criteria.append(step_title)
+    deduped: list[str] = []
+    for item in criteria:
+        if item and item not in deduped:
+            deduped.append(item)
+    return deduped[:4]
+
+
+def _description_from_step(task_title: str, task_body: str, step_title: str, step_body: str) -> str:
+    context_lines: list[str] = []
+    for raw in task_body.splitlines():
+        stripped = raw.strip()
+        if not stripped or STEP_HEADING_RE.match(raw):
+            break
+        if stripped.startswith("```"):
+            continue
+        context_lines.append(stripped)
+    context = _compact_lines(context_lines[:4], max_lines=3)
+
+    step_lines: list[str] = []
+    for raw in step_body.splitlines():
+        stripped = raw.strip()
+        if not stripped or stripped.startswith("```"):
+            continue
+        step_lines.append(stripped)
+    detail = _compact_lines(step_lines[:5], max_lines=3)
+
+    parts = [f"Part of {task_title}."]
+    if context:
+        parts.append(context)
+    if detail:
+        parts.append(detail)
+    description = " ".join(part for part in parts if part).strip()
+    return description or step_title
+
+
+def _parse_structured_spec(spec: str) -> dict | None:
+    tasks = _extract_task_sections(spec)
+    if not tasks:
+        return None
+
+    title = _extract_spec_title(spec)
+    description = _extract_spec_description(spec, title)
+
+    phase_order: list[str] = []
+    stories: list[dict] = []
+    next_story_id = 1
+
+    for task in tasks:
+        bucket = _phase_bucket_for_task(task["title"], task["body"], task["index"], len(tasks))
+        if bucket not in phase_order:
+            phase_order.append(bucket)
+        phase_id = f"phase-{phase_order.index(bucket) + 1}"
+        phase_title, phase_goal = PHASE_BUCKETS[bucket]
+
+        steps = _extract_step_sections(task["body"])
+        if steps:
+            for step in steps:
+                story_title = (
+                    step["title"]
+                    if task["title"].lower() in step["title"].lower()
+                    else f"{task['title']}: {step['title']}"
+                )
+                stories.append(
+                    {
+                        "id": next_story_id,
+                        "phase_id": phase_id,
+                        "phase_title": phase_title,
+                        "phase_goal": phase_goal,
+                        "title": story_title,
+                        "description": _description_from_step(task["title"], task["body"], step["title"], step["body"]),
+                        "acceptance_criteria": _acceptance_criteria_from_step(step["title"], step["body"]),
+                        "status": "open",
+                    }
+                )
+                next_story_id += 1
+            continue
+
+        task_body_lines = [line for line in task["body"].splitlines() if line.strip()]
+        task_description = _compact_lines(task_body_lines, max_lines=4) or task["title"]
+        stories.append(
+            {
+                "id": next_story_id,
+                "phase_id": phase_id,
+                "phase_title": phase_title,
+                "phase_goal": phase_goal,
+                "title": task["title"],
+                "description": task_description,
+                "acceptance_criteria": [task["title"]],
+                "status": "open",
+            }
+        )
+        next_story_id += 1
+
+    phases = [
+        {
+            "id": f"phase-{index + 1}",
+            "title": PHASE_BUCKETS[bucket][0],
+            "goal": PHASE_BUCKETS[bucket][1],
+        }
+        for index, bucket in enumerate(phase_order)
+    ]
+
+    if not stories:
+        return None
+
+    return normalize_prd(
+        {
+            "title": title,
+            "description": description,
+            "phases": phases,
+            "stories": stories,
+        },
+        seed_mode="new",
+    )
+
+
 def _run_provider_prompt(
     prompt: str,
     provider: str,
     env: dict[str, str],
     workdir: str = "/tmp",
+    timeout_sec: int = 120,
 ) -> str:
     """Run one provider prompt and return stdout or a surfaced error."""
     if provider == "codex":
@@ -184,7 +478,7 @@ def _run_provider_prompt(
             cmd,
             capture_output=True,
             text=True,
-            timeout=120,
+            timeout=timeout_sec,
             cwd=workdir,
             env=env,
         )
@@ -197,6 +491,8 @@ def _run_provider_prompt(
         if stdout:
             return stdout
         return f"Command failed with exit code {result.returncode}"
+    except subprocess.TimeoutExpired:
+        return f"Error: Planner timed out after {timeout_sec}s"
     except Exception as exc:
         return f"Error: {exc}"
 
@@ -265,6 +561,7 @@ def _refine_prd_if_needed(
     env: dict[str, str],
     workdir: str,
     planning_context: str,
+    timeout_sec: int,
 ) -> dict:
     needs_expansion, complexity = _plan_needs_expansion(prd, source_text)
     if not needs_expansion:
@@ -283,7 +580,7 @@ def _refine_prd_if_needed(
         f"\n[Current PRD]\n{json.dumps(prd, ensure_ascii=False, indent=2)}\n"
     )
 
-    response = _run_provider_prompt(prompt, provider, env, workdir)
+    response = _run_provider_prompt(prompt, provider, env, workdir, timeout_sec=timeout_sec)
     try:
         refined = json.loads(_extract_json_blob(response))
     except json.JSONDecodeError:
@@ -301,6 +598,7 @@ def run_intake_turn(
     env: dict[str, str],
     workdir: str = "/tmp",
     planning_context: str = "",
+    timeout_sec: int = 120,
 ) -> str:
     """Run one intake conversation turn and update the session."""
     session.add_user_message(user_message)
@@ -320,7 +618,7 @@ def run_intake_turn(
         conversation += f"[{role}]: {message['content']}\n\n"
     conversation += "[Assistant]:"
 
-    response = _run_provider_prompt(conversation, provider, env, workdir)
+    response = _run_provider_prompt(conversation, provider, env, workdir, timeout_sec=timeout_sec)
 
     session.add_agent_message(response)
 
@@ -334,6 +632,7 @@ def run_intake_turn(
                 env=env,
                 workdir=workdir,
                 planning_context=planning_context,
+                timeout_sec=timeout_sec,
             )
     except (json.JSONDecodeError, TypeError):
         pass
@@ -347,6 +646,7 @@ def generate_prd_from_spec(
     env: dict[str, str],
     workdir: str = "/tmp",
     planning_context: str = "",
+    timeout_sec: int = 600,
 ) -> dict:
     """Convert an uploaded specification into a PRD JSON document."""
     spec = spec_text.strip()
@@ -360,11 +660,15 @@ def generate_prd_from_spec(
     except json.JSONDecodeError:
         pass
 
+    parsed_structured = _parse_structured_spec(spec)
+    if parsed_structured is not None:
+        return parsed_structured
+
     prompt = SPEC_TO_PRD_PROMPT
     if planning_context.strip():
         prompt += f"\n\n[Planning Catalog]\n{planning_context.strip()}\n"
     prompt += f"\n[Specification]\n{spec}\n"
-    response = _run_provider_prompt(prompt, provider, env, workdir)
+    response = _run_provider_prompt(prompt, provider, env, workdir, timeout_sec=timeout_sec)
 
     try:
         parsed = json.loads(_extract_json_blob(response))
@@ -381,6 +685,7 @@ def generate_prd_from_spec(
         env=env,
         workdir=workdir,
         planning_context=planning_context,
+        timeout_sec=timeout_sec,
     )
 
 
