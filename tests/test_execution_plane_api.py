@@ -452,6 +452,105 @@ def test_execution_plane_orchestrator_session_control_apply_executes_safe_action
 
 
 @patch("autopilot.core.execution_plane.generate_prd_from_spec")
+def test_execution_plane_orchestrator_session_control_plan_safe_progress_executes_and_closes(
+    mock_generate_prd_from_spec,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    client = _build_client(config, monkeypatch)
+    mock_generate_prd_from_spec.return_value = {
+        "title": "FounderOS Copilot",
+        "description": "Execution-ready FounderOS project.",
+        "stories": [{"id": 1, "title": "Bootstrap", "description": "Create the app shell"}],
+    }
+
+    profiles_response = client.get("/api/execution-plane/orchestrator-sessions/control/profiles")
+    assert profiles_response.status_code == 200
+    profiles = {item["name"]: item for item in profiles_response.json()["profiles"]}
+    assert "safe_progress" in profiles
+    assert profiles["safe_progress"]["default"] is True
+
+    created = _create_execution_project(client, tmp_path / "session-control-plan-project")
+    project_id = created["project"]["project_id"]
+    session = _create_orchestrator_session(
+        client,
+        project_ids=[project_id],
+        actor="founderos",
+        title="Session control plan loop",
+    )
+
+    update_story_runtime(
+        config,
+        project_id,
+        1,
+        status="in_progress",
+        iteration=2,
+        agent="codex/worker-a",
+        critic="codex/critic-a",
+    )
+    update_project_runtime(
+        config,
+        project_id,
+        status="running",
+        paused=False,
+        current_story_id=1,
+        current_iteration=2,
+        active_worker="codex/worker-a",
+        active_critic="codex/critic-a",
+        budget_policy={
+            "project_max_worker_iterations": 200,
+            "project_max_critic_reviews": 200,
+            "agent_max_worker_iterations": 3,
+            "agent_max_critic_reviews": 60,
+            "auto_pause_on_exhaustion": True,
+        },
+        budget_usage={
+            "project": {"worker_iterations": 2, "critic_reviews": 2},
+            "agents": {
+                "codex/worker-a": {"worker_iterations": 2, "critic_reviews": 0},
+                "codex/critic-a": {"worker_iterations": 0, "critic_reviews": 2},
+            },
+            "last_exhaustion_reason": None,
+            "auto_paused_at": None,
+        },
+    )
+
+    plan_response = client.post(
+        f"/api/execution-plane/orchestrator-sessions/{session['id']}/control/apply-plan",
+        json={
+            "profile": "safe_progress",
+            "actor": "founderos",
+            "reason": "Run the default FounderOS control pass.",
+            "max_operations": 5,
+        },
+    )
+    assert plan_response.status_code == 200
+    plan = plan_response.json()
+    assert plan["status"] == "ok"
+    assert plan["profile"]["name"] == "safe_progress"
+    assert plan["summary"]["applied"] >= 2
+    assert plan["summary"]["final_state"] == "closed"
+    assert any(step["recommendation_kind"] == "execute_safe_actions" for step in plan["applied"])
+    assert any(step["recommendation_kind"] == "complete_session" for step in plan["applied"])
+
+    session_detail = client.get(f"/api/execution-plane/orchestrator-sessions/{session['id']}")
+    assert session_detail.status_code == 200
+    detail = session_detail.json()
+    assert detail["status"] == "completed"
+    assert detail["control"]["state"] == "closed"
+
+    session_events = client.get(
+        f"/api/execution-plane/orchestrator-sessions/{session['id']}/events",
+        params={"limit": 30},
+    )
+    assert session_events.status_code == 200
+    event_names = {event["event"] for event in session_events.json()["events"]}
+    assert "execution_plane_orchestrator_session_control_plan_applied" in event_names
+    assert "execution_plane_orchestrator_session_recommendation_applied" in event_names
+
+
+@patch("autopilot.core.execution_plane.generate_prd_from_spec")
 def test_execution_plane_routes_create_list_and_detail_projects(
     mock_generate_prd_from_spec,
     tmp_path: Path,
@@ -1536,6 +1635,30 @@ def test_execution_plane_agent_action_execute_escalates_to_approval_when_needed(
         for event in action_events.json()["events"]
     )
     assert any(event["event"] == "execution_plane_agent_action_run_recorded" for event in action_events.json()["events"])
+
+    plan_response = client.post(
+        f"/api/execution-plane/orchestrator-sessions/{session['id']}/control/apply-plan",
+        json={
+            "profile": "review_only",
+            "actor": "founderos",
+            "reason": "Inspect approvals and issues without mutating the session.",
+            "max_operations": 5,
+        },
+    )
+    assert plan_response.status_code == 200
+    plan = plan_response.json()
+    assert plan["status"] == "ok"
+    assert plan["profile"]["name"] == "review_only"
+    assert plan["summary"]["applied"] >= 2
+    assert plan["summary"]["final_state"] == "needs_approval"
+    assert any(step["recommendation_kind"] == "review_pending_approvals" for step in plan["applied"])
+    assert any(step["recommendation_kind"] == "triage_open_issues" for step in plan["applied"])
+
+    linked_after_plan = client.get(f"/api/execution-plane/orchestrator-sessions/{session['id']}")
+    assert linked_after_plan.status_code == 200
+    detail_after_plan = linked_after_plan.json()
+    assert detail_after_plan["status"] == "open"
+    assert detail_after_plan["control"]["state"] == "needs_approval"
 
 
 def test_execution_plane_orchestrator_session_control_apply_completes_healthy_session(

@@ -1954,6 +1954,105 @@ def _session_action_policy_profile(commands: set[str], *, approval_required: boo
     return "balanced_safe"
 
 
+ORCHESTRATOR_SESSION_CONTROL_PROFILES: dict[str, dict[str, Any]] = {
+    "safe_progress": {
+        "description": (
+            "Inspect blocking approvals, execute safe session actions, preview approval-gated actions, "
+            "triage linked issues, and close the session once it becomes healthy."
+        ),
+        "recommendation_kinds": [
+            "review_pending_approvals",
+            "execute_safe_actions",
+            "preview_approval_gated_actions",
+            "triage_open_issues",
+            "complete_session",
+        ],
+        "repeatable_kinds": ["execute_safe_actions"],
+    },
+    "review_only": {
+        "description": (
+            "Inspect approvals and issues, preview session actions, but do not apply mutating session actions."
+        ),
+        "recommendation_kinds": [
+            "review_pending_approvals",
+            "preview_safe_actions",
+            "preview_approval_gated_actions",
+            "triage_open_issues",
+        ],
+        "repeatable_kinds": [],
+    },
+    "close_healthy": {
+        "description": "Only complete the session when no other work remains.",
+        "recommendation_kinds": ["complete_session"],
+        "repeatable_kinds": [],
+    },
+}
+
+
+def list_execution_plane_orchestrator_session_control_profiles() -> list[dict[str, Any]]:
+    """Return supported session-level control-pass profiles."""
+
+    profiles: list[dict[str, Any]] = []
+    for name, profile in ORCHESTRATOR_SESSION_CONTROL_PROFILES.items():
+        profiles.append(
+            {
+                "name": name,
+                "description": str(profile.get("description") or ""),
+                "recommendation_kinds": [
+                    str(item)
+                    for item in (profile.get("recommendation_kinds") or [])
+                    if str(item).strip()
+                ],
+                "repeatable_kinds": [
+                    str(item)
+                    for item in (profile.get("repeatable_kinds") or [])
+                    if str(item).strip()
+                ],
+                "default": name == "safe_progress",
+            }
+        )
+    return profiles
+
+
+def _resolve_execution_plane_orchestrator_session_control_profile(
+    profile: str,
+    recommendation_kinds: list[str] | None = None,
+) -> dict[str, Any]:
+    normalized_profile = profile.strip() or "safe_progress"
+    profile_payload = ORCHESTRATOR_SESSION_CONTROL_PROFILES.get(normalized_profile)
+    if profile_payload is None:
+        raise ValueError(
+            f"Unsupported orchestrator-session control profile: {normalized_profile}. "
+            f"Expected one of {sorted(ORCHESTRATOR_SESSION_CONTROL_PROFILES)}."
+        )
+
+    explicit_kinds = [
+        str(item).strip()
+        for item in (recommendation_kinds or [])
+        if str(item).strip()
+    ]
+    if explicit_kinds:
+        deduped_kinds = list(dict.fromkeys(explicit_kinds))
+    else:
+        deduped_kinds = [
+            str(item).strip()
+            for item in (profile_payload.get("recommendation_kinds") or [])
+            if str(item).strip()
+        ]
+
+    return {
+        "name": normalized_profile,
+        "description": str(profile_payload.get("description") or ""),
+        "recommendation_kinds": deduped_kinds,
+        "repeatable_kinds": {
+            str(item).strip()
+            for item in (profile_payload.get("repeatable_kinds") or [])
+            if str(item).strip()
+        },
+        "customized": bool(explicit_kinds),
+    }
+
+
 def build_execution_plane_orchestrator_session_control(
     config: AutopilotConfig,
     session_id: str,
@@ -2297,6 +2396,158 @@ def apply_execution_plane_orchestrator_session_recommendation(
         "result": result,
         "control_before": control,
         "control": updated_control,
+    }
+
+
+def apply_execution_plane_orchestrator_session_control_plan(
+    config: AutopilotConfig,
+    session_id: str,
+    *,
+    actor: str,
+    reason: str = "",
+    profile: str = "safe_progress",
+    recommendation_kinds: list[str] | None = None,
+    max_operations: int = 10,
+    continue_on_error: bool = True,
+) -> dict[str, Any]:
+    """Apply a policy-driven pass across current session-level control recommendations."""
+
+    session = get_orchestrator_session(config, session_id)
+    if session is None:
+        raise KeyError(session_id)
+
+    resolved_profile = _resolve_execution_plane_orchestrator_session_control_profile(
+        profile,
+        recommendation_kinds,
+    )
+    initial_control = build_execution_plane_orchestrator_session_control(config, session_id)
+    applied: list[dict[str, Any]] = []
+    errors: list[dict[str, Any]] = []
+    skipped_kinds: list[str] = []
+    applied_once: set[str] = set()
+    stopped_reason = "no_matching_recommendations"
+
+    for step in range(1, max_operations + 1):
+        current_control = build_execution_plane_orchestrator_session_control(config, session_id)
+        if current_control["state"] == "closed":
+            stopped_reason = "session_closed"
+            break
+
+        current_map = {
+            str(item.get("kind") or ""): item
+            for item in current_control.get("recommendations") or []
+            if str(item.get("kind") or "").strip()
+        }
+
+        selected_kind = ""
+        for kind in resolved_profile["recommendation_kinds"]:
+            if kind not in current_map:
+                continue
+            if kind in applied_once and kind not in resolved_profile["repeatable_kinds"]:
+                continue
+            selected_kind = kind
+            break
+
+        if not selected_kind:
+            stopped_reason = "no_matching_recommendations"
+            break
+
+        recommendation = current_map[selected_kind]
+        try:
+            result = apply_execution_plane_orchestrator_session_recommendation(
+                config,
+                session_id,
+                recommendation_kind=selected_kind,
+                actor=actor,
+                reason=reason,
+                idempotency_key="",
+            )
+            applied.append(
+                {
+                    "step": step,
+                    "recommendation_kind": selected_kind,
+                    "title": recommendation.get("title") or selected_kind,
+                    "priority": recommendation.get("priority") or "medium",
+                    "status": result.get("status") or "ok",
+                    "operation_type": str(result.get("operation", {}).get("type") or ""),
+                    "operation_mode": str(result.get("operation", {}).get("mode") or ""),
+                    "result": result.get("result") or {},
+                    "control_state_before": str(result.get("control_before", {}).get("state") or ""),
+                    "control_state_after": str(result.get("control", {}).get("state") or ""),
+                }
+            )
+            applied_once.add(selected_kind)
+            if str(result.get("control", {}).get("state") or "") == "closed":
+                stopped_reason = "session_closed"
+                break
+        except (RuntimeError, ValueError) as exc:
+            errors.append(
+                {
+                    "step": step,
+                    "recommendation_kind": selected_kind,
+                    "title": recommendation.get("title") or selected_kind,
+                    "error": str(exc),
+                }
+            )
+            applied_once.add(selected_kind)
+            if not continue_on_error:
+                stopped_reason = "error"
+                break
+
+    final_control = build_execution_plane_orchestrator_session_control(config, session_id)
+    for kind in resolved_profile["recommendation_kinds"]:
+        if kind in applied_once:
+            continue
+        skipped_kinds.append(kind)
+
+    if errors and applied:
+        status = "partial"
+    elif errors:
+        status = "error"
+    elif applied:
+        status = "ok"
+    else:
+        status = "noop"
+
+    event_extra = {
+        "orchestrator_session_id": session_id,
+        "profile": resolved_profile["name"],
+        "customized": bool(resolved_profile["customized"]),
+        "actor": actor,
+        "reason": reason.strip(),
+        "applied_recommendation_kinds": [item["recommendation_kind"] for item in applied],
+        "error_count": len(errors),
+        "stopped_reason": stopped_reason,
+    }
+    for project_id in session.project_ids:
+        emit_project_event(
+            config,
+            project_id,
+            event="execution_plane_orchestrator_session_control_plan_applied",
+            status=status,
+            message=(
+                f"Orchestrator session control plan `{resolved_profile['name']}` applied "
+                f"with {len(applied)} step(s)."
+            ),
+            extra=event_extra,
+        )
+
+    return {
+        "status": status,
+        "session_id": session_id,
+        "profile": resolved_profile,
+        "control_before": initial_control,
+        "control": final_control,
+        "applied": applied,
+        "errors": errors,
+        "summary": {
+            "applied": len(applied),
+            "errors": len(errors),
+            "skipped": len(skipped_kinds),
+            "stopped_reason": stopped_reason,
+            "final_state": final_control.get("state"),
+        },
+        "skipped_recommendation_kinds": skipped_kinds,
     }
 
 

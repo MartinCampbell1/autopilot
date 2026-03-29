@@ -10,6 +10,7 @@ from autopilot.core.approvals import decide_approval, get_approval, list_approva
 from autopilot.core.control_plane_issues import get_issue, list_issues, resolve_issue
 from autopilot.core.execution_brief import ExecutionBrief
 from autopilot.core.execution_plane import (
+    apply_execution_plane_orchestrator_session_control_plan,
     apply_execution_plane_orchestrator_session_recommendation,
     apply_execution_command_approval,
     build_execution_plane_orchestrator_session_control,
@@ -29,6 +30,7 @@ from autopilot.core.execution_plane import (
     get_execution_plane_orchestrator_session,
     list_execution_plane_orchestrator_session_events,
     list_execution_plane_orchestrator_session_actions,
+    list_execution_plane_orchestrator_session_control_profiles,
     load_project_command_policy,
     ingest_execution_brief_project,
     list_execution_plane_agent_action_policy_profiles,
@@ -182,6 +184,15 @@ class OrchestratorSessionRecommendationRequest(BaseModel):
     actor: str = "external-orchestrator"
     reason: str = ""
     idempotency_key: str = ""
+
+
+class OrchestratorSessionControlPlanRequest(BaseModel):
+    profile: str = "safe_progress"
+    recommendation_kinds: list[str] = Field(default_factory=list)
+    actor: str = "external-orchestrator"
+    reason: str = ""
+    max_operations: int = Field(default=10, ge=1, le=50)
+    continue_on_error: bool = True
 
 
 class CommandPolicyRequest(BaseModel):
@@ -553,6 +564,11 @@ async def get_execution_orchestrator_session_control(session_id: str) -> dict[st
         raise HTTPException(404, f"Orchestrator session {session_id} not found") from exc
 
 
+@router.get("/orchestrator-sessions/control/profiles")
+async def list_execution_orchestrator_session_control_profiles() -> dict[str, object]:
+    return {"profiles": list_execution_plane_orchestrator_session_control_profiles()}
+
+
 @router.post("/orchestrator-sessions/{session_id}/control/apply")
 async def apply_execution_orchestrator_session_recommendation(
     session_id: str,
@@ -567,6 +583,31 @@ async def apply_execution_orchestrator_session_recommendation(
             actor=request.actor,
             reason=request.reason,
             idempotency_key=request.idempotency_key,
+        )
+    except KeyError as exc:
+        raise HTTPException(404, f"Orchestrator session {session_id} not found") from exc
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+@router.post("/orchestrator-sessions/{session_id}/control/apply-plan")
+async def apply_execution_orchestrator_session_control_plan(
+    session_id: str,
+    request: OrchestratorSessionControlPlanRequest,
+) -> dict[str, object]:
+    config = get_config()
+    try:
+        return apply_execution_plane_orchestrator_session_control_plan(
+            config,
+            session_id,
+            actor=request.actor,
+            reason=request.reason,
+            profile=request.profile,
+            recommendation_kinds=request.recommendation_kinds,
+            max_operations=request.max_operations,
+            continue_on_error=request.continue_on_error,
         )
     except KeyError as exc:
         raise HTTPException(404, f"Orchestrator session {session_id} not found") from exc
