@@ -1,6 +1,16 @@
 """Tests for critic runner."""
 
-from autopilot.core.critic import NON_ACTIONABLE_FEEDBACK, build_critic_prompt, feedback_is_actionable, parse_critic_output
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
+
+from autopilot.core.critic import (
+    NON_ACTIONABLE_FEEDBACK,
+    build_critic_prompt,
+    feedback_is_actionable,
+    parse_critic_output,
+    run_critic,
+)
 
 
 class TestParseCriticOutput:
@@ -97,3 +107,29 @@ class TestBuildCriticPrompt:
         )
         assert "If you cannot identify at least one concrete blocking issue, respond with APPROVED." in prompt
         assert "<concrete issue" not in prompt
+
+
+class TestRunCritic:
+    @patch("autopilot.core.critic.get_adapter")
+    def test_run_critic_uses_adapter_execution(self, mock_get_adapter: MagicMock, tmp_path: Path) -> None:
+        mock_adapter = MagicMock()
+        mock_adapter.provider_family = "codex"
+        mock_adapter.adapter_id = "codex_local"
+        mock_adapter.execute.return_value = SimpleNamespace(
+            timed_out=False,
+            stderr="",
+            diagnostics=None,
+        )
+        mock_adapter.parse_output.return_value = SimpleNamespace(text="APPROVED", rate_limited=False)
+        mock_get_adapter.return_value = mock_adapter
+
+        result = run_critic(
+            prompt="Review this change",
+            provider="codex",
+            env={"CODEX_HOME": str(tmp_path / ".codex")},
+            workdir=Path(tmp_path),
+        )
+
+        assert result.approved is True
+        request = mock_adapter.execute.call_args.args[0]
+        assert request.mode.value == "critic"

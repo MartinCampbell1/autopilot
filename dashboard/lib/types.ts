@@ -46,6 +46,18 @@ export interface TeamMemberAssignment {
   specialist: boolean;
 }
 
+export interface StoryOwnership {
+  role: string;
+  owner: string;
+  acquired_at: string;
+}
+
+export interface StoryCheckout {
+  mode: string;
+  path: string;
+  branch_name?: string | null;
+}
+
 export interface Story {
   id: number;
   title: string;
@@ -76,6 +88,8 @@ export interface Story {
   activation_errors?: string[];
   worktree_path?: string | null;
   branch_name?: string | null;
+  ownership?: StoryOwnership | null;
+  checkout?: StoryCheckout | null;
 }
 
 export interface TimelineEvent {
@@ -106,6 +120,8 @@ export interface ProjectSummary {
   last_message?: string;
   pid?: number | null;
   launch_profile?: LaunchProfile;
+  budget_policy?: RuntimeBudgetPolicy;
+  budget_usage?: RuntimeBudgetUsage;
 }
 
 export interface ProjectDetail extends ProjectSummary {
@@ -130,6 +146,74 @@ export interface ProjectDetail extends ProjectSummary {
   team_assignments: Record<string, TeamMemberAssignment[]>;
   active_connectors: Record<string, ConnectorActivation[]>;
   activation_errors: Record<string, string[]>;
+}
+
+export interface RuntimeBudgetPolicy {
+  project_max_worker_iterations: number;
+  project_max_critic_reviews: number;
+  agent_max_worker_iterations: number;
+  agent_max_critic_reviews: number;
+  auto_pause_on_exhaustion: boolean;
+}
+
+export interface RuntimeBudgetUsage {
+  project: {
+    worker_iterations: number;
+    critic_reviews: number;
+  };
+  agents: Record<
+    string,
+    {
+      worker_iterations: number;
+      critic_reviews: number;
+    }
+  >;
+  last_exhaustion_reason?: string | null;
+  auto_paused_at?: string | null;
+}
+
+export interface RuntimeLease {
+  story_id: number;
+  role: string;
+  owner: string;
+  runtime_pid?: number | null;
+  status: string;
+  checkout_path?: string | null;
+  branch_name?: string | null;
+  acquired_at: string;
+  updated_at: string;
+}
+
+export interface CheckoutHealth {
+  status: string;
+  lease_status?: string;
+  mode: string;
+  path?: string | null;
+  branch_name?: string | null;
+  issues: string[];
+}
+
+export interface StoryRuntimeControl {
+  story_id: number;
+  story_status: StoryStatus | string;
+  ownership?: StoryOwnership | null;
+  lease?: RuntimeLease | null;
+  checkout?: StoryCheckout | null;
+  health: CheckoutHealth;
+}
+
+export interface OrphanedWorktree {
+  story_id?: number | null;
+  path: string;
+  status: string;
+  issues: string[];
+}
+
+export interface ProjectRuntimeControl {
+  project_id: string;
+  leases: RuntimeLease[];
+  stories: StoryRuntimeControl[];
+  orphaned_worktrees: OrphanedWorktree[];
 }
 
 export interface AccountHealth {

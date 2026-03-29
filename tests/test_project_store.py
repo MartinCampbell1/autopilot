@@ -8,6 +8,7 @@ import yaml
 
 from autopilot.core.config import AutopilotConfig
 from autopilot.core.project_store import (
+    auto_pause_project_run,
     build_project_detail,
     ensure_project_state,
     get_project_entry,
@@ -19,6 +20,7 @@ from autopilot.core.project_store import (
     register_project,
     save_project_prd,
     save_project_state,
+    update_project_budget_policy,
 )
 
 
@@ -93,6 +95,10 @@ def test_load_project_state_after_register_and_save(tmp_path: Path) -> None:
     assert resolved is not None
     assert loaded["project_id"] == project["id"]
     assert json.loads((project_dir / ".agents" / "tasks" / "prd.json").read_text())["stories"][0]["status"] == "open"
+    assert loaded["story_state"]["1"]["ownership"] is None
+    assert loaded["story_state"]["1"]["checkout"] is None
+    assert loaded["budget_policy"]["project_max_worker_iterations"] == 200
+    assert loaded["budget_usage"]["project"]["worker_iterations"] == 0
 
 
 def test_normalize_prd_enriches_story_routing_and_phases() -> None:
@@ -302,6 +308,75 @@ def test_build_project_detail_resolves_launch_profile_team_and_connectors(tmp_pa
     assert story["team_mode"] == "team"
     assert any(member["execution_role"] == "specialist" for member in story["team_members"])
     assert any(connector["id"] == "browser_devtools" for connector in story["connector_activation"])
+
+
+def test_build_project_detail_includes_story_ownership_and_checkout(tmp_path: Path) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    project_dir = tmp_path / "leased-project"
+    project_dir.mkdir(parents=True)
+
+    project = register_project(config, name="Leased Project", project_path=project_dir)
+    prd = normalize_prd(
+        {
+            "title": "Leased Project",
+            "stories": [{"id": 1, "title": "Bootstrap", "description": "Start"}],
+        }
+    )
+    save_project_prd(project, prd)
+    state = ensure_project_state(config, project, seed_mode="new")
+    state["story_state"]["1"]["ownership"] = {"role": "coordinator", "owner": "run:123", "acquired_at": "2026-03-29T00:00:00+00:00"}
+    state["story_state"]["1"]["checkout"] = {"mode": "worktree", "path": str(project_dir.parent / "leased-project-story-1"), "branch_name": "story-1"}
+    save_project_state(config, project["id"], state)
+
+    detail = build_project_detail(config, project["id"])
+
+    assert detail["stories"][0]["ownership"]["owner"] == "run:123"
+    assert detail["stories"][0]["checkout"]["branch_name"] == "story-1"
+    assert "budget_policy" in detail
+    assert "budget_usage" in detail
+
+
+def test_update_project_budget_policy_persists_changes(tmp_path: Path) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    project_dir = tmp_path / "budgeted-project"
+    project_dir.mkdir(parents=True)
+
+    project = register_project(config, name="Budgeted Project", project_path=project_dir)
+    prd = normalize_prd({"title": "Budgeted Project", "stories": [{"id": 1, "title": "Bootstrap", "description": "Start"}]})
+    save_project_prd(project, prd)
+    ensure_project_state(config, project, seed_mode="new")
+
+    policy = update_project_budget_policy(
+        config,
+        project["id"],
+        project_max_worker_iterations=12,
+        auto_pause_on_exhaustion=False,
+    )
+    state = load_project_state(config, project["id"])
+
+    assert policy["project_max_worker_iterations"] == 12
+    assert state["budget_policy"]["auto_pause_on_exhaustion"] is False
+
+
+def test_auto_pause_project_run_marks_project_paused(tmp_path: Path) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    project_dir = tmp_path / "paused-project"
+    project_dir.mkdir(parents=True)
+
+    project = register_project(config, name="Paused Project", project_path=project_dir)
+    prd = normalize_prd({"title": "Paused Project", "stories": [{"id": 1, "title": "Bootstrap", "description": "Start"}]})
+    save_project_prd(project, prd)
+    state = ensure_project_state(config, project, seed_mode="new")
+    state["pid"] = 1234
+    state["status"] = "running"
+    save_project_state(config, project["id"], state)
+
+    auto_pause_project_run(config, project["id"], message="Runtime budget exhausted.", story_id=1)
+    paused = load_project_state(config, project["id"])
+
+    assert paused["status"] == "paused"
+    assert paused["paused"] is True
+    assert paused["last_error"] == "Runtime budget exhausted."
 
 
 @patch("autopilot.core.project_store.subprocess.Popen")

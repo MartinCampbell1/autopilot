@@ -1,6 +1,7 @@
 """Tests for loop runner."""
 
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from autopilot.core.loop_runner import (
@@ -149,9 +150,15 @@ class TestLoopRunner:
         assert "OAuth callback validation" in prompt
         assert ".ralph/critic-feedback.md" in prompt
 
-    @patch("autopilot.core.loop_runner.subprocess.run")
-    def test_run_retry_iteration_success(self, mock_run: MagicMock, tmp_path: Path) -> None:
-        mock_run.return_value = MagicMock(returncode=0, stdout="fixed", stderr="")
+    @patch("autopilot.core.loop_runner.get_adapter")
+    def test_run_retry_iteration_success(self, mock_get_adapter: MagicMock, tmp_path: Path) -> None:
+        mock_adapter = MagicMock()
+        mock_adapter.provider_family = "codex"
+        mock_adapter.adapter_id = "codex_local"
+        mock_adapter.execute.return_value = SimpleNamespace(success=True, output="fixed", rate_limited=False)
+        mock_adapter.parse_output.return_value = SimpleNamespace(text="fixed", rate_limited=False)
+        mock_get_adapter.return_value = mock_adapter
+
         success, output, rate_limited = run_retry_iteration(
             tmp_path,
             {"PATH": "/usr/bin"},
@@ -163,5 +170,7 @@ class TestLoopRunner:
         assert success is True
         assert output == "fixed"
         assert rate_limited is False
-        called_cmd = mock_run.call_args.args[0]
-        assert called_cmd[:3] == ["codex", "exec", "--full-auto"]
+        request = mock_adapter.execute.call_args.args[0]
+        assert request.profile.provider == "codex"
+        assert "story #1" in request.prompt
+        assert "Create README and notes" in request.prompt

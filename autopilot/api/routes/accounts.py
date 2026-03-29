@@ -5,6 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException
 
 from autopilot.api.deps import get_account_manager, get_config
+from autopilot.core.account_diagnostics import build_account_diagnostics_snapshot
 from autopilot.core.provider_sessions import (
     VALID_PROVIDERS,
     import_current_session,
@@ -34,6 +35,22 @@ async def accounts_health() -> dict[str, int]:
         "available": available,
         "on_cooldown": total - available,
     }
+
+
+@router.get("/diagnostics")
+async def account_diagnostics(refresh: bool = False) -> dict[str, object]:
+    config = get_config()
+    manager = get_account_manager()
+    diagnostics = build_account_diagnostics_snapshot(config, manager, refresh=refresh)
+    return diagnostics
+
+
+@router.post("/diagnostics/refresh")
+async def refresh_account_diagnostics() -> dict[str, object]:
+    config = get_config()
+    manager = get_account_manager()
+    diagnostics = build_account_diagnostics_snapshot(config, manager, refresh=True)
+    return diagnostics
 
 
 @router.post("/{provider}/open-login")

@@ -9,8 +9,8 @@ import uuid
 from pathlib import Path
 from typing import Callable
 
-from autopilot.core.models import is_rate_limited
-from autopilot.core.providers import build_cli_command
+from autopilot.core.adapters import AdapterExecutionRequest, AdapterMode, get_adapter
+from autopilot.core.models import Profile, is_rate_limited
 
 IGNORED_PREFIXES = (".agents/", ".ralph/")
 TEMPLATE_DIR = Path(__file__).parent.parent / "templates"
@@ -200,6 +200,25 @@ def _run_command_with_progress(
     return success, output, rate_limited
 
 
+def _infer_runtime_profile(provider: str, env: dict[str, str], profile: Profile | None = None) -> Profile:
+    if profile is not None:
+        return profile
+
+    adapter = get_adapter(provider)
+    if adapter.provider_family == "codex":
+        runtime_path = env.get("CODEX_HOME", "")
+    else:
+        runtime_home = env.get("HOME", "")
+        runtime_path = str(Path(runtime_home).parent) if runtime_home else ""
+
+    return Profile(
+        name="runtime",
+        provider=adapter.provider_family,
+        adapter_id=adapter.adapter_id,
+        path=runtime_path or ".",
+    )
+
+
 def run_ralph_iteration(
     project_path: Path,
     env: dict[str, str],
@@ -273,38 +292,27 @@ def run_retry_iteration(
     timeout: int = 1800,
     on_progress: Callable[[int, str], None] | None = None,
     progress_interval: int = DEFAULT_PROGRESS_INTERVAL_SEC,
+    profile: Profile | None = None,
 ) -> tuple[bool, str, bool]:
     """Run a focused retry prompt after a failed or rejected iteration."""
     prompt = build_retry_prompt(story_id, story_title, story_description)
-    cmd = build_cli_command(provider, prompt, mode="exec")
-
-    if on_progress is not None:
-        return _run_command_with_progress(
-            cmd,
-            project_path=project_path,
+    runtime_profile = _infer_runtime_profile(provider, env, profile)
+    adapter = get_adapter(runtime_profile.resolved_adapter_id)
+    result = adapter.execute(
+        AdapterExecutionRequest(
+            profile=runtime_profile,
+            prompt=prompt,
+            workdir=project_path,
             env=env,
             timeout=timeout,
+            mode=AdapterMode.EXEC,
             on_progress=on_progress,
             progress_interval=progress_interval,
+            progress_message=lambda: _latest_worker_activity(project_path),
         )
-
-    try:
-        result = subprocess.run(
-            cmd,
-            cwd=str(project_path),
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            env=env,
-        )
-        output = f"{result.stdout}\n{result.stderr}".strip()
-        success = result.returncode == 0
-        rate_limited = is_rate_limited(output)
-        return success, output, rate_limited
-    except subprocess.TimeoutExpired:
-        return False, f"Timeout after {timeout}s", False
-    except Exception as exc:
-        return False, str(exc), False
+    )
+    parsed = adapter.parse_output(result)
+    return result.success, parsed.text, parsed.rate_limited
 
 
 def run_prompt_iteration(
@@ -315,37 +323,26 @@ def run_prompt_iteration(
     timeout: int = 1800,
     on_progress: Callable[[int, str], None] | None = None,
     progress_interval: int = DEFAULT_PROGRESS_INTERVAL_SEC,
+    profile: Profile | None = None,
 ) -> tuple[bool, str, bool]:
     """Run one generic provider prompt without invoking Ralph build mode."""
-    cmd = build_cli_command(provider, prompt, mode="exec")
-
-    if on_progress is not None:
-        return _run_command_with_progress(
-            cmd,
-            project_path=project_path,
+    runtime_profile = _infer_runtime_profile(provider, env, profile)
+    adapter = get_adapter(runtime_profile.resolved_adapter_id)
+    result = adapter.execute(
+        AdapterExecutionRequest(
+            profile=runtime_profile,
+            prompt=prompt,
+            workdir=project_path,
             env=env,
             timeout=timeout,
+            mode=AdapterMode.EXEC,
             on_progress=on_progress,
             progress_interval=progress_interval,
+            progress_message=lambda: _latest_worker_activity(project_path),
         )
-
-    try:
-        result = subprocess.run(
-            cmd,
-            cwd=str(project_path),
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            env=env,
-        )
-        output = f"{result.stdout}\n{result.stderr}".strip()
-        success = result.returncode == 0
-        rate_limited = is_rate_limited(output)
-        return success, output, rate_limited
-    except subprocess.TimeoutExpired:
-        return False, f"Timeout after {timeout}s", False
-    except Exception as exc:
-        return False, str(exc), False
+    )
+    parsed = adapter.parse_output(result)
+    return result.success, parsed.text, parsed.rate_limited
 
 
 def read_progress(project_path: Path) -> str:

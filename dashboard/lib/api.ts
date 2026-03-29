@@ -10,6 +10,7 @@ import type {
   LaunchPreset,
   PRD,
   ProjectDetail,
+  ProjectRuntimeControl,
   ProjectSummary,
   MCPConnector,
   RoutingPolicy,
@@ -48,6 +49,17 @@ export async function fetchProjects(includeArchived = false) {
 export async function fetchProject(projectId: string): Promise<ProjectDetail> {
   const res = await fetch(`${API_BASE}/projects/${encodeURIComponent(projectId)}`);
   return jsonOrThrow<ProjectDetail>(res, `Failed to fetch project: ${res.status}`);
+}
+
+export async function fetchProjectRuntimeControl(
+  projectId: string,
+  options?: { staleAfterSec?: number }
+): Promise<ProjectRuntimeControl> {
+  const staleAfterSec = options?.staleAfterSec ?? 900;
+  const res = await fetch(
+    `${API_BASE}/projects/${encodeURIComponent(projectId)}/runtime-control?stale_after_sec=${staleAfterSec}`
+  );
+  return jsonOrThrow<ProjectRuntimeControl>(res, `Failed to fetch runtime control state: ${res.status}`);
 }
 
 export async function createProjectFromPrd(
@@ -99,6 +111,47 @@ export async function skipStory(projectId: string, storyId: number) {
     { method: "POST" }
   );
   return jsonOrThrow<{ status: string; message: string }>(res, `Skip failed: ${res.status}`);
+}
+
+export async function recoverStoryCheckout(
+  projectId: string,
+  storyId: number,
+  options?: { cleanup_worktree?: boolean; reopen_story?: boolean }
+) {
+  const res = await fetch(
+    `${API_BASE}/projects/${encodeURIComponent(projectId)}/stories/${storyId}/recover-checkout`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        cleanup_worktree: options?.cleanup_worktree ?? true,
+        reopen_story: options?.reopen_story ?? false,
+      }),
+    }
+  );
+  return jsonOrThrow<{ status: string; project_id: string; story_id: number; cleanup_performed: boolean; reopened: boolean }>(
+    res,
+    `Checkout recovery failed: ${res.status}`
+  );
+}
+
+export async function recoverStaleProjectCheckouts(
+  projectId: string,
+  options?: { cleanup_worktrees?: boolean; reopen_stories?: boolean; stale_after_sec?: number }
+) {
+  const res = await fetch(`${API_BASE}/projects/${encodeURIComponent(projectId)}/runtime-control/recover-stale`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      cleanup_worktrees: options?.cleanup_worktrees ?? true,
+      reopen_stories: options?.reopen_stories ?? true,
+      stale_after_sec: options?.stale_after_sec ?? 900,
+    }),
+  });
+  return jsonOrThrow<{ status: string; project_id: string; stale_after_sec: number; recovered: Array<{ story_id: number; cleanup_performed: boolean; reopened: boolean }> }>(
+    res,
+    `Stale checkout recovery failed: ${res.status}`
+  );
 }
 
 export async function addStoryGuidance(projectId: string, storyId: number, payload: string) {

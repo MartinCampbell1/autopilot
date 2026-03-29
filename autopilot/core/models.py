@@ -30,11 +30,21 @@ class Profile:
     name: str
     provider: str
     path: str
+    adapter_id: str | None = None
     is_available: bool = True
     requests_made: int = 0
     last_used: float = 0.0
     cooldown_until: float = 0.0
     consecutive_errors: int = 0
+
+    @property
+    def resolved_adapter_id(self) -> str:
+        """Return the concrete runtime adapter to use for this profile."""
+        if self.adapter_id:
+            return self.adapter_id
+        if self.provider.endswith("_local"):
+            return self.provider
+        return f"{self.provider}_local"
 
     def mark_rate_limited(self, cooldown_base: int = 300) -> None:
         """Mark profile as rate-limited with exponential backoff."""

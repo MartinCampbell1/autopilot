@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import concurrent.futures
 import json
+import os
 import threading
 import time
 from pathlib import Path
@@ -18,6 +19,7 @@ from autopilot.core.config import load_config
 from autopilot.core.orchestrator import Orchestrator, StoryOutcome
 from autopilot.core.loop_runner import apply_autopilot_ralph_overrides, run_prompt_iteration
 from autopilot.core.project_store import (
+    auto_pause_project_run,
     emit_project_event,
     ensure_project_state,
     get_project_entry,
@@ -30,7 +32,16 @@ from autopilot.core.project_store import (
     update_project_runtime,
     update_story_runtime,
 )
-from autopilot.core.worktree import create_worktree, merge_worktree, remove_worktree
+from autopilot.core.runtime_agents import resolve_story_runtime_agent_id
+from autopilot.core.runtime_budgets import consume_iteration_budget
+from autopilot.core.runtime_control import (
+    RuntimeAgentRole,
+    WorkItemLeaseConflict,
+    claim_work_item_lease,
+    refresh_work_item_lease,
+    release_work_item_lease,
+)
+from autopilot.core.worktree import create_worktree, merge_worktree, remove_worktree, worktree_path
 
 console = Console()
 
@@ -149,11 +160,108 @@ def _iteration_message(outcome: StoryOutcome, orchestrator: Orchestrator) -> str
     return "Iteration completed."
 
 
+def _serialize_gate_results(gate_results: list[Any]) -> list[dict[str, Any]]:
+    return [
+        {
+            "name": gate_result.name,
+            "cmd": gate_result.cmd,
+            "passed": gate_result.passed,
+            "output": gate_result.output,
+            "required": gate_result.required,
+            "elapsed_sec": gate_result.elapsed_sec,
+        }
+        for gate_result in gate_results
+    ]
+
+
+def _last_iteration_extra(orchestrator: Orchestrator) -> dict[str, Any]:
+    if not orchestrator.iteration_history:
+        return {}
+    last_record = orchestrator.iteration_history[-1]
+    return {
+        "iteration": last_record.iteration,
+        "profile_used": last_record.profile_used,
+        "provider": last_record.provider,
+        "gates_passed": last_record.gates_passed,
+        "critic_approved": last_record.critic_approved,
+        "critic_feedback": last_record.critic_feedback,
+        "elapsed_sec": last_record.elapsed_sec,
+        "git_diff_empty": last_record.git_diff_empty,
+        "gate_failures": [
+            gate
+            for gate in _serialize_gate_results(last_record.gate_results)
+            if not gate["passed"]
+        ],
+    }
+
+
+def _story_agent_event_extra(
+    project_id: str,
+    story_id: int,
+    runtime_plan: dict[str, Any],
+    *,
+    worker_label: str | None = None,
+    critic_label: str | None = None,
+    primary_role: str | None = None,
+) -> dict[str, Any]:
+    team_members = runtime_plan.get("team_members") or []
+    worker_runtime_agent_id = resolve_story_runtime_agent_id(
+        project_id,
+        story_id,
+        role="worker",
+        team_members=team_members,
+        runtime_label=worker_label,
+    )
+    critic_runtime_agent_id = resolve_story_runtime_agent_id(
+        project_id,
+        story_id,
+        role="critic",
+        team_members=team_members,
+        runtime_label=critic_label,
+    )
+    specialist_runtime_agent_id = resolve_story_runtime_agent_id(
+        project_id,
+        story_id,
+        role="specialist",
+        team_members=team_members,
+    )
+    runtime_agent_ids = [
+        agent_id
+        for agent_id in (
+            worker_runtime_agent_id,
+            critic_runtime_agent_id,
+            specialist_runtime_agent_id,
+        )
+        if agent_id
+    ]
+    extra: dict[str, Any] = {
+        "runtime_agent_ids": runtime_agent_ids,
+    }
+    if worker_runtime_agent_id:
+        extra["worker_runtime_agent_id"] = worker_runtime_agent_id
+    if critic_runtime_agent_id:
+        extra["critic_runtime_agent_id"] = critic_runtime_agent_id
+    if specialist_runtime_agent_id:
+        extra["specialist_runtime_agent_id"] = specialist_runtime_agent_id
+
+    primary_agent_id = ""
+    if primary_role == "worker":
+        primary_agent_id = worker_runtime_agent_id or ""
+    elif primary_role == "critic":
+        primary_agent_id = critic_runtime_agent_id or ""
+    elif primary_role == "specialist":
+        primary_agent_id = specialist_runtime_agent_id or ""
+    if primary_agent_id:
+        extra["runtime_agent_id"] = primary_agent_id
+    return extra
+
+
 def _emit_worker_progress(
     config,
     project_id: str,
     story_id: int,
     iteration: int,
+    runtime_plan: dict[str, Any],
     worker_label: str,
     critic_label: str,
     elapsed_sec: int,
@@ -184,6 +292,14 @@ def _emit_worker_progress(
             "worker": worker_label,
             "critic": critic_label,
             "elapsed_sec": elapsed_sec,
+            **_story_agent_event_extra(
+                project_id,
+                story_id,
+                runtime_plan,
+                worker_label=worker_label,
+                critic_label=critic_label,
+                primary_role="worker",
+            ),
         },
     )
 
@@ -331,6 +447,27 @@ def run(
         with account_lock:
             account_mgr.mark_rate_limited(profile.provider, profile.name)
 
+    def reserve_iteration_budget(story_id: int, worker_label: str, critic_label: str) -> tuple[bool, str | None]:
+        with state_lock:
+            state = load_project_state(config, project_id)
+            allowed, reason = consume_iteration_budget(
+                state,
+                worker_label=worker_label,
+                critic_label=critic_label,
+            )
+            save_project_state(config, project_id, state)
+            if allowed:
+                return True, None
+
+            story_state = state.setdefault("story_state", {}).get(str(story_id))
+            if story_state is not None:
+                story_state["status"] = "open"
+                story_state["agent"] = None
+                story_state["critic"] = None
+                story_state["last_error"] = reason
+                save_project_state(config, project_id, state)
+            return False, reason
+
     def register_parallel_story(story_id: int | None) -> None:
         current_state = load_project_state(config, project_id)
         active_ids = list(current_state.get("parallel_story_ids") or [])
@@ -368,6 +505,12 @@ def run(
                 status="warning",
                 message="No specialist account available; proceeding without specialist preflight.",
                 story_id=story["id"],
+                extra=_story_agent_event_extra(
+                    project_id,
+                    int(story["id"]),
+                    runtime_plan,
+                    primary_role="specialist",
+                ),
             )
             return
 
@@ -387,6 +530,7 @@ def run(
             specialist_profile.provider,
             prompt,
             timeout=min(900, config.codex_timeout_sec),
+            profile=specialist_profile,
         )
         if rate_limited:
             mark_profile_rate_limited(specialist_profile)
@@ -395,6 +539,12 @@ def run(
                 status="warning",
                 message="Specialist preflight was rate limited; continuing without specialist notes.",
                 story_id=story["id"],
+                extra=_story_agent_event_extra(
+                    project_id,
+                    int(story["id"]),
+                    runtime_plan,
+                    primary_role="specialist",
+                ),
             )
             return
 
@@ -406,6 +556,12 @@ def run(
                 status="ok",
                 message=f"{specialist['label']} prepared implementation notes.",
                 story_id=story["id"],
+                extra=_story_agent_event_extra(
+                    project_id,
+                    int(story["id"]),
+                    runtime_plan,
+                    primary_role="specialist",
+                ),
             )
             return
 
@@ -415,6 +571,12 @@ def run(
             status="warning",
             message="Specialist preflight failed; primary worker will continue without specialist confidence.",
             story_id=story["id"],
+            extra=_story_agent_event_extra(
+                project_id,
+                int(story["id"]),
+                runtime_plan,
+                primary_role="specialist",
+            ),
         )
 
     def execute_story(story: dict[str, Any], *, parallel_slot: bool = False) -> str:
@@ -426,10 +588,72 @@ def run(
 
         execution_path = project
         branch_name: str | None = None
+        lease_owner = f"run:{os.getpid()}:story:{story_id}"
+        planned_checkout_path = project
+        planned_checkout_mode = "shared_main"
+        story_lease = None
+
+        if parallel_slot and launch_profile.project_concurrency_mode == "parallel":
+            branch_name = f"story-{story_id}"
+            planned_checkout_path = worktree_path(project, story_id)
+            planned_checkout_mode = "worktree"
+
+        try:
+            story_lease = claim_work_item_lease(
+                config,
+                project_id=project_id,
+                story_id=story_id,
+                role=RuntimeAgentRole.COORDINATOR,
+                owner=lease_owner,
+                runtime_pid=os.getpid(),
+                project_path=project,
+                checkout_path=planned_checkout_path,
+                branch_name=branch_name,
+            )
+        except WorkItemLeaseConflict as exc:
+            message = str(exc)
+            sync_story(
+                story_id,
+                last_error=message,
+                team_mode=runtime_plan["team_mode"],
+                team_members=runtime_plan["team_members"],
+                connector_activation=runtime_plan["active_connectors"],
+                activation_errors=runtime_plan["activation_errors"],
+                ownership={
+                    "role": exc.lease.role,
+                    "owner": exc.lease.owner,
+                    "acquired_at": exc.lease.acquired_at,
+                },
+                checkout={
+                    "mode": "worktree" if exc.lease.branch_name else "shared_main",
+                    "path": exc.lease.checkout_path or exc.lease.project_path,
+                    "branch_name": exc.lease.branch_name,
+                },
+            )
+            sync_event(
+                event="story_lease_conflict",
+                status="warning",
+                message=message,
+                story_id=story_id,
+                extra={
+                    "role": exc.lease.role,
+                    "owner": exc.lease.owner,
+                    "checkout_path": exc.lease.checkout_path or exc.lease.project_path,
+                    "project_path": exc.lease.project_path,
+                    "branch_name": exc.lease.branch_name,
+                    **_story_agent_event_extra(
+                        project_id,
+                        story_id,
+                        runtime_plan,
+                        primary_role="worker",
+                    ),
+                },
+            )
+            raise RuntimeError(message) from exc
+
         if parallel_slot and launch_profile.project_concurrency_mode == "parallel":
             try:
                 execution_path = create_worktree(project, story_id)
-                branch_name = f"story-{story_id}"
                 apply_autopilot_ralph_overrides(execution_path)
             except Exception as exc:
                 sync_story(
@@ -441,13 +665,42 @@ def run(
                     team_members=runtime_plan["team_members"],
                     connector_activation=runtime_plan["active_connectors"],
                     activation_errors=[f"Failed to create worktree: {exc}"],
+                    ownership={
+                        "role": story_lease.role,
+                        "owner": story_lease.owner,
+                        "acquired_at": story_lease.acquired_at,
+                    } if story_lease is not None else None,
+                    checkout={
+                        "mode": planned_checkout_mode,
+                        "path": str(planned_checkout_path),
+                        "branch_name": branch_name,
+                    },
                 )
                 sync_event(
                     event="story_stuck",
                     status="stuck",
                     message=f"Failed to create story worktree: {exc}",
                     story_id=story_id,
+                    extra={
+                        "error": str(exc),
+                        "checkout_mode": planned_checkout_mode,
+                        "checkout_path": str(planned_checkout_path),
+                        "branch_name": branch_name,
+                        **_story_agent_event_extra(
+                            project_id,
+                            story_id,
+                            runtime_plan,
+                            primary_role="worker",
+                        ),
+                    },
                 )
+                release_work_item_lease(
+                    config,
+                    project_id=project_id,
+                    story_id=story_id,
+                    owner=lease_owner,
+                )
+                sync_story(story_id, ownership=None, checkout=None)
                 return "stuck"
 
         register_parallel_story(story_id if parallel_slot else None)
@@ -463,6 +716,16 @@ def run(
             activation_errors=runtime_plan["activation_errors"],
             worktree_path=str(execution_path) if execution_path != project else None,
             branch_name=branch_name,
+            ownership={
+                "role": story_lease.role,
+                "owner": story_lease.owner,
+                "acquired_at": story_lease.acquired_at,
+            } if story_lease is not None else None,
+            checkout={
+                "mode": planned_checkout_mode,
+                "path": str(execution_path),
+                "branch_name": branch_name,
+            },
         )
         sync_project(
             status="running",
@@ -479,7 +742,34 @@ def run(
             status="in_progress",
             message=story_title,
             story_id=story_id,
+            extra={
+                "team_mode": runtime_plan["team_mode"],
+                "team_members": runtime_plan["team_members"],
+                "connector_activation": runtime_plan["active_connectors"],
+                "activation_errors": runtime_plan["activation_errors"],
+                "checkout": {
+                    "mode": planned_checkout_mode,
+                    "path": str(execution_path),
+                    "branch_name": branch_name,
+                },
+                **_story_agent_event_extra(
+                    project_id,
+                    story_id,
+                    runtime_plan,
+                ),
+            },
         )
+
+        def touch_story_lease(*, status: str | None = None) -> None:
+            refresh_work_item_lease(
+                config,
+                project_id=project_id,
+                story_id=story_id,
+                owner=lease_owner,
+                status=status,
+                checkout_path=execution_path,
+                branch_name=branch_name,
+            )
 
         _write_team_context(execution_path, runtime_plan)
         if runtime_plan["activation_errors"]:
@@ -489,6 +779,12 @@ def run(
                 status="stuck",
                 completed_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                 last_error=message,
+                ownership=None,
+                checkout=None if execution_path != project else {
+                    "mode": planned_checkout_mode,
+                    "path": str(execution_path),
+                    "branch_name": branch_name,
+                },
             )
             sync_project(last_error=message)
             sync_event(
@@ -496,8 +792,32 @@ def run(
                 status="stuck",
                 message=message,
                 story_id=story_id,
+                extra={
+                    "activation_errors": runtime_plan["activation_errors"],
+                    "connector_activation": runtime_plan["active_connectors"],
+                    "team_mode": runtime_plan["team_mode"],
+                    "team_members": runtime_plan["team_members"],
+                    "checkout": {
+                        "mode": planned_checkout_mode,
+                        "path": str(execution_path),
+                        "branch_name": branch_name,
+                    },
+                    **_story_agent_event_extra(
+                        project_id,
+                        story_id,
+                        runtime_plan,
+                        primary_role="worker",
+                    ),
+                },
             )
             unregister_parallel_story(story_id)
+            release_work_item_lease(
+                config,
+                project_id=project_id,
+                story_id=story_id,
+                owner=lease_owner,
+            )
+            sync_story(story_id, ownership=None, checkout=None)
             return "stuck"
 
         story_project_entry = {**project_entry, "path": str(execution_path)}
@@ -527,6 +847,32 @@ def run(
                 critic_env = account_mgr.build_env(critic_profile)
                 worker_label = f"{worker_profile.provider}/{worker_profile.name}"
                 critic_label = f"{critic_profile.provider}/{critic_profile.name}"
+                allowed_budget, budget_reason = reserve_iteration_budget(story_id, worker_label, critic_label)
+                if not allowed_budget:
+                    auto_pause_project_run(
+                        config,
+                        project_id,
+                        message=budget_reason or "Runtime budget exhausted.",
+                        story_id=story_id,
+                        extra={
+                            "worker": worker_label,
+                            "critic": critic_label,
+                            **_story_agent_event_extra(
+                                project_id,
+                                story_id,
+                                runtime_plan,
+                                worker_label=worker_label,
+                                critic_label=critic_label,
+                                primary_role="worker",
+                            ),
+                        },
+                    )
+                    sync_story(
+                        story_id,
+                        last_error=budget_reason,
+                    )
+                    unregister_parallel_story(story_id)
+                    return "paused"
 
                 sync_story(
                     story_id,
@@ -543,6 +889,7 @@ def run(
                     active_worker=worker_label,
                     active_critic=critic_label,
                 )
+                touch_story_lease(status="active")
 
                 ralph_prd_path = _write_ralph_story_snapshot(story_project_entry, story_id)
                 sync_event(
@@ -554,6 +901,14 @@ def run(
                         "iteration": iteration,
                         "worker": worker_label,
                         "critic": critic_label,
+                        **_story_agent_event_extra(
+                            project_id,
+                            story_id,
+                            runtime_plan,
+                            worker_label=worker_label,
+                            critic_label=critic_label,
+                            primary_role="worker",
+                        ),
                     },
                 )
 
@@ -568,17 +923,22 @@ def run(
                     critic_env=critic_env,
                     retry_only=iteration > 1,
                     ralph_prd_path=ralph_prd_path,
-                    progress_callback=lambda elapsed_sec, detail, *, _story_id=story_id, _iteration=iteration, _worker=worker_label, _critic=critic_label: _emit_worker_progress(
-                        config,
-                        project_id,
-                        _story_id,
-                        _iteration,
-                        _worker,
-                        _critic,
-                        elapsed_sec,
-                        detail,
-                    ),
+                    progress_callback=lambda elapsed_sec, detail, *, _story_id=story_id, _iteration=iteration, _worker=worker_label, _critic=critic_label: (
+                        touch_story_lease(status="active"),
+                        _emit_worker_progress(
+                            config,
+                            project_id,
+                            _story_id,
+                            _iteration,
+                            runtime_plan,
+                            _worker,
+                            _critic,
+                            elapsed_sec,
+                            detail,
+                        ),
+                    )[-1],
                 )
+                touch_story_lease(status="active")
 
                 if outcome == StoryOutcome.APPROVED:
                     timestamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
@@ -593,6 +953,7 @@ def run(
                                 status="merge_blocked",
                                 completed_at=timestamp,
                                 last_error=message,
+                                ownership=None,
                             )
                             sync_project(
                                 current_iteration=0,
@@ -605,7 +966,22 @@ def run(
                                 status="merge_blocked",
                                 message=message,
                                 story_id=story_id,
+                                extra={
+                                    "branch_name": branch_name,
+                                    "worktree_path": str(execution_path),
+                                    "merge_target_path": str(project),
+                                    **_story_agent_event_extra(
+                                        project_id,
+                                        story_id,
+                                        runtime_plan,
+                                        worker_label=worker_label,
+                                        critic_label=critic_label,
+                                        primary_role="worker",
+                                    ),
+                                    **_last_iteration_extra(story_orchestrator),
+                                },
                             )
+                            touch_story_lease(status="merge_blocked")
                             unregister_parallel_story(story_id)
                             return "merge_blocked"
 
@@ -615,6 +991,8 @@ def run(
                         completed_at=timestamp,
                         worktree_path=None,
                         branch_name=None,
+                        ownership=None,
+                        checkout=None,
                     )
                     sync_project(
                         current_story_id=None if not parallel_slot else load_project_state(config, project_id).get("current_story_id"),
@@ -628,7 +1006,20 @@ def run(
                         status="done",
                         message=story_title,
                         story_id=story_id,
+                        extra={
+                            "branch_name": branch_name,
+                            **_story_agent_event_extra(
+                                project_id,
+                                story_id,
+                                runtime_plan,
+                                worker_label=worker_label,
+                                critic_label=critic_label,
+                                primary_role="worker",
+                            ),
+                            **_last_iteration_extra(story_orchestrator),
+                        },
                     )
+                    touch_story_lease(status="completed")
                     unregister_parallel_story(story_id)
                     approved = True
                     continue
@@ -643,14 +1034,58 @@ def run(
                     StoryOutcome.WORKER_FAILED,
                 ):
                     message = _iteration_message(outcome, story_orchestrator)
+                    iteration_extra = {
+                        "outcome": outcome.value,
+                        **_last_iteration_extra(story_orchestrator),
+                    }
+                    if outcome == StoryOutcome.GATE_FAILED:
+                        event_name = "story_gate_failed"
+                        iteration_extra["gate_failure_count"] = len(iteration_extra.get("gate_failures", []))
+                        iteration_extra.update(
+                            _story_agent_event_extra(
+                                project_id,
+                                story_id,
+                                runtime_plan,
+                                worker_label=worker_label,
+                                critic_label=critic_label,
+                                primary_role="worker",
+                            )
+                        )
+                    elif outcome == StoryOutcome.CRITIC_REJECTED:
+                        event_name = "critic_rejected"
+                        iteration_extra.update(
+                            _story_agent_event_extra(
+                                project_id,
+                                story_id,
+                                runtime_plan,
+                                worker_label=worker_label,
+                                critic_label=critic_label,
+                                primary_role="critic",
+                            )
+                        )
+                    else:
+                        event_name = "worker_failed"
+                        iteration_extra["worker_error"] = message
+                        iteration_extra.update(
+                            _story_agent_event_extra(
+                                project_id,
+                                story_id,
+                                runtime_plan,
+                                worker_label=worker_label,
+                                critic_label=critic_label,
+                                primary_role="worker",
+                            )
+                        )
                     sync_event(
-                        event="critic_rejected" if outcome == StoryOutcome.CRITIC_REJECTED else "worker_failed",
+                        event=event_name,
                         status="error",
                         message=message,
                         story_id=story_id,
+                        extra=iteration_extra,
                     )
                     sync_project(last_error=message)
                     sync_story(story_id, last_error=message)
+                    touch_story_lease(status="active")
                     if story_orchestrator.check_stuck():
                         stuck_message = story_orchestrator.stuck_detector.summary()
                         console.print(f"[red]Story #{story_id} is stuck. Skipping.[/red]")
@@ -659,6 +1094,8 @@ def run(
                             status="stuck",
                             completed_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                             last_error=stuck_message,
+                            ownership=None,
+                            checkout=None,
                         )
                         sync_project(
                             current_iteration=0,
@@ -671,7 +1108,20 @@ def run(
                             status="stuck",
                             message=stuck_message,
                             story_id=story_id,
+                            extra={
+                                "stuck_summary": stuck_message,
+                                **_story_agent_event_extra(
+                                    project_id,
+                                    story_id,
+                                    runtime_plan,
+                                    worker_label=worker_label,
+                                    critic_label=critic_label,
+                                    primary_role="worker",
+                                ),
+                                **_last_iteration_extra(story_orchestrator),
+                            },
                         )
+                        touch_story_lease(status="stuck")
                         unregister_parallel_story(story_id)
                         return "stuck"
                     continue
@@ -684,6 +1134,18 @@ def run(
                     status="failed",
                     message=message,
                     story_id=story_id,
+                    extra={
+                        "outcome": str(outcome),
+                        **_story_agent_event_extra(
+                            project_id,
+                            story_id,
+                            runtime_plan,
+                            worker_label=worker_label,
+                            critic_label=critic_label,
+                            primary_role="worker",
+                        ),
+                        **_last_iteration_extra(story_orchestrator),
+                    },
                 )
                 unregister_parallel_story(story_id)
                 return "failed"
@@ -692,12 +1154,25 @@ def run(
                 story_state = load_project_state(config, project_id).get("story_state", {}).get(str(story_id), {})
                 if story_state.get("status") != "merge_blocked":
                     remove_worktree(project, execution_path)
+            if story_lease is not None:
+                release_work_item_lease(
+                    config,
+                    project_id=project_id,
+                    story_id=story_id,
+                    owner=lease_owner,
+                )
+                story_state = load_project_state(config, project_id).get("story_state", {}).get(str(story_id), {})
+                checkout_update = {} if story_state.get("status") == "merge_blocked" else {"checkout": None}
+                sync_story(story_id, ownership=None, **checkout_update)
 
         return "done"
 
     try:
         while True:
             state = ensure_project_state(config, project_entry, seed_mode="migrate")
+            if state.get("paused"):
+                console.print("[yellow]Project paused.[/yellow]")
+                break
             reopened_story_ids = requeue_recoverable_stuck_stories(config, project_id)
             if reopened_story_ids:
                 for reopened_story_id in reopened_story_ids:
@@ -737,7 +1212,9 @@ def run(
                         future.result()
                 continue
 
-            execute_story(open_stories[0], parallel_slot=False)
+            result = execute_story(open_stories[0], parallel_slot=False)
+            if result == "paused":
+                break
     except Exception as exc:  # pragma: no cover - defensive top-level sync
         update_project_runtime(config, project_id, status="failed", last_error=str(exc), pid=None)
         emit_project_event(
@@ -746,6 +1223,7 @@ def run(
             event="run_failed",
             status="failed",
             message=str(exc),
+            extra={"exception_type": type(exc).__name__},
         )
         raise
 

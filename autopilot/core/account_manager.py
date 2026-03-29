@@ -7,6 +7,7 @@ import shutil
 import time
 from pathlib import Path
 
+from autopilot.core.adapters import get_adapter, list_provider_families
 from autopilot.core.models import Profile
 
 
@@ -24,7 +25,8 @@ class AccountManager:
         self.pools.clear()
         self._indexes.clear()
 
-        for provider in ("codex", "claude", "gemini"):
+        for provider in list_provider_families():
+            adapter = get_adapter(provider)
             provider_dir = self.profiles_dir / provider
             if not provider_dir.exists():
                 continue
@@ -34,17 +36,14 @@ class AccountManager:
                 if not account_dir.is_dir() or not account_dir.name.startswith("acc"):
                     continue
 
-                if provider == "codex":
-                    has_codex_files = (account_dir / "config.toml").exists() or (account_dir / "auth.json").exists()
-                    if not has_codex_files:
-                        continue
-                elif not (account_dir / "home").exists():
+                if not adapter.profile_is_valid(account_dir):
                     continue
 
                 profiles.append(
                     Profile(
                         name=account_dir.name,
                         provider=provider,
+                        adapter_id=adapter.adapter_id,
                         path=str(account_dir),
                     )
                 )
@@ -123,27 +122,5 @@ class AccountManager:
     def build_env(self, profile: Profile) -> dict[str, str]:
         """Build environment variables for a CLI invocation using this profile."""
         env = os.environ.copy()
-        real_home = str(Path.home())
-
-        if profile.provider == "codex":
-            env["CODEX_HOME"] = profile.path
-            return env
-
-        if profile.provider in ("claude", "gemini"):
-            env["HOME"] = str(Path(profile.path) / "home")
-            env["PATH"] = ":".join(
-                [
-                    "/opt/homebrew/bin",
-                    "/opt/homebrew/sbin",
-                    "/usr/local/bin",
-                    "/usr/bin",
-                    "/bin",
-                    f"{real_home}/.npm-global/bin",
-                    f"{real_home}/.local/bin",
-                    f"{real_home}/.cargo/bin",
-                    f"{real_home}/.bun/bin",
-                    env.get("PATH", ""),
-                ]
-            )
-
-        return env
+        adapter = get_adapter(profile.resolved_adapter_id)
+        return adapter.build_env(profile, env)

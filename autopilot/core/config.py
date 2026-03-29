@@ -54,6 +54,14 @@ class AutopilotConfig:
         return self.autopilot_home / "state"
 
     @property
+    def account_probe_state_path(self) -> Path:
+        return self.runtime_state_dir / "account-probes.json"
+
+    @property
+    def control_plane_state_dir(self) -> Path:
+        return self.runtime_state_dir / "control-plane"
+
+    @property
     def events_log_path(self) -> Path:
         return self.autopilot_home / "events" / "events.jsonl"
 

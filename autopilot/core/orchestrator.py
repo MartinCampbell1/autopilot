@@ -76,6 +76,7 @@ class Orchestrator:
                 story_description,
                 self.config.codex_timeout_sec,
                 on_progress=progress_callback,
+                profile=profile,
             )
         else:
             success, output, rate_limited = run_ralph_iteration(
@@ -152,6 +153,7 @@ class Orchestrator:
             provider=critic_profile.provider,
             env=critic_env,
             workdir=self.project_path,
+            profile=critic_profile,
         )
         if not critic_result.approved and not feedback_is_actionable(critic_result.feedback):
             console.print("  [yellow]Critic[/yellow] returned non-actionable feedback; retrying once...")
@@ -166,6 +168,7 @@ class Orchestrator:
                 provider=critic_profile.provider,
                 env=critic_env,
                 workdir=self.project_path,
+                profile=critic_profile,
             )
             if retry_result.approved or feedback_is_actionable(retry_result.feedback):
                 critic_result = retry_result

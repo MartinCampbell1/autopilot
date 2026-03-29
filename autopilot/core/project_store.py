@@ -30,6 +30,7 @@ from autopilot.core.capability_store import (
 )
 from autopilot.core.config import AutopilotConfig
 from autopilot.core.loop_runner import apply_autopilot_ralph_overrides, check_ralph_installed, init_ralph_project
+from autopilot.core.runtime_budgets import default_budget_policy, default_budget_usage, ensure_budget_state, update_budget_policy
 
 TIMELINE_LIMIT = 300
 TERMINAL_STORY_STATUSES = {"done", "skipped", "stuck", "merge_blocked"}
@@ -367,6 +368,8 @@ def _story_state_from_definition(story: dict[str, Any]) -> dict[str, Any]:
         "activation_errors": [],
         "worktree_path": None,
         "branch_name": None,
+        "ownership": None,
+        "checkout": None,
     }
 
 
@@ -388,6 +391,8 @@ def _requeue_interrupted_stories(state: dict[str, Any], fallback_error: str) -> 
         story_state["activation_errors"] = []
         story_state["worktree_path"] = None
         story_state["branch_name"] = None
+        story_state["ownership"] = None
+        story_state["checkout"] = None
         changed = True
 
     if changed:
@@ -418,6 +423,8 @@ def _default_runtime_state(project_id: str, prd: dict[str, Any]) -> dict[str, An
         "launch_profile": normalize_launch_profile().model_dump(),
         "activation_errors": [],
         "parallel_story_ids": [],
+        "budget_policy": default_budget_policy(),
+        "budget_usage": default_budget_usage(),
         "story_state": {
             str(story["id"]): _story_state_from_definition(story) for story in prd.get("stories", [])
         },
@@ -475,8 +482,11 @@ def ensure_project_state(
     state.setdefault("launch_profile", normalize_launch_profile().model_dump())
     state.setdefault("activation_errors", [])
     state.setdefault("parallel_story_ids", [])
+    state.setdefault("budget_policy", default_budget_policy())
+    state.setdefault("budget_usage", default_budget_usage())
     state.setdefault("timeline", [])
     state.setdefault("story_state", {})
+    ensure_budget_state(state)
 
     synchronized_story_state: dict[str, Any] = {}
     for story in prd.get("stories", []):
@@ -502,6 +512,8 @@ def ensure_project_state(
         current.setdefault("activation_errors", [])
         current.setdefault("worktree_path", None)
         current.setdefault("branch_name", None)
+        current.setdefault("ownership", None)
+        current.setdefault("checkout", None)
         synchronized_story_state[key] = current
     if synchronized_story_state != state["story_state"]:
         state["story_state"] = synchronized_story_state
@@ -591,16 +603,24 @@ def emit_project_event(
     timeline.append(event_record)
     state["timeline"] = timeline[-TIMELINE_LIMIT:]
     state["updated_at"] = event_record["timestamp"]
-    if event in {"worker_failed", "critic_rejected", "story_stuck", "run_failed"}:
+    if event in {"worker_failed", "story_gate_failed", "critic_rejected", "story_stuck", "run_failed"}:
         state["last_error"] = message
     if story_id is not None:
         story_state = state.setdefault("story_state", {}).get(str(story_id))
         if story_state is not None:
             story_state["updated_at"] = event_record["timestamp"]
-            if event in {"worker_failed", "critic_rejected", "story_stuck"}:
+            if event in {"worker_failed", "story_gate_failed", "critic_rejected", "story_stuck"}:
                 story_state["last_error"] = message
     save_project_state(config, project_id, state)
     _append_event_log(config, event_record)
+    # Runtime issue synchronization is best-effort: execution must not fail because control-plane issue
+    # bookkeeping could not be updated.
+    try:
+        from autopilot.core.control_plane_issues import sync_runtime_issue_from_event
+
+        sync_runtime_issue_from_event(config, event_record)
+    except Exception:
+        pass
     return event_record
 
 
@@ -679,6 +699,8 @@ def requeue_recoverable_stuck_stories(config: AutopilotConfig, project_id: str) 
         entry["activation_errors"] = []
         entry["worktree_path"] = None
         entry["branch_name"] = None
+        entry["ownership"] = None
+        entry["checkout"] = None
         reopened.append(int(entry["story_id"]))
 
     if not reopened:
@@ -778,6 +800,8 @@ def merge_project_stories(
                 "activation_errors": runtime_metadata["activation_errors"],
                 "worktree_path": runtime.get("worktree_path"),
                 "branch_name": runtime.get("branch_name"),
+                "ownership": runtime.get("ownership"),
+                "checkout": runtime.get("checkout"),
             }
         )
     return merged
@@ -828,6 +852,8 @@ def build_project_summary(config: AutopilotConfig, project: dict[str, Any]) -> d
         "last_message": _sanitize_message(last_event["message"]) if last_event else "",
         "pid": state.get("pid"),
         "launch_profile": state.get("launch_profile", normalize_launch_profile().model_dump()),
+        "budget_policy": state.get("budget_policy", default_budget_policy()),
+        "budget_usage": state.get("budget_usage", default_budget_usage()),
     }
 
 
@@ -884,10 +910,26 @@ def build_project_detail(config: AutopilotConfig, project_id: str) -> dict[str, 
         "active_critic": state.get("active_critic"),
         "current_iteration": state.get("current_iteration", 0),
         "launch_profile": state.get("launch_profile", normalize_launch_profile().model_dump()),
+        "budget_policy": state.get("budget_policy", default_budget_policy()),
+        "budget_usage": state.get("budget_usage", default_budget_usage()),
         "team_assignments": team_assignments,
         "active_connectors": active_connectors,
         "activation_errors": activation_errors,
     }
+
+
+def update_project_budget_policy(
+    config: AutopilotConfig,
+    project_id: str,
+    **fields: Any,
+) -> dict[str, Any]:
+    """Update a project's runtime budget policy."""
+    state = load_project_state(config, project_id)
+    if not state:
+        raise KeyError(project_id)
+    policy = update_budget_policy(state, updates=fields)
+    save_project_state(config, project_id, state)
+    return policy
 
 
 def append_guidance(config: AutopilotConfig, project_id: str, payload: str, story_id: int | None = None) -> None:
@@ -1120,6 +1162,43 @@ def pause_project_run(config: AutopilotConfig, project_id: str) -> str:
         story_id=state.get("current_story_id"),
     )
     return "Project paused."
+
+
+def auto_pause_project_run(
+    config: AutopilotConfig,
+    project_id: str,
+    *,
+    message: str,
+    story_id: int | None = None,
+    extra: dict[str, Any] | None = None,
+) -> str:
+    """Pause a project from inside the runtime without sending signals to the current process."""
+    state = load_project_state(config, project_id)
+    if not state:
+        raise KeyError(project_id)
+
+    state.update(
+        {
+            "pid": None,
+            "status": "paused",
+            "paused": True,
+            "active_worker": None,
+            "active_critic": None,
+            "parallel_story_ids": [],
+            "last_error": message,
+        }
+    )
+    save_project_state(config, project_id, state)
+    emit_project_event(
+        config,
+        project_id,
+        event="budget_paused",
+        status="paused",
+        message=message,
+        story_id=story_id,
+        extra=extra,
+    )
+    return message
 
 
 def resume_project_run(config: AutopilotConfig, project_id: str) -> tuple[bool, Path | None, str]:

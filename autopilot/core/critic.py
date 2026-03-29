@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import re
 import subprocess
-import tempfile
 import time
 from pathlib import Path
 
-from autopilot.core.models import CriticResult
+from autopilot.core.adapters import AdapterExecutionRequest, AdapterMode, get_adapter
+from autopilot.core.models import CriticResult, Profile
 
 TEMPLATE_DIR = Path(__file__).parent.parent / "templates"
 ISSUE_PATTERN = re.compile(r"^\s*-\s*Issue\b.*", re.IGNORECASE)
@@ -237,76 +237,46 @@ def run_critic(
     env: dict[str, str],
     workdir: Path,
     timeout: int = 600,
+    profile: Profile | None = None,
 ) -> CriticResult:
     """Run the configured provider CLI and parse the critic result."""
     started_at = time.time()
 
-    if provider == "codex":
-        output_file = None
-        try:
-            with tempfile.NamedTemporaryFile(prefix="autopilot-critic-", suffix=".txt", delete=False) as handle:
-                output_file = Path(handle.name)
-            cmd = [
-                "codex",
-                "exec",
-                "--full-auto",
-                "--skip-git-repo-check",
-                "--ephemeral",
-                "-o",
-                str(output_file),
-                "-",
-            ]
-            result = subprocess.run(
-                cmd,
-                cwd=str(workdir),
-                input=prompt,
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-                env=env,
-            )
-            raw_output = output_file.read_text().strip() if output_file.exists() and output_file.read_text().strip() else result.stdout + result.stderr
-        except subprocess.TimeoutExpired:
-            raw_output = "TIMEOUT: critic did not respond within time limit"
-        except Exception as exc:
-            raw_output = f"ERROR: {exc}"
-        finally:
-            if output_file and output_file.exists():
-                output_file.unlink(missing_ok=True)
-    elif provider == "claude":
-        cmd = ["claude", "-p", prompt]
-        try:
-            result = subprocess.run(
-                cmd,
-                cwd=str(workdir),
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-                env=env,
-            )
-            raw_output = result.stdout + result.stderr
-        except subprocess.TimeoutExpired:
-            raw_output = "TIMEOUT: critic did not respond within time limit"
-        except Exception as exc:
-            raw_output = f"ERROR: {exc}"
-    elif provider == "gemini":
-        cmd = ["gemini", "-p", prompt]
-        try:
-            result = subprocess.run(
-                cmd,
-                cwd=str(workdir),
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-                env=env,
-            )
-            raw_output = result.stdout + result.stderr
-        except subprocess.TimeoutExpired:
-            raw_output = "TIMEOUT: critic did not respond within time limit"
-        except Exception as exc:
-            raw_output = f"ERROR: {exc}"
-    else:
+    try:
+        adapter = get_adapter(profile.resolved_adapter_id if profile is not None else provider)
+    except ValueError:
         return CriticResult(approved=False, feedback=f"Unknown provider: {provider}", raw_output="")
+
+    runtime_profile = profile
+    if runtime_profile is None:
+        if adapter.provider_family == "codex":
+            runtime_path = env.get("CODEX_HOME", "")
+        else:
+            runtime_home = env.get("HOME", "")
+            runtime_path = str(Path(runtime_home).parent) if runtime_home else ""
+        runtime_profile = Profile(
+            name="runtime",
+            provider=adapter.provider_family,
+            adapter_id=adapter.adapter_id,
+            path=runtime_path or ".",
+        )
+
+    execution = adapter.execute(
+        AdapterExecutionRequest(
+            profile=runtime_profile,
+            prompt=prompt,
+            workdir=workdir,
+            env=env,
+            timeout=timeout,
+            mode=AdapterMode.CRITIC,
+        )
+    )
+    parsed_output = adapter.parse_output(execution)
+    raw_output = parsed_output.text
+    if execution.timed_out and not raw_output:
+        raw_output = "TIMEOUT: critic did not respond within time limit"
+    elif not raw_output and execution.stderr:
+        raw_output = execution.stderr
 
     parsed = parse_critic_output(raw_output)
     parsed.elapsed_sec = round(time.time() - started_at, 2)
