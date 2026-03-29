@@ -10,6 +10,7 @@ from autopilot.core.approvals import decide_approval, get_approval, list_approva
 from autopilot.core.control_plane_issues import get_issue, list_issues, resolve_issue
 from autopilot.core.execution_brief import ExecutionBrief
 from autopilot.core.execution_plane import (
+    apply_execution_plane_orchestrator_session_recommendation,
     apply_execution_command_approval,
     build_execution_plane_orchestrator_session_control,
     build_execution_plane_project_detail,
@@ -174,6 +175,13 @@ class OrchestratorSessionActionBatchRequest(BaseModel):
     limit: int = Field(default=20, ge=1, le=100)
     continue_on_error: bool = True
     include_non_executable: bool = False
+
+
+class OrchestratorSessionRecommendationRequest(BaseModel):
+    recommendation_kind: str
+    actor: str = "external-orchestrator"
+    reason: str = ""
+    idempotency_key: str = ""
 
 
 class CommandPolicyRequest(BaseModel):
@@ -543,6 +551,29 @@ async def get_execution_orchestrator_session_control(session_id: str) -> dict[st
         }
     except KeyError as exc:
         raise HTTPException(404, f"Orchestrator session {session_id} not found") from exc
+
+
+@router.post("/orchestrator-sessions/{session_id}/control/apply")
+async def apply_execution_orchestrator_session_recommendation(
+    session_id: str,
+    request: OrchestratorSessionRecommendationRequest,
+) -> dict[str, object]:
+    config = get_config()
+    try:
+        return apply_execution_plane_orchestrator_session_recommendation(
+            config,
+            session_id,
+            recommendation_kind=request.recommendation_kind,
+            actor=request.actor,
+            reason=request.reason,
+            idempotency_key=request.idempotency_key,
+        )
+    except KeyError as exc:
+        raise HTTPException(404, f"Orchestrator session {session_id} not found") from exc
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(409, str(exc)) from exc
 
 
 @router.post("/orchestrator-sessions/{session_id}/status")

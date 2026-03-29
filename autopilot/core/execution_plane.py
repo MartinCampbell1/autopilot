@@ -2131,6 +2131,175 @@ def build_execution_plane_orchestrator_session_control(
     }
 
 
+def _get_execution_plane_orchestrator_session_control_recommendation(
+    config: AutopilotConfig,
+    session_id: str,
+    recommendation_kind: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    control = build_execution_plane_orchestrator_session_control(config, session_id)
+    normalized_kind = recommendation_kind.strip()
+    recommendation = next(
+        (
+            item
+            for item in control.get("recommendations") or []
+            if str(item.get("kind") or "") == normalized_kind
+        ),
+        None,
+    )
+    if recommendation is None:
+        raise ValueError(
+            f"Orchestrator session `{session_id}` does not currently expose recommendation `{normalized_kind}`."
+        )
+    return control, recommendation
+
+
+def apply_execution_plane_orchestrator_session_recommendation(
+    config: AutopilotConfig,
+    session_id: str,
+    *,
+    recommendation_kind: str,
+    actor: str,
+    reason: str = "",
+    idempotency_key: str = "",
+) -> dict[str, Any]:
+    """Apply one typed orchestrator-session control recommendation."""
+
+    session = get_orchestrator_session(config, session_id)
+    if session is None:
+        raise KeyError(session_id)
+
+    control, recommendation = _get_execution_plane_orchestrator_session_control_recommendation(
+        config,
+        session_id,
+        recommendation_kind,
+    )
+    operation = dict(recommendation.get("operation") or {})
+    operation_type = str(operation.get("type") or "").strip()
+    operation_mode = str(operation.get("mode") or "").strip()
+    operation_payload = dict(operation.get("payload") or {})
+    normalized_reason = reason.strip() or str(recommendation.get("reason") or "")
+    normalized_idempotency_key = idempotency_key.strip()
+
+    result: dict[str, Any]
+    if operation_type == "session_action_batch":
+        result = execute_execution_plane_orchestrator_session_actions(
+            config,
+            session_id,
+            action_keys=[str(item) for item in (operation_payload.get("action_keys") or []) if str(item).strip()] or None,
+            idempotency_key=normalized_idempotency_key,
+            actor=actor,
+            mode=str(operation_payload.get("mode") or "auto"),
+            reason=normalized_reason,
+            policy_profile=(
+                str(operation_payload.get("policy_profile") or "").strip() or None
+            ),
+            policy_overrides=None,
+            dry_run=operation_mode == "preview",
+            include_archived=bool(operation_payload.get("include_archived", False)),
+            status=str(operation_payload.get("status") or "").strip() or None,
+            role=str(operation_payload.get("role") or "").strip() or None,
+            attention_state=str(operation_payload.get("attention_state") or "").strip() or None,
+            recommendation_kind=str(operation_payload.get("recommendation_kind") or "").strip() or None,
+            suggested_command=str(operation_payload.get("suggested_command") or "").strip() or None,
+            actionable_only=bool(operation_payload.get("actionable_only", True)),
+            command_requires_approval=operation_payload.get("command_requires_approval"),
+            priority=str(operation_payload.get("priority") or "").strip() or None,
+            limit=int(operation_payload.get("limit") or 20),
+            continue_on_error=bool(operation_payload.get("continue_on_error", True)),
+            include_non_executable=bool(operation_payload.get("include_non_executable", False)),
+        )
+    elif operation_type == "session_status_update":
+        result = {
+            "status": "ok",
+            "session": update_execution_plane_orchestrator_session_status(
+                config,
+                session_id=session_id,
+                status=str(operation_payload.get("status") or "completed"),
+                actor=actor,
+                note=normalized_reason,
+            ),
+        }
+    elif operation_type == "inspect_session_approvals":
+        approvals = [
+            approval.model_dump()
+            for approval in list_approvals(config)
+            if approval.id in set(session.linked_approval_ids)
+        ]
+        pending_approvals = [approval for approval in approvals if approval.get("status") == "pending"]
+        result = {
+            "status": "ok",
+            "approvals": approvals,
+            "pending_approvals": pending_approvals,
+            "counts": {
+                "approvals": len(approvals),
+                "pending_approvals": len(pending_approvals),
+            },
+        }
+    elif operation_type == "inspect_session_issues":
+        issues = [
+            issue.model_dump()
+            for issue in list_issues(config)
+            if issue.id in set(session.linked_issue_ids)
+        ]
+        open_issues = [issue for issue in issues if issue.get("status") == "open"]
+        result = {
+            "status": "ok",
+            "issues": issues,
+            "open_issues": open_issues,
+            "counts": {
+                "issues": len(issues),
+                "open_issues": len(open_issues),
+            },
+        }
+    else:
+        raise ValueError(
+            f"Unsupported orchestrator-session recommendation operation `{operation_type}` for `{recommendation_kind}`."
+        )
+
+    updated_control = build_execution_plane_orchestrator_session_control(config, session_id)
+    result_status = str(result.get("status") or "ok")
+    event_extra: dict[str, Any] = {
+        "orchestrator_session_id": session_id,
+        "recommendation_kind": str(recommendation.get("kind") or recommendation_kind),
+        "recommendation_title": str(recommendation.get("title") or ""),
+        "operation_type": operation_type,
+        "operation_mode": operation_mode,
+        "actor": actor,
+        "reason": normalized_reason,
+    }
+    if normalized_idempotency_key:
+        event_extra["idempotency_key"] = normalized_idempotency_key
+    run = result.get("run") or {}
+    if run.get("id"):
+        event_extra["agent_action_run_id"] = str(run["id"])
+    if result.get("approval", {}).get("id"):
+        event_extra["approval_id"] = str(result["approval"]["id"])
+    if result.get("issue", {}).get("id"):
+        event_extra["issue_id"] = str(result["issue"]["id"])
+    for project_id in session.project_ids:
+        emit_project_event(
+            config,
+            project_id,
+            event="execution_plane_orchestrator_session_recommendation_applied",
+            status=result_status,
+            message=(
+                f"Orchestrator session recommendation "
+                f"`{recommendation.get('kind') or recommendation_kind}` applied."
+            ),
+            extra=event_extra,
+        )
+
+    return {
+        "status": result_status,
+        "session_id": session_id,
+        "recommendation": recommendation,
+        "operation": operation,
+        "result": result,
+        "control_before": control,
+        "control": updated_control,
+    }
+
+
 def summarize_execution_plane_orchestrator_sessions(
     config: AutopilotConfig,
     *,

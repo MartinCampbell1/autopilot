@@ -355,6 +355,103 @@ def test_execution_plane_orchestrator_session_actions_feed_preview_and_execute(
 
 
 @patch("autopilot.core.execution_plane.generate_prd_from_spec")
+def test_execution_plane_orchestrator_session_control_apply_executes_safe_actions(
+    mock_generate_prd_from_spec,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    client = _build_client(config, monkeypatch)
+    mock_generate_prd_from_spec.return_value = {
+        "title": "FounderOS Copilot",
+        "description": "Execution-ready FounderOS project.",
+        "stories": [{"id": 1, "title": "Bootstrap", "description": "Create the app shell"}],
+    }
+
+    created = _create_execution_project(client, tmp_path / "session-control-apply-project")
+    project_id = created["project"]["project_id"]
+    session = _create_orchestrator_session(
+        client,
+        project_ids=[project_id],
+        actor="founderos",
+        title="Session control apply loop",
+    )
+
+    update_story_runtime(
+        config,
+        project_id,
+        1,
+        status="in_progress",
+        iteration=2,
+        agent="codex/worker-a",
+        critic="codex/critic-a",
+    )
+    update_project_runtime(
+        config,
+        project_id,
+        status="running",
+        paused=False,
+        current_story_id=1,
+        current_iteration=2,
+        active_worker="codex/worker-a",
+        active_critic="codex/critic-a",
+        budget_policy={
+            "project_max_worker_iterations": 200,
+            "project_max_critic_reviews": 200,
+            "agent_max_worker_iterations": 3,
+            "agent_max_critic_reviews": 60,
+            "auto_pause_on_exhaustion": True,
+        },
+        budget_usage={
+            "project": {"worker_iterations": 2, "critic_reviews": 2},
+            "agents": {
+                "codex/worker-a": {"worker_iterations": 2, "critic_reviews": 0},
+                "codex/critic-a": {"worker_iterations": 0, "critic_reviews": 2},
+            },
+            "last_exhaustion_reason": None,
+            "auto_paused_at": None,
+        },
+    )
+
+    control_response = client.get(f"/api/execution-plane/orchestrator-sessions/{session['id']}/control")
+    assert control_response.status_code == 200
+    control = control_response.json()["control"]
+    assert any(item["kind"] == "execute_safe_actions" for item in control["recommendations"])
+
+    apply_response = client.post(
+        f"/api/execution-plane/orchestrator-sessions/{session['id']}/control/apply",
+        json={
+            "recommendation_kind": "execute_safe_actions",
+            "actor": "founderos",
+            "reason": "Apply safe session budget actions.",
+            "idempotency_key": "session-control-apply-1",
+        },
+    )
+    assert apply_response.status_code == 200
+    apply_payload = apply_response.json()
+    assert apply_payload["status"] == "ok"
+    assert apply_payload["recommendation"]["kind"] == "execute_safe_actions"
+    assert apply_payload["result"]["status"] == "ok"
+    assert apply_payload["result"]["dry_run"] is False
+    assert apply_payload["result"]["run"]["orchestrator_session_id"] == session["id"]
+    assert apply_payload["result"]["summary"]["status_counts"]["ok"] >= 1
+
+    session_detail = client.get(f"/api/execution-plane/orchestrator-sessions/{session['id']}")
+    assert session_detail.status_code == 200
+    detail = session_detail.json()
+    assert detail["summary"]["run_count"] == 1
+
+    session_events = client.get(
+        f"/api/execution-plane/orchestrator-sessions/{session['id']}/events",
+        params={"limit": 20},
+    )
+    assert session_events.status_code == 200
+    event_names = {event["event"] for event in session_events.json()["events"]}
+    assert "execution_plane_agent_batch_executed" in event_names
+    assert "execution_plane_orchestrator_session_recommendation_applied" in event_names
+
+
+@patch("autopilot.core.execution_plane.generate_prd_from_spec")
 def test_execution_plane_routes_create_list_and_detail_projects(
     mock_generate_prd_from_spec,
     tmp_path: Path,
@@ -1394,6 +1491,20 @@ def test_execution_plane_agent_action_execute_escalates_to_approval_when_needed(
     assert linked["summary"]["issue_count"] == 1
     assert linked["control"]["state"] == "needs_approval"
     assert any(item["kind"] == "review_pending_approvals" for item in linked["control"]["recommendations"])
+    apply_recommendation = client.post(
+        f"/api/execution-plane/orchestrator-sessions/{session['id']}/control/apply",
+        json={
+            "recommendation_kind": "review_pending_approvals",
+            "actor": "founderos",
+            "reason": "Inspect approval queue for this session.",
+        },
+    )
+    assert apply_recommendation.status_code == 200
+    recommendation_payload = apply_recommendation.json()
+    assert recommendation_payload["status"] == "ok"
+    assert recommendation_payload["recommendation"]["kind"] == "review_pending_approvals"
+    assert recommendation_payload["result"]["counts"]["pending_approvals"] == 1
+    assert recommendation_payload["result"]["pending_approvals"][0]["id"] == payload["approval"]["id"]
     assert payload["run"]["id"] in linked["linked_run_ids"]
     assert payload["approval"]["id"] in linked["linked_approval_ids"]
     assert payload["issue"]["id"] in linked["linked_issue_ids"]
@@ -1414,6 +1525,7 @@ def test_execution_plane_agent_action_execute_escalates_to_approval_when_needed(
     assert "execution_plane_agent_action_run_recorded" in event_names
     assert "approval_requested" in event_names
     assert "execution_issue_created" in event_names
+    assert "execution_plane_orchestrator_session_recommendation_applied" in event_names
     action_events = client.get(
         "/api/execution-plane/events",
         params={"project_id": project_id, "runtime_agent_id": action["runtime_agent_id"]},
@@ -1424,6 +1536,48 @@ def test_execution_plane_agent_action_execute_escalates_to_approval_when_needed(
         for event in action_events.json()["events"]
     )
     assert any(event["event"] == "execution_plane_agent_action_run_recorded" for event in action_events.json()["events"])
+
+
+def test_execution_plane_orchestrator_session_control_apply_completes_healthy_session(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    client = _build_client(config, monkeypatch)
+
+    session = _create_orchestrator_session(
+        client,
+        project_ids=[],
+        initiative_id="init_empty_session",
+        actor="founderos",
+        title="FounderOS empty sweep",
+    )
+
+    control_response = client.get(f"/api/execution-plane/orchestrator-sessions/{session['id']}/control")
+    assert control_response.status_code == 200
+    control = control_response.json()["control"]
+    assert control["state"] == "healthy"
+    assert any(item["kind"] == "complete_session" for item in control["recommendations"])
+
+    apply_response = client.post(
+        f"/api/execution-plane/orchestrator-sessions/{session['id']}/control/apply",
+        json={
+            "recommendation_kind": "complete_session",
+            "actor": "founderos",
+            "reason": "No remaining work in this session.",
+        },
+    )
+    assert apply_response.status_code == 200
+    payload = apply_response.json()
+    assert payload["status"] == "ok"
+    assert payload["recommendation"]["kind"] == "complete_session"
+    assert payload["result"]["session"]["status"] == "completed"
+
+    session_detail = client.get(f"/api/execution-plane/orchestrator-sessions/{session['id']}")
+    assert session_detail.status_code == 200
+    detail = session_detail.json()
+    assert detail["status"] == "completed"
+    assert detail["control"]["state"] == "closed"
 
 
 @patch("autopilot.core.execution_plane.generate_prd_from_spec")
