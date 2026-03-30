@@ -1,8 +1,7 @@
 "use client";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AppSidebar } from "@/components/app-sidebar";
-import { ControlPlaneHeaderSections } from "@/components/control-plane-header-sections";
-import { ControlPlaneMainSections } from "@/components/control-plane-main-sections";
+import { ControlPlaneLayout } from "@/components/control-plane-layout";
+import { ControlPlaneLoadingShell } from "@/components/control-plane-loading-shell";
 import {
   type QueueAdvanceFeedback,
   type QueueAdvanceFocusDelta,
@@ -4471,14 +4470,7 @@ export default function ControlPlanePage() {
   const loading = !controlSummary || !sessionSummary;
 
   if (loading) {
-    return (
-      <div className="flex min-h-screen bg-[#fafaf9]">
-        <AppSidebar health={health} projects={visibleProjects} />
-        <main className="flex flex-1 items-center justify-center pl-[260px] text-[14px] text-[#787774]">
-          Loading control plane...
-        </main>
-      </div>
-    );
+    return <ControlPlaneLoadingShell health={health} visibleProjects={visibleProjects} />;
   }
 
   const workspaceSectionProps = {
@@ -4979,41 +4971,42 @@ export default function ControlPlanePage() {
     },
   };
 
+  const headerSectionProps = {
+    latestControlPassAt: controlSummary.latest_control_pass_at,
+    latestSessionAt: sessionSummary.latest_session_at,
+    selectedSessionId,
+    selectedControlState: selectedControl?.state || null,
+    refreshing,
+    onRefresh: () => {
+      void refresh();
+    },
+    formatTimestamp,
+    controlSummary,
+    sessionSummary,
+    historySearch,
+    onHistorySearchChange: setHistorySearch,
+    onClearHistorySearch: () => {
+      setHistorySearch("");
+    },
+    filteredSessionHistoryCount: filteredSessionHistory.length,
+    totalSessionCount: sessions.length,
+    filteredControlPassHistoryCount: filteredControlPassHistory.length,
+    totalControlPassCount: controlPasses.length,
+  };
+
+  const mainSectionsProps = {
+    notice,
+    errorMessage,
+    workspaceSectionProps,
+    sessionDrilldownSectionProps,
+  };
+
   return (
-    <div className="flex min-h-screen bg-[#fafaf9]">
-      <AppSidebar health={health} projects={visibleProjects} />
-
-      <main className="flex-1 pl-[260px]">
-        <ControlPlaneHeaderSections
-          latestControlPassAt={controlSummary.latest_control_pass_at}
-          latestSessionAt={sessionSummary.latest_session_at}
-          selectedSessionId={selectedSessionId}
-          selectedControlState={selectedControl?.state || null}
-          refreshing={refreshing}
-          onRefresh={() => {
-            void refresh();
-          }}
-          formatTimestamp={formatTimestamp}
-          controlSummary={controlSummary}
-          sessionSummary={sessionSummary}
-          historySearch={historySearch}
-          onHistorySearchChange={setHistorySearch}
-          onClearHistorySearch={() => {
-            setHistorySearch("");
-          }}
-          filteredSessionHistoryCount={filteredSessionHistory.length}
-          totalSessionCount={sessions.length}
-          filteredControlPassHistoryCount={filteredControlPassHistory.length}
-          totalControlPassCount={controlPasses.length}
-        />
-
-        <ControlPlaneMainSections
-          notice={notice}
-          errorMessage={errorMessage}
-          workspaceSectionProps={workspaceSectionProps}
-          sessionDrilldownSectionProps={sessionDrilldownSectionProps}
-        />
-      </main>
-    </div>
+    <ControlPlaneLayout
+      health={health}
+      visibleProjects={visibleProjects}
+      headerSectionProps={headerSectionProps}
+      mainSectionsProps={mainSectionsProps}
+    />
   );
 }
