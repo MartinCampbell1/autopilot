@@ -218,6 +218,13 @@ type QueueAdvanceFocusDelta = {
   toCount: number;
   timestamp: string;
 };
+type QueueAdvanceNoticeActionProps = {
+  onOpenSelectedNext?: (() => void) | undefined;
+  onReopenPrevious?: (() => void) | undefined;
+  onSignalClick?: ((signal: QueueAdvanceSignal) => void) | undefined;
+  onResetFocus?: (() => void) | undefined;
+  onOpenMatchingQueue?: (() => void) | undefined;
+};
 
 function agentTimelineEntryKey(entry: AgentTimelineEntry): string {
   return `${entry.kind}:${entry.id}`;
@@ -1414,6 +1421,31 @@ function persistQueueAdvanceFocusDelta(
     return;
   }
   window.localStorage.setItem(storageKey, JSON.stringify(sanitized));
+}
+
+function buildQueueAdvanceNoticeActionProps(args: {
+  feedback: QueueAdvanceFeedback | null;
+  onOpenTarget: (target: QueueAdvanceTarget | null | undefined) => void;
+  onSignalClick?: ((signal: QueueAdvanceSignal) => void) | undefined;
+  onResetFocus?: (() => void) | undefined;
+  onOpenMatchingQueue?: (() => void) | undefined;
+}): QueueAdvanceNoticeActionProps {
+  const { feedback, onOpenTarget, onSignalClick, onResetFocus, onOpenMatchingQueue } = args;
+  return {
+    onOpenSelectedNext: feedback?.nextTarget
+      ? () => {
+          onOpenTarget(feedback.nextTarget);
+        }
+      : undefined,
+    onReopenPrevious: feedback?.previousTarget
+      ? () => {
+          onOpenTarget(feedback.previousTarget);
+        }
+      : undefined,
+    onSignalClick: feedback?.nextTarget ? onSignalClick : undefined,
+    onResetFocus,
+    onOpenMatchingQueue,
+  };
 }
 
 function visibleEntriesByOperatorVisibilityState<T>(
@@ -4575,6 +4607,64 @@ export default function ControlPlanePage() {
     },
     [agentQueueAdvanceFeedback, applyAgentQueueFocus]
   );
+  const sessionQueueAdvanceNoticeActions = useMemo(
+    () =>
+      buildQueueAdvanceNoticeActionProps({
+        feedback: sessionQueueAdvanceFeedback,
+        onOpenTarget: openSessionQueueAdvanceTarget,
+        onSignalClick: focusSessionQueueAdvanceSignal,
+        onResetFocus: () => {
+          applySessionQueueFocus(
+            "all",
+            sessionQueueAdvanceFeedback?.nextTarget?.kind === "session-lineage"
+              ? sessionQueueAdvanceFeedback.nextTarget.entry
+              : null
+          );
+        },
+        onOpenMatchingQueue: currentSessionLineageQueue
+          ? () => {
+              openCurrentSessionLineageQueue();
+            }
+          : undefined,
+      }),
+    [
+      applySessionQueueFocus,
+      currentSessionLineageQueue,
+      focusSessionQueueAdvanceSignal,
+      openCurrentSessionLineageQueue,
+      openSessionQueueAdvanceTarget,
+      sessionQueueAdvanceFeedback,
+    ]
+  );
+  const agentQueueAdvanceNoticeActions = useMemo(
+    () =>
+      buildQueueAdvanceNoticeActionProps({
+        feedback: agentQueueAdvanceFeedback,
+        onOpenTarget: openAgentQueueAdvanceTarget,
+        onSignalClick: focusAgentQueueAdvanceSignal,
+        onResetFocus: () => {
+          applyAgentQueueFocus(
+            "all",
+            agentQueueAdvanceFeedback?.nextTarget?.kind === "agent-timeline"
+              ? agentQueueAdvanceFeedback.nextTarget.entry
+              : undefined
+          );
+        },
+        onOpenMatchingQueue: currentAgentPriorityQueue
+          ? () => {
+              openCurrentAgentPriorityQueue();
+            }
+          : undefined,
+      }),
+    [
+      agentQueueAdvanceFeedback,
+      applyAgentQueueFocus,
+      currentAgentPriorityQueue,
+      focusAgentQueueAdvanceSignal,
+      openAgentQueueAdvanceTarget,
+      openCurrentAgentPriorityQueue,
+    ]
+  );
   const triageInboxItems = useMemo(
     () =>
       [
@@ -6166,44 +6256,7 @@ export default function ControlPlanePage() {
                             feedback={sessionQueueAdvanceFeedback}
                             focusSummary={sessionQueueAdvanceFocusSummary}
                             focusDelta={sessionQueueFocusDelta}
-                            onResetFocus={() => {
-                              applySessionQueueFocus(
-                                "all",
-                                sessionQueueAdvanceFeedback?.nextTarget?.kind === "session-lineage"
-                                  ? sessionQueueAdvanceFeedback.nextTarget.entry
-                                  : null
-                              );
-                            }}
-                            onOpenMatchingQueue={
-                              currentSessionLineageQueue
-                                ? () => {
-                                    openCurrentSessionLineageQueue();
-                                  }
-                                : undefined
-                            }
-                            onOpenSelectedNext={
-                              sessionQueueAdvanceFeedback?.nextTarget
-                                ? () => {
-                                    openSessionQueueAdvanceTarget(
-                                      sessionQueueAdvanceFeedback.nextTarget
-                                    );
-                                  }
-                                : undefined
-                            }
-                            onReopenPrevious={
-                              sessionQueueAdvanceFeedback?.previousTarget
-                                ? () => {
-                                    openSessionQueueAdvanceTarget(
-                                      sessionQueueAdvanceFeedback.previousTarget
-                                    );
-                                  }
-                                : undefined
-                            }
-                            onSignalClick={
-                              sessionQueueAdvanceFeedback?.nextTarget
-                                ? focusSessionQueueAdvanceSignal
-                                : undefined
-                            }
+                            {...sessionQueueAdvanceNoticeActions}
                           />
                           <div className="grid gap-3 xl:grid-cols-2">
                             <CollapsibleQueuePanel
@@ -7763,44 +7816,7 @@ export default function ControlPlanePage() {
                             feedback={agentQueueAdvanceFeedback}
                             focusSummary={agentQueueAdvanceFocusSummary}
                             focusDelta={agentQueueFocusDelta}
-                            onResetFocus={() => {
-                              applyAgentQueueFocus(
-                                "all",
-                                agentQueueAdvanceFeedback?.nextTarget?.kind === "agent-timeline"
-                                  ? agentQueueAdvanceFeedback.nextTarget.entry
-                                  : undefined
-                              );
-                            }}
-                            onOpenMatchingQueue={
-                              currentAgentPriorityQueue
-                                ? () => {
-                                    openCurrentAgentPriorityQueue();
-                                  }
-                                : undefined
-                            }
-                            onOpenSelectedNext={
-                              agentQueueAdvanceFeedback?.nextTarget
-                                ? () => {
-                                    openAgentQueueAdvanceTarget(
-                                      agentQueueAdvanceFeedback.nextTarget
-                                    );
-                                  }
-                                : undefined
-                            }
-                            onReopenPrevious={
-                              agentQueueAdvanceFeedback?.previousTarget
-                                ? () => {
-                                    openAgentQueueAdvanceTarget(
-                                      agentQueueAdvanceFeedback.previousTarget
-                                    );
-                                  }
-                                : undefined
-                            }
-                            onSignalClick={
-                              agentQueueAdvanceFeedback?.nextTarget
-                                ? focusAgentQueueAdvanceSignal
-                                : undefined
-                            }
+                            {...agentQueueAdvanceNoticeActions}
                           />
                           <div className="rounded-xl border border-[#ecebe8] bg-white p-3">
                             <div className="flex flex-wrap items-center justify-between gap-3">
