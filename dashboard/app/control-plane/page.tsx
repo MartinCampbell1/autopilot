@@ -2,9 +2,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AppSidebar } from "@/components/app-sidebar";
 import {
-  SessionMetric,
   SummaryStat,
 } from "@/components/control-plane-display";
+import { ControlPlaneWorkspaceSection } from "@/components/control-plane-workspace-section";
 import {
   type QueueAdvanceFeedback,
   type QueueAdvanceFocusDelta,
@@ -13,22 +13,10 @@ import {
   type QueueAdvanceReasonDetails,
   type QueueAdvanceSignal,
 } from "@/components/queue-advance-notice";
-import { SelectedActionRunCard } from "@/components/selected-action-run-card";
-import { ControlPlaneOverviewSections } from "@/components/control-plane-overview-sections";
 import { SessionDrilldownSection } from "@/components/session-drilldown-section";
 import { SelectedOutcomeInspector } from "@/components/selected-outcome-inspector";
-import { SessionLineageSection } from "@/components/session-lineage-section";
-import { TriageInboxSection } from "@/components/triage-inbox-section";
-import { RuntimeAgentSection } from "@/components/runtime-agent-section";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import {
   applyExecutionPlaneOrchestratorSessionControlPlan,
@@ -4645,132 +4633,32 @@ export default function ControlPlanePage() {
             </div>
           </section>
 
-          <section className="grid gap-6 xl:grid-cols-[minmax(0,1.5fr)_minmax(320px,0.9fr)]">
-            <Card className="border border-[#e5e5e3] bg-white shadow-[0_1px_3px_rgba(15,15,15,0.08),0_0_1px_rgba(15,15,15,0.04)]">
-              <CardHeader>
-                <CardTitle className="text-[18px] font-semibold tracking-[-0.02em] text-[#37352f]">
-                  Recent Control Passes
-                </CardTitle>
-                <CardDescription className="text-[13px] text-[#787774]">
-                  Latest session-level FounderOS control passes, now selectable for drill-down.
-                </CardDescription>
-              </CardHeader>
-              <CardContent>
-                {recentControlPasses.length === 0 ? (
-                  <div className="rounded-xl border border-dashed border-[#e5e5e3] bg-[#fafaf9] px-5 py-8 text-[13px] text-[#9b9a97]">
-                    {controlPasses.length
-                      ? "No orchestrator control passes match the current history search."
-                      : "No orchestrator control passes recorded yet."}
-                  </div>
-                ) : (
-                  <div className="space-y-3">
-                    {recentControlPasses.map((controlPass) => {
-                      const finalState = toStringValue(controlPass.summary.final_state, "unknown");
-                      const stoppedReason = toStringValue(controlPass.summary.stopped_reason);
-                      const appliedSteps = toNumber(controlPass.summary.applied, controlPass.applied.length);
-                      const errorSteps = toNumber(controlPass.summary.errors, controlPass.errors.length);
-                      const selected = selectedPassId === controlPass.id;
-
-                      return (
-                        <div
-                          key={controlPass.id}
-                          className={`rounded-2xl border p-4 ${
-                            selected
-                              ? "border-[#d3e5ef] bg-[#f7fbfd] shadow-[0_1px_2px_rgba(42,102,144,0.08)]"
-                              : "border-[#ecebe8] bg-[#fbfbf9]"
-                          }`}
-                        >
-                          <div className="flex flex-wrap items-start justify-between gap-3">
-                            <div>
-                              <div className="flex flex-wrap items-center gap-2">
-                                <p className="font-mono text-[12px] font-semibold text-[#37352f]">
-                                  {controlPass.id}
-                                </p>
-                                <Badge
-                                  variant="outline"
-                                  className={`rounded-full px-2.5 py-1 text-[11px] font-semibold capitalize ${passStatusClass(controlPass.status)}`}
-                                >
-                                  {controlPass.status}
-                                </Badge>
-                                <Badge
-                                  variant="outline"
-                                  className="rounded-full border-[#e5e5e3] bg-white px-2.5 py-1 text-[11px] font-medium text-[#37352f]"
-                                >
-                                  {controlPass.profile}
-                                </Badge>
-                              </div>
-                              <p className="mt-2 text-[13px] text-[#6b6b6b]">
-                                Session{" "}
-                                <span className="font-mono text-[#37352f]">
-                                  {controlPass.orchestrator_session_id}
-                                </span>
-                                {" · "}
-                                {controlPass.actor || "unknown actor"}
-                              </p>
-                            </div>
-                            <div className="text-right">
-                              <p className="text-[12px] text-[#9b9a97]">
-                                {formatTimestamp(controlPass.created_at)}
-                              </p>
-                              <Button
-                                size="sm"
-                                variant={selected ? "default" : "outline"}
-                                className={`mt-2 h-8 rounded-lg text-[12px] ${
-                                  selected
-                                    ? "bg-[#1a1a1a] text-white hover:bg-[#333]"
-                                    : "border-[#e5e5e3] bg-white text-[#37352f] hover:bg-[#f7f7f5]"
-                                }`}
-                                onClick={() => {
-                                  setSelectedPassId(controlPass.id);
-                                  if (controlPass.orchestrator_session_id) {
-                                    setSelectedSessionId(controlPass.orchestrator_session_id);
-                                  }
-                                }}
-                              >
-                                {selected ? "Selected" : "Inspect"}
-                              </Button>
-                            </div>
-                          </div>
-
-                          <div className="mt-4 grid gap-3 md:grid-cols-3">
-                            <SessionMetric
-                              label="Outcome"
-                              value={finalState}
-                              detail={`${appliedSteps} applied · ${errorSteps} errors`}
-                            />
-                            <SessionMetric
-                              label="Coverage"
-                              value={`${controlPass.project_ids.length} project${controlPass.project_ids.length === 1 ? "" : "s"}`}
-                              detail={controlPass.initiative_id || "No initiative mapping"}
-                            />
-                            <SessionMetric
-                              label="Reason"
-                              value={stoppedReason || controlPass.reason || "No stop reason"}
-                              detail={`${controlPass.recommendation_kinds.length} recommendation kind(s)`}
-                            />
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-
-            <div className="space-y-6">
-              <SelectedActionRunCard
-                selectedRun={selectedRun}
-                selectedRunResultIndex={selectedRunResultIndex}
-                onSelectResult={setSelectedRunResultIndex}
-                formatTimestamp={formatTimestamp}
-                formatScopeList={formatScopeList}
-                describeRunResult={describeRunResult}
-                toNumber={toNumber}
-                toStringArray={toStringArray}
-                toStringValue={toStringValue}
-                asRecord={asRecord}
-              >
-                {selectedRun && selectedRunResult && (
+          <ControlPlaneWorkspaceSection
+            recentControlPasses={recentControlPasses}
+            totalControlPassCount={controlPasses.length}
+            selectedPassId={selectedPassId}
+            formatTimestamp={formatTimestamp}
+            toStringValue={toStringValue}
+            toNumber={toNumber}
+            onInspectControlPass={(controlPass) => {
+              setSelectedPassId(controlPass.id);
+              if (controlPass.orchestrator_session_id) {
+                setSelectedSessionId(controlPass.orchestrator_session_id);
+              }
+            }}
+            selectedActionRunCardProps={{
+              selectedRun,
+              selectedRunResultIndex,
+              onSelectResult: setSelectedRunResultIndex,
+              formatTimestamp,
+              formatScopeList,
+              describeRunResult,
+              toNumber,
+              toStringArray,
+              toStringValue,
+              asRecord,
+              children:
+                selectedRun && selectedRunResult ? (
                   <SelectedOutcomeInspector
                     selectedRun={selectedRun}
                     selectedRunResult={selectedRunResult}
@@ -4802,273 +4690,264 @@ export default function ControlPlanePage() {
                     }}
                     onSyncLinkedSelection={syncLinkedSelection}
                   />
-                )}
-              </SelectedActionRunCard>
-
-              <SessionLineageSection
-                hasSelectedSession={Boolean(selectedSession)}
-                sessionEventTotalCount={selectedSession?.events.length || 0}
-                sessionLineageEntries={sessionLineageEntries}
-                linkedRunCount={linkedRuns.length}
-                linkedApprovalCount={linkedApprovals.length}
-                linkedIssueCount={linkedIssues.length}
-                linkedAgentCount={linkedAgentIds.length}
-                sessionLineageDecisionCount={sessionLineageDecisionCount}
-                sessionLineageEventCount={sessionLineageEventCount}
-                sessionLineageAgentCount={sessionLineageAgentCount}
-                sessionLineageStatusCounts={sessionLineageStatusCounts}
-                filteredSessionLineageEntriesCount={filteredSessionLineageEntries.length}
-                sessionLineageFilter={sessionLineageFilter as
-                  | "all"
-                  | "attention"
-                  | "decisions"
-                  | "agent-linked"}
-                onSessionLineageFilterChange={(value) => {
-                  setSessionLineageFilter(value);
-                }}
-                sessionLineageAttentionCount={sessionLineageAttentionCount}
-                sessionLineageAgentLinkedCount={sessionLineageAgentLinkedCount}
-                persistedDismissedLineageQueueCount={persistedDismissedLineageQueueCount}
-                persistedSnoozedLineageQueueCount={persistedSnoozedLineageQueueCount}
-                sessionLineagePriorityCounts={sessionLineagePriorityCounts}
-                hasPersistedLineageQueuePreferences={hasPersistedLineageQueuePreferences}
-                onExportSessionLineageQueuePreferences={exportSessionLineageQueuePreferences}
-                onResetSessionLineageQueuePreferences={resetSessionLineageQueuePreferences}
-                selectedSessionLineageEntry={selectedSessionLineageEntry}
-                selectedSessionLineagePriority={selectedSessionLineagePriority}
-                selectedSessionLineageTraits={selectedSessionLineageTraits}
-                formatTimestamp={formatTimestamp}
-                nextBestSessionLineageEntry={nextBestSessionLineageEntry}
-                attentionSessionLineageEntries={attentionSessionLineageEntries}
-                decisionSessionLineageEntries={decisionSessionLineageEntries}
-                latestAgentLinkedLineageEntry={latestAgentLinkedLineageEntry}
-                onInspectSessionLineageEntry={inspectSessionLineageEntry}
-                onAdvanceSessionLineageQueue={advanceSessionLineageQueue}
-                onFocusSessionLineageEntry={focusSessionLineageEntry}
-                expandedSessionLineageQueues={expandedSessionLineageQueues}
-                currentSessionLineageQueue={currentSessionLineageQueue}
-                onExpandAllSessionLineageQueues={expandAllSessionLineageQueues}
-                onCollapseAllSessionLineageQueues={collapseAllSessionLineageQueues}
-                onOpenCurrentSessionLineageQueue={openCurrentSessionLineageQueue}
-                sessionQueueAdvanceFeedback={sessionQueueAdvanceFeedback}
-                sessionQueueAdvanceFocusSummary={sessionQueueAdvanceFocusSummary}
-                sessionQueueFocusDelta={sessionQueueFocusDelta}
-                sessionQueueAdvanceNoticeActions={sessionQueueAdvanceNoticeActions}
-                attentionQueuePosition={attentionQueuePosition}
-                hiddenAttentionQueueCount={hiddenAttentionQueueCount}
-                attentionSessionLineageQueue={attentionSessionLineageQueue}
-                onToggleSessionLineageQueueExpansion={toggleSessionLineageQueueExpansion}
-                onRestoreSessionLineageQueue={restoreSessionLineageQueue}
-                sessionLineagePriority={sessionLineagePriority}
-                sessionLineageTraits={sessionLineageTraits}
-                onSnoozeSessionLineageQueueEntry={snoozeSessionLineageQueueEntry}
-                onAdvanceSessionLineageQueueFromEntry={advanceSessionLineageQueueFromEntry}
-                onDismissSessionLineageQueueEntry={dismissSessionLineageQueueEntry}
-                onFindSessionLineageEntryInSession={findSessionLineageEntryInSession}
-                onRevealSessionLineageEntryInTimeline={revealSessionLineageEntryInTimeline}
-                decisionQueuePosition={decisionQueuePosition}
-                hiddenDecisionQueueCount={hiddenDecisionQueueCount}
-                decisionSessionLineageQueue={decisionSessionLineageQueue}
-                visibleSessionLineageEntries={visibleSessionLineageEntries}
-                onSelectRunOutcome={(runId, resultIndex) => {
-                  setSelectedRunId(runId);
-                  setSelectedRunResultIndex(resultIndex);
-                }}
-              />
-
-              <TriageInboxSection
-                triageInboxItemCount={triageInboxItemCount}
-                triageInboxItems={triageInboxItems}
-                selectedTriageInboxItem={selectedTriageInboxItem}
-                syncedTriageInboxItem={syncedTriageInboxItem}
-                formatTimestamp={formatTimestamp}
-                onInspectTriageInboxItem={inspectTriageInboxItem}
-                onInspectAndAdvanceTriageInboxItem={inspectAndAdvanceTriageInboxItem}
-                onAdvanceTriageInboxCursor={advanceTriageInboxCursor}
-                onSyncTriageInboxCursorToSelection={syncTriageInboxCursorToSelection}
-                triageInboxFeedbackHistoryCount={triageInboxFeedbackHistory.length}
-                triageInboxFeedbackFilter={triageInboxFeedbackFilter}
-                onTriageInboxFeedbackFilterChange={setTriageInboxFeedbackFilter}
-                triageInboxFeedbackCounts={triageInboxFeedbackCounts}
-                triageInboxFeedback={triageInboxFeedback}
-                groupedRecentTriageInboxFeedback={groupedRecentTriageInboxFeedback}
-                recentTriageInboxFeedbackCount={recentTriageInboxFeedback.length}
-                expandedTriageInboxResultGroups={expandedTriageInboxResultGroups}
-                currentTriageInboxFeedbackGroup={currentTriageInboxFeedbackGroup}
-                onExpandAllTriageInboxResultGroups={expandAllTriageInboxResultGroups}
-                onCollapseAllTriageInboxResultGroups={collapseAllTriageInboxResultGroups}
-                onOpenCurrentTriageInboxResultGroup={openCurrentTriageInboxResultGroup}
-                onToggleTriageInboxResultGroup={toggleTriageInboxResultGroup}
-                onOpenTriageInboxHistoryGroup={openTriageInboxHistoryGroup}
-                onSnoozeTriageInboxItem={snoozeTriageInboxItem}
-                onDismissTriageInboxItem={dismissTriageInboxItem}
-              />
-
-              <RuntimeAgentSection
-                selectedAgentId={selectedAgentId}
-                agentLoading={agentLoading}
-                selectedAgent={selectedAgent}
-                busyActionKey={busyActionKey}
-                formatTimestamp={formatTimestamp}
-                toNumber={toNumber}
-                toStringValue={toStringValue}
-                onFocusRuntimeAgent={(runtimeAgentId) => {
-                  focusRuntimeAgent(runtimeAgentId, true);
-                }}
-                onRunSuggestedCommand={(command, mode) => {
-                  void runAgentSuggestedCommand(command, mode);
-                }}
-                activitySectionProps={
-                  selectedAgent
-                    ? {
-                        selectedAgent,
-                        agentScopedRuns,
-                        agentActivitySearch,
-                        onAgentActivitySearchChange: setAgentActivitySearch,
-                        agentActivityFilter,
-                        onAgentActivityFilterChange: setAgentActivityFilter,
-                        filteredAgentScopedRuns,
-                        selectedRunId,
-                        selectedRunResultIndex,
-                        onSelectRun: (runId, resultIndex) => {
-                          setSelectedRunId(runId);
-                          setSelectedRunResultIndex(resultIndex);
-                        },
-                        formatTimestamp,
-                        toNumber,
-                        describeRunResult,
-                        agentScopedOutcomes,
-                        filteredAgentScopedOutcomes,
-                        outcomeProjectId,
-                        outcomeStoryId,
-                        toStringValue,
-                        asRecord,
-                        onFindOutcomeInSession: (runId, resultIndex) => {
-                          setEntitySearch(runId);
-                          setSelectedRunId(runId);
-                          setSelectedRunResultIndex(resultIndex);
-                        },
+                ) : null,
+            }}
+            sessionLineageSectionProps={{
+              hasSelectedSession: Boolean(selectedSession),
+              sessionEventTotalCount: selectedSession?.events.length || 0,
+              sessionLineageEntries,
+              linkedRunCount: linkedRuns.length,
+              linkedApprovalCount: linkedApprovals.length,
+              linkedIssueCount: linkedIssues.length,
+              linkedAgentCount: linkedAgentIds.length,
+              sessionLineageDecisionCount: sessionLineageDecisionCount,
+              sessionLineageEventCount: sessionLineageEventCount,
+              sessionLineageAgentCount: sessionLineageAgentCount,
+              sessionLineageStatusCounts,
+              filteredSessionLineageEntriesCount: filteredSessionLineageEntries.length,
+              sessionLineageFilter: sessionLineageFilter as
+                | "all"
+                | "attention"
+                | "decisions"
+                | "agent-linked",
+              onSessionLineageFilterChange: (value) => {
+                setSessionLineageFilter(value);
+              },
+              sessionLineageAttentionCount,
+              sessionLineageAgentLinkedCount,
+              persistedDismissedLineageQueueCount,
+              persistedSnoozedLineageQueueCount,
+              sessionLineagePriorityCounts,
+              hasPersistedLineageQueuePreferences,
+              onExportSessionLineageQueuePreferences: exportSessionLineageQueuePreferences,
+              onResetSessionLineageQueuePreferences: resetSessionLineageQueuePreferences,
+              selectedSessionLineageEntry,
+              selectedSessionLineagePriority,
+              selectedSessionLineageTraits,
+              formatTimestamp,
+              nextBestSessionLineageEntry,
+              attentionSessionLineageEntries,
+              decisionSessionLineageEntries,
+              latestAgentLinkedLineageEntry,
+              onInspectSessionLineageEntry: inspectSessionLineageEntry,
+              onAdvanceSessionLineageQueue: advanceSessionLineageQueue,
+              onFocusSessionLineageEntry: focusSessionLineageEntry,
+              expandedSessionLineageQueues,
+              currentSessionLineageQueue,
+              onExpandAllSessionLineageQueues: expandAllSessionLineageQueues,
+              onCollapseAllSessionLineageQueues: collapseAllSessionLineageQueues,
+              onOpenCurrentSessionLineageQueue: openCurrentSessionLineageQueue,
+              sessionQueueAdvanceFeedback,
+              sessionQueueAdvanceFocusSummary,
+              sessionQueueFocusDelta,
+              sessionQueueAdvanceNoticeActions: sessionQueueAdvanceNoticeActions,
+              attentionQueuePosition,
+              hiddenAttentionQueueCount,
+              attentionSessionLineageQueue,
+              onToggleSessionLineageQueueExpansion: toggleSessionLineageQueueExpansion,
+              onRestoreSessionLineageQueue: restoreSessionLineageQueue,
+              sessionLineagePriority,
+              sessionLineageTraits,
+              onSnoozeSessionLineageQueueEntry: snoozeSessionLineageQueueEntry,
+              onAdvanceSessionLineageQueueFromEntry: advanceSessionLineageQueueFromEntry,
+              onDismissSessionLineageQueueEntry: dismissSessionLineageQueueEntry,
+              onFindSessionLineageEntryInSession: findSessionLineageEntryInSession,
+              onRevealSessionLineageEntryInTimeline: revealSessionLineageEntryInTimeline,
+              decisionQueuePosition,
+              hiddenDecisionQueueCount,
+              decisionSessionLineageQueue,
+              visibleSessionLineageEntries,
+              onSelectRunOutcome: (runId, resultIndex) => {
+                setSelectedRunId(runId);
+                setSelectedRunResultIndex(resultIndex);
+              },
+            }}
+            triageInboxSectionProps={{
+              triageInboxItemCount,
+              triageInboxItems,
+              selectedTriageInboxItem,
+              syncedTriageInboxItem,
+              formatTimestamp,
+              onInspectTriageInboxItem: inspectTriageInboxItem,
+              onInspectAndAdvanceTriageInboxItem: inspectAndAdvanceTriageInboxItem,
+              onAdvanceTriageInboxCursor: advanceTriageInboxCursor,
+              onSyncTriageInboxCursorToSelection: syncTriageInboxCursorToSelection,
+              triageInboxFeedbackHistoryCount: triageInboxFeedbackHistory.length,
+              triageInboxFeedbackFilter,
+              onTriageInboxFeedbackFilterChange: setTriageInboxFeedbackFilter,
+              triageInboxFeedbackCounts,
+              triageInboxFeedback,
+              groupedRecentTriageInboxFeedback,
+              recentTriageInboxFeedbackCount: recentTriageInboxFeedback.length,
+              expandedTriageInboxResultGroups,
+              currentTriageInboxFeedbackGroup,
+              onExpandAllTriageInboxResultGroups: expandAllTriageInboxResultGroups,
+              onCollapseAllTriageInboxResultGroups: collapseAllTriageInboxResultGroups,
+              onOpenCurrentTriageInboxResultGroup: openCurrentTriageInboxResultGroup,
+              onToggleTriageInboxResultGroup: toggleTriageInboxResultGroup,
+              onOpenTriageInboxHistoryGroup: openTriageInboxHistoryGroup,
+              onSnoozeTriageInboxItem: snoozeTriageInboxItem,
+              onDismissTriageInboxItem: dismissTriageInboxItem,
+            }}
+            runtimeAgentSectionProps={{
+              selectedAgentId,
+              agentLoading,
+              selectedAgent,
+              busyActionKey,
+              formatTimestamp,
+              toNumber,
+              toStringValue,
+              onFocusRuntimeAgent: (runtimeAgentId) => {
+                focusRuntimeAgent(runtimeAgentId, true);
+              },
+              onRunSuggestedCommand: (command, mode) => {
+                void runAgentSuggestedCommand(command, mode);
+              },
+              activitySectionProps: selectedAgent
+                ? {
+                    selectedAgent,
+                    agentScopedRuns,
+                    agentActivitySearch,
+                    onAgentActivitySearchChange: setAgentActivitySearch,
+                    agentActivityFilter,
+                    onAgentActivityFilterChange: setAgentActivityFilter,
+                    filteredAgentScopedRuns,
+                    selectedRunId,
+                    selectedRunResultIndex,
+                    onSelectRun: (runId, resultIndex) => {
+                      setSelectedRunId(runId);
+                      setSelectedRunResultIndex(resultIndex);
+                    },
+                    formatTimestamp,
+                    toNumber,
+                    describeRunResult,
+                    agentScopedOutcomes,
+                    filteredAgentScopedOutcomes,
+                    outcomeProjectId,
+                    outcomeStoryId,
+                    toStringValue,
+                    asRecord,
+                    onFindOutcomeInSession: (runId, resultIndex) => {
+                      setEntitySearch(runId);
+                      setSelectedRunId(runId);
+                      setSelectedRunResultIndex(resultIndex);
+                    },
+                  }
+                : null,
+              timelineSectionProps: selectedAgent
+                ? {
+                    selectedAgent,
+                    activeAgentTimelineEntries,
+                    hiddenAgentTimelineEntryCount,
+                    agentTimelineSearch,
+                    onAgentTimelineSearchChange: setAgentTimelineSearch,
+                    agentTimelineFilter: agentTimelineFilter as
+                      | "all"
+                      | "approvals"
+                      | "issues"
+                      | "events"
+                      | "attention",
+                    onAgentTimelineFilterChange: (value) => {
+                      setAgentTimelineFilter(value);
+                    },
+                    persistedDismissedAgentTimelineCount,
+                    persistedSnoozedAgentTimelineCount,
+                    agentTimelinePriorityCounts,
+                    nextBestAgentTimelineEntry,
+                    hasPersistedAgentTimelinePreferences,
+                    onInspectAgentTimelineEntry: inspectAgentTimelineEntry,
+                    onRestoreAgentTimelineHidden: restoreAgentTimelineHidden,
+                    onExportAgentTimelinePreferences: exportAgentTimelinePreferences,
+                    onResetAgentTimelinePreferences: resetAgentTimelinePreferences,
+                    agentQueueAdvanceFeedback,
+                    agentQueueAdvanceFocusSummary,
+                    agentQueueFocusDelta,
+                    agentQueueAdvanceNoticeActions: agentQueueAdvanceNoticeActions,
+                    nextCriticalAgentTimelineEntry,
+                    nextHighAgentTimelineEntry,
+                    expandedAgentPriorityQueues,
+                    currentAgentPriorityQueue,
+                    onExpandAllAgentPriorityQueues: expandAllAgentPriorityQueues,
+                    onCollapseAllAgentPriorityQueues: collapseAllAgentPriorityQueues,
+                    onOpenCurrentAgentPriorityQueue: openCurrentAgentPriorityQueue,
+                    criticalAgentTimelineQueue,
+                    criticalAgentTimelineTotal: criticalAgentTimelineEntries.length,
+                    criticalAgentTimelinePosition,
+                    highAgentTimelineQueue,
+                    highAgentTimelineTotal: highAgentTimelineEntries.length,
+                    highAgentTimelinePosition,
+                    onToggleAgentPriorityQueueExpansion: toggleAgentPriorityQueueExpansion,
+                    filteredAgentTimelineEntriesCount: filteredAgentTimelineEntries.length,
+                    visibleAgentTimelineEntries,
+                    selectedAgentTimelineEntry,
+                    selectedAgentTimelineRunLink,
+                    selectedAgentTimelinePriority,
+                    latestAgentIssueEntry,
+                    latestAgentApprovalEntry,
+                    latestAgentEventEntry,
+                    busyActionKey,
+                    formatTimestamp,
+                    formatJson,
+                    toStringValue,
+                    toNullableNumber,
+                    asRecord,
+                    describeRunResult,
+                    onSelectTimelineEntry: (entry) => {
+                      setSelectedAgentTimelineKey(agentTimelineEntryKey(entry));
+                    },
+                    onSyncLinkedSelection: syncLinkedSelection,
+                    onFocusRuntimeAgent: (runtimeAgentId) => {
+                      focusRuntimeAgent(runtimeAgentId, true);
+                    },
+                    onSelectRun: (runId, resultIndex) => {
+                      setSelectedRunId(runId);
+                      setSelectedRunResultIndex(resultIndex);
+                    },
+                    onApproveApproval: (approval) => {
+                      void approveApproval(approval);
+                    },
+                    onRejectApproval: (approval) => {
+                      void rejectApproval(approval);
+                    },
+                    onApplyApproval: (approval) => {
+                      void applyApproval(approval);
+                    },
+                    onResolveIssue: (issue) => {
+                      void resolveIssue(issue);
+                    },
+                    onAdvanceCurrentPriorityQueue: (entry) => {
+                      if (currentAgentPriorityQueue) {
+                        advanceAgentPriorityQueueFromEntry(currentAgentPriorityQueue, entry);
                       }
-                    : null
-                }
-                timelineSectionProps={
-                  selectedAgent
-                    ? {
-                        selectedAgent,
-                        activeAgentTimelineEntries,
-                        hiddenAgentTimelineEntryCount,
-                        agentTimelineSearch,
-                        onAgentTimelineSearchChange: setAgentTimelineSearch,
-                        agentTimelineFilter: agentTimelineFilter as
-                          | "all"
-                          | "approvals"
-                          | "issues"
-                          | "events"
-                          | "attention",
-                        onAgentTimelineFilterChange: (value) => {
-                          setAgentTimelineFilter(value);
-                        },
-                        persistedDismissedAgentTimelineCount,
-                        persistedSnoozedAgentTimelineCount,
-                        agentTimelinePriorityCounts,
-                        nextBestAgentTimelineEntry,
-                        hasPersistedAgentTimelinePreferences,
-                        onInspectAgentTimelineEntry: inspectAgentTimelineEntry,
-                        onRestoreAgentTimelineHidden: restoreAgentTimelineHidden,
-                        onExportAgentTimelinePreferences: exportAgentTimelinePreferences,
-                        onResetAgentTimelinePreferences: resetAgentTimelinePreferences,
-                        agentQueueAdvanceFeedback,
-                        agentQueueAdvanceFocusSummary,
-                        agentQueueFocusDelta,
-                        agentQueueAdvanceNoticeActions: agentQueueAdvanceNoticeActions,
-                        nextCriticalAgentTimelineEntry,
-                        nextHighAgentTimelineEntry,
-                        expandedAgentPriorityQueues,
-                        currentAgentPriorityQueue,
-                        onExpandAllAgentPriorityQueues: expandAllAgentPriorityQueues,
-                        onCollapseAllAgentPriorityQueues: collapseAllAgentPriorityQueues,
-                        onOpenCurrentAgentPriorityQueue: openCurrentAgentPriorityQueue,
-                        criticalAgentTimelineQueue,
-                        criticalAgentTimelineTotal: criticalAgentTimelineEntries.length,
-                        criticalAgentTimelinePosition,
-                        highAgentTimelineQueue,
-                        highAgentTimelineTotal: highAgentTimelineEntries.length,
-                        highAgentTimelinePosition,
-                        onToggleAgentPriorityQueueExpansion: toggleAgentPriorityQueueExpansion,
-                        filteredAgentTimelineEntriesCount: filteredAgentTimelineEntries.length,
-                        visibleAgentTimelineEntries,
-                        selectedAgentTimelineEntry,
-                        selectedAgentTimelineRunLink,
-                        selectedAgentTimelinePriority,
-                        latestAgentIssueEntry,
-                        latestAgentApprovalEntry,
-                        latestAgentEventEntry,
-                        busyActionKey,
-                        formatTimestamp,
-                        formatJson,
-                        toStringValue,
-                        toNullableNumber,
-                        asRecord,
-                        describeRunResult,
-                        onSelectTimelineEntry: (entry) => {
-                          setSelectedAgentTimelineKey(agentTimelineEntryKey(entry));
-                        },
-                        onSyncLinkedSelection: syncLinkedSelection,
-                        onFocusRuntimeAgent: (runtimeAgentId) => {
-                          focusRuntimeAgent(runtimeAgentId, true);
-                        },
-                        onSelectRun: (runId, resultIndex) => {
-                          setSelectedRunId(runId);
-                          setSelectedRunResultIndex(resultIndex);
-                        },
-                        onApproveApproval: (approval) => {
-                          void approveApproval(approval);
-                        },
-                        onRejectApproval: (approval) => {
-                          void rejectApproval(approval);
-                        },
-                        onApplyApproval: (approval) => {
-                          void applyApproval(approval);
-                        },
-                        onResolveIssue: (issue) => {
-                          void resolveIssue(issue);
-                        },
-                        onAdvanceCurrentPriorityQueue: (entry) => {
-                          if (currentAgentPriorityQueue) {
-                            advanceAgentPriorityQueueFromEntry(currentAgentPriorityQueue, entry);
-                          }
-                        },
-                        onSearchEntity: setEntitySearch,
-                        onFocusAgentTimeline: (filter, entry) => {
-                          focusAgentTimeline(filter, entry ? { entry } : undefined);
-                        },
-                        onFilterSessionByToken: (value) => {
-                          setEventFilter("all");
-                          setEntitySearch(value);
-                        },
-                        onSnoozeAgentTimelineEntry: snoozeAgentTimelineEntry,
-                        onDismissAgentTimelineEntry: dismissAgentTimelineEntry,
-                        onAdvanceAgentPriorityQueueFromEntry: advanceAgentPriorityQueueFromEntry,
-                        onFindAgentTimelineEntryInSession: findAgentTimelineEntryInSession,
-                        onRevealAgentTimelineEntry: revealAgentTimelineEntry,
-                        agentTimelineEntryKey,
-                        agentTimelinePriority,
-                        agentTimelineRowDomId,
-                      }
-                    : null
-                }
-              />
-
-              <ControlPlaneOverviewSections
-                controlSummary={controlSummary}
-                recentSessions={recentSessions}
-                totalSessionCount={sessions.length}
-                selectedSessionId={selectedSessionId}
-                onSelectSession={setSelectedSessionId}
-                sessionSummary={sessionSummary}
-              />
-            </div>
-          </section>
+                    },
+                    onSearchEntity: setEntitySearch,
+                    onFocusAgentTimeline: (filter, entry) => {
+                      focusAgentTimeline(filter, entry ? { entry } : undefined);
+                    },
+                    onFilterSessionByToken: (value) => {
+                      setEventFilter("all");
+                      setEntitySearch(value);
+                    },
+                    onSnoozeAgentTimelineEntry: snoozeAgentTimelineEntry,
+                    onDismissAgentTimelineEntry: dismissAgentTimelineEntry,
+                    onAdvanceAgentPriorityQueueFromEntry: advanceAgentPriorityQueueFromEntry,
+                    onFindAgentTimelineEntryInSession: findAgentTimelineEntryInSession,
+                    onRevealAgentTimelineEntry: revealAgentTimelineEntry,
+                    agentTimelineEntryKey,
+                    agentTimelinePriority,
+                    agentTimelineRowDomId,
+                  }
+                : null,
+            }}
+            controlPlaneOverviewSectionsProps={{
+              controlSummary,
+              recentSessions,
+              totalSessionCount: sessions.length,
+              selectedSessionId,
+              onSelectSession: setSelectedSessionId,
+              sessionSummary,
+            }}
+          />
 
           <SessionDrilldownSection
             selectedSessionId={selectedSessionId}
