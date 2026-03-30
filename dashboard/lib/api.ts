@@ -11,6 +11,7 @@ import type {
   LaunchResult,
   LaunchProfile,
   LaunchPreset,
+  ExecutionRuntimeAgentDetail,
   OrchestratorControlPassRecord,
   OrchestratorControlPassSummary,
   OrchestratorSessionControlPlanApplyResult,
@@ -146,6 +147,22 @@ export async function fetchExecutionPlaneOrchestratorSession(
   return jsonOrThrow<OrchestratorSessionDetail>(
     res,
     `Failed to fetch orchestrator session detail: ${res.status}`
+  );
+}
+
+export async function fetchExecutionPlaneAgentDetail(
+  runtimeAgentId: string,
+  options?: { eventLimit?: number }
+): Promise<ExecutionRuntimeAgentDetail> {
+  const query = buildQuery({
+    event_limit: options?.eventLimit ?? 25,
+  });
+  const res = await fetch(
+    `${API_BASE}/execution-plane/agents/${encodeURIComponent(runtimeAgentId)}${query}`
+  );
+  return jsonOrThrow<ExecutionRuntimeAgentDetail>(
+    res,
+    `Failed to fetch runtime agent detail: ${res.status}`
   );
 }
 

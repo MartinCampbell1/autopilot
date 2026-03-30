@@ -19,6 +19,7 @@ import {
   applyExecutionPlaneApproval,
   approveExecutionPlaneApproval,
   fetchAccountsHealth,
+  fetchExecutionPlaneAgentDetail,
   fetchExecutionPlaneControlPassSummary,
   fetchExecutionPlaneControlPasses,
   fetchExecutionPlaneOrchestratorSession,
@@ -34,6 +35,7 @@ import type {
   AccountHealth,
   ExecutionApprovalRecord,
   ExecutionAgentActionRunRecord,
+  ExecutionRuntimeAgentDetail,
   ExecutionPlaneCountMap,
   ExecutionIssueRecord,
   OrchestratorControlPassRecord,
@@ -605,10 +607,13 @@ export default function ControlPlanePage() {
   const [sessionSummary, setSessionSummary] = useState<OrchestratorSessionSummary | null>(null);
   const [controlProfiles, setControlProfiles] = useState<OrchestratorSessionControlProfile[]>([]);
   const [selectedSessionId, setSelectedSessionId] = useState("");
+  const [selectedAgentId, setSelectedAgentId] = useState("");
   const [selectedRunId, setSelectedRunId] = useState("");
   const [selectedRunResultIndex, setSelectedRunResultIndex] = useState(0);
   const [selectedPassId, setSelectedPassId] = useState("");
   const [selectedSession, setSelectedSession] = useState<OrchestratorSessionDetail | null>(null);
+  const [selectedAgent, setSelectedAgent] = useState<ExecutionRuntimeAgentDetail | null>(null);
+  const [agentLoading, setAgentLoading] = useState(false);
   const [runFilter, setRunFilter] = useState("all");
   const [eventFilter, setEventFilter] = useState("all");
   const [historySearch, setHistorySearch] = useState("");
@@ -669,6 +674,10 @@ export default function ControlPlanePage() {
     return detail;
   }, []);
 
+  const loadAgentDetail = useCallback(async (runtimeAgentId: string) => {
+    return fetchExecutionPlaneAgentDetail(runtimeAgentId, { eventLimit: 12 });
+  }, []);
+
   useEffect(() => {
     void loadOverview();
     const interval = setInterval(() => {
@@ -691,7 +700,9 @@ export default function ControlPlanePage() {
   useEffect(() => {
     if (sessions.length === 0) {
       setSelectedSessionId("");
+      setSelectedAgentId("");
       setSelectedRunId("");
+      setSelectedAgent(null);
       setSelectedSession(null);
       return;
     }
@@ -714,7 +725,9 @@ export default function ControlPlanePage() {
 
   useEffect(() => {
     if (!selectedSessionId) {
+      setSelectedAgentId("");
       setSelectedRunId("");
+      setSelectedAgent(null);
       setEntitySearch("");
       setSelectedSession(null);
       return;
@@ -759,6 +772,72 @@ export default function ControlPlanePage() {
   useEffect(() => {
     setEntitySearch("");
   }, [selectedSessionId]);
+
+  useEffect(() => {
+    if (!selectedSession) {
+      setSelectedAgentId("");
+      setSelectedAgent(null);
+      return;
+    }
+
+    const sessionRuns = (selectedSession.runs || []) as ExecutionAgentActionRunRecord[];
+    const currentRun = sessionRuns.find((run) => run.id === selectedRunId) ?? sessionRuns[0] ?? null;
+    const currentRunResult =
+      currentRun?.results[selectedRunResultIndex] ??
+      currentRun?.results[0] ??
+      null;
+    const sessionApprovals = selectedSession.approvals || [];
+    const sessionIssues = selectedSession.issues || [];
+    const candidateIds = [
+      currentRunResult && typeof currentRunResult === "object"
+        ? outcomeRuntimeAgentId(currentRunResult as Record<string, unknown>)
+        : "",
+      ...selectedSession.linked_runtime_agent_ids,
+      ...sessionRuns.flatMap((run) => run.runtime_agent_ids || []),
+      ...sessionApprovals.flatMap((approval) => approval.runtime_agent_ids || []),
+      ...sessionIssues.flatMap((issue) =>
+        issue.runtime_agent_ids.length > 0
+          ? issue.runtime_agent_ids
+          : issue.runtime_agent_id
+            ? [issue.runtime_agent_id]
+            : []
+      ),
+    ].filter(Boolean);
+    const uniqueIds = [...new Set(candidateIds)];
+    if (!uniqueIds.length) {
+      setSelectedAgentId("");
+      setSelectedAgent(null);
+      return;
+    }
+    setSelectedAgentId((current) => (current && uniqueIds.includes(current) ? current : uniqueIds[0]));
+  }, [selectedRunId, selectedRunResultIndex, selectedSession]);
+
+  useEffect(() => {
+    if (!selectedAgentId) {
+      setSelectedAgent(null);
+      return;
+    }
+    let cancelled = false;
+    setAgentLoading(true);
+    loadAgentDetail(selectedAgentId)
+      .then((detail) => {
+        if (cancelled) return;
+        setSelectedAgent(detail);
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        setSelectedAgent(null);
+        setErrorMessage(
+          error instanceof Error ? error.message : "Failed to load runtime agent detail."
+        );
+      })
+      .finally(() => {
+        if (!cancelled) setAgentLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [loadAgentDetail, selectedAgentId]);
 
   useEffect(() => {
     setSelectedRunResultIndex(0);
@@ -807,6 +886,14 @@ export default function ControlPlanePage() {
     },
     [loadOverview, loadSessionDetail]
   );
+
+  const focusRuntimeAgent = useCallback((runtimeAgentId: string, syncSearch = false) => {
+    if (!runtimeAgentId) return;
+    setSelectedAgentId(runtimeAgentId);
+    if (syncSearch) {
+      setEntitySearch(runtimeAgentId);
+    }
+  }, []);
 
   const runDecisionAction = useCallback(
     async (actionKey: string, task: () => Promise<string>) => {
@@ -986,6 +1073,21 @@ export default function ControlPlanePage() {
       ),
     [selectedSession]
   );
+  const linkedAgentIds = useMemo(() => {
+    const ids = [
+      ...(selectedSession?.linked_runtime_agent_ids || []),
+      ...linkedRuns.flatMap((run) => run.runtime_agent_ids || []),
+      ...linkedApprovals.flatMap((approval) => approval.runtime_agent_ids || []),
+      ...linkedIssues.flatMap((issue) =>
+        issue.runtime_agent_ids.length > 0
+          ? issue.runtime_agent_ids
+          : issue.runtime_agent_id
+            ? [issue.runtime_agent_id]
+            : []
+      ),
+    ].filter(Boolean);
+    return [...new Set(ids)];
+  }, [linkedApprovals, linkedIssues, linkedRuns, selectedSession]);
   const filteredApprovals = useMemo(
     () => linkedApprovals.filter((approval) => approvalMatchesSearch(approval, entitySearch)),
     [entitySearch, linkedApprovals]
@@ -1548,7 +1650,7 @@ export default function ControlPlanePage() {
                                   variant="outline"
                                   className="h-8 rounded-lg border-[#e5e5e3] bg-white px-3 text-[12px] text-[#37352f] hover:bg-[#f7f7f5]"
                                   onClick={() => {
-                                    setEntitySearch(runtimeAgentId);
+                                    focusRuntimeAgent(runtimeAgentId, true);
                                   }}
                                 >
                                   Find agent
@@ -1733,6 +1835,262 @@ export default function ControlPlanePage() {
                           })()}
                         </div>
                       )}
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+
+              <Card className="border border-[#e5e5e3] bg-white shadow-[0_1px_3px_rgba(15,15,15,0.08),0_0_1px_rgba(15,15,15,0.04)]">
+                <CardHeader>
+                  <CardTitle className="text-[18px] font-semibold tracking-[-0.02em] text-[#37352f]">
+                    Runtime Agent
+                  </CardTitle>
+                  <CardDescription className="text-[13px] text-[#787774]">
+                    Agent-centric control view for the currently selected runtime agent.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  {!selectedAgentId ? (
+                    <div className="rounded-xl border border-dashed border-[#e5e5e3] bg-[#fafaf9] px-5 py-8 text-[13px] text-[#9b9a97]">
+                      Select a linked runtime agent to inspect its current state and history.
+                    </div>
+                  ) : agentLoading || !selectedAgent ? (
+                    <div className="rounded-xl border border-dashed border-[#e5e5e3] bg-[#fafaf9] px-5 py-8 text-[13px] text-[#9b9a97]">
+                      Loading runtime agent detail...
+                    </div>
+                  ) : (
+                    <div className="space-y-4">
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <p className="font-mono text-[12px] font-semibold text-[#37352f]">
+                              {selectedAgent.runtime_agent_id}
+                            </p>
+                            <Badge
+                              variant="outline"
+                              className={`rounded-full px-2.5 py-1 text-[11px] font-semibold capitalize ${passStatusClass(selectedAgent.status)}`}
+                            >
+                              {selectedAgent.status}
+                            </Badge>
+                            <Badge
+                              variant="outline"
+                              className={`rounded-full px-2.5 py-1 text-[11px] font-semibold capitalize ${controlStateClass(selectedAgent.attention.state)}`}
+                            >
+                              {selectedAgent.attention.state}
+                            </Badge>
+                            <Badge
+                              variant="outline"
+                              className="rounded-full border-[#e5e5e3] bg-[#fafaf9] px-2.5 py-1 text-[11px] font-medium text-[#37352f]"
+                            >
+                              {selectedAgent.role}
+                            </Badge>
+                          </div>
+                          <p className="mt-2 text-[13px] text-[#6b6b6b]">
+                            {selectedAgent.project_name || selectedAgent.project_id}
+                            {" · "}
+                            {selectedAgent.story_title || `Story ${selectedAgent.story_id || "unknown"}`}
+                          </p>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          <Link
+                            href={
+                              selectedAgent.story_id
+                                ? `/projects/${selectedAgent.project_id}?storyId=${selectedAgent.story_id}`
+                                : `/projects/${selectedAgent.project_id}`
+                            }
+                            className="inline-flex h-8 items-center rounded-lg border border-[#e5e5e3] bg-white px-3 text-[12px] font-medium text-[#37352f] transition-colors hover:bg-[#f7f7f5]"
+                          >
+                            Open workspace
+                          </Link>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-8 rounded-lg border-[#e5e5e3] bg-white text-[12px] text-[#37352f] hover:bg-[#f7f7f5]"
+                            onClick={() => {
+                              focusRuntimeAgent(selectedAgent.runtime_agent_id, true);
+                            }}
+                          >
+                            Filter session
+                          </Button>
+                        </div>
+                      </div>
+
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        <SessionMetric
+                          label="Open Issues"
+                          value={String(selectedAgent.history.open_issue_count)}
+                          detail={`${selectedAgent.history.issue_count} total issues`}
+                        />
+                        <SessionMetric
+                          label="Pending Approvals"
+                          value={String(selectedAgent.history.pending_approval_count)}
+                          detail={`${selectedAgent.history.approval_count} total approvals`}
+                        />
+                        <SessionMetric
+                          label="Events"
+                          value={String(selectedAgent.history.event_count)}
+                          detail={formatTimestamp(selectedAgent.history.last_event_at)}
+                        />
+                        <SessionMetric
+                          label="Budget"
+                          value={
+                            selectedAgent.budget.tracked
+                              ? `${toNumber(selectedAgent.budget.remaining, 0)} left`
+                              : "Untracked"
+                          }
+                          detail={
+                            selectedAgent.budget.tracked
+                              ? `${selectedAgent.budget.used ?? 0}/${selectedAgent.budget.limit ?? 0} ${selectedAgent.budget.metric || ""}`.trim()
+                              : "No tracked budget metric"
+                          }
+                        />
+                      </div>
+
+                      <div className="rounded-2xl border border-[#ecebe8] bg-[#fbfbf9] p-4">
+                        <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#9b9a97]">
+                          Attention
+                        </p>
+                        <p className="mt-3 text-[13px] leading-relaxed text-[#6b6b6b]">
+                          {selectedAgent.attention.recommended_action}
+                        </p>
+                        {selectedAgent.attention.reasons.length > 0 && (
+                          <div className="mt-3 flex flex-wrap gap-2">
+                            {selectedAgent.attention.reasons.map((reason) => (
+                              <Badge
+                                key={`${selectedAgent.runtime_agent_id}-${reason}`}
+                                variant="outline"
+                                className="rounded-full border-[#e5e5e3] bg-white px-2.5 py-1 text-[11px] font-medium text-[#37352f]"
+                              >
+                                {reason}
+                              </Badge>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="rounded-2xl border border-[#ecebe8] bg-[#fbfbf9] p-4">
+                        <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#9b9a97]">
+                          Agent Recommendations
+                        </p>
+                        {selectedAgent.recommendations.length === 0 && selectedAgent.suggested_commands.length === 0 ? (
+                          <p className="mt-3 text-[13px] text-[#9b9a97]">No current agent recommendations.</p>
+                        ) : (
+                          <div className="mt-3 space-y-3">
+                            {selectedAgent.recommendations.slice(0, 3).map((recommendation, index) => (
+                              <div
+                                key={`${selectedAgent.runtime_agent_id}-rec-${index}`}
+                                className="rounded-xl border border-[#ecebe8] bg-white p-3"
+                              >
+                                <div className="flex flex-wrap items-center justify-between gap-2">
+                                  <p className="text-[13px] font-semibold text-[#37352f]">
+                                    {toStringValue(recommendation.title, toStringValue(recommendation.kind, "recommendation"))}
+                                  </p>
+                                  <Badge
+                                    variant="outline"
+                                    className={`rounded-full px-2.5 py-1 text-[11px] font-semibold capitalize ${priorityClass(toStringValue(recommendation.priority, "medium"))}`}
+                                  >
+                                    {toStringValue(recommendation.priority, "medium")}
+                                  </Badge>
+                                </div>
+                                <p className="mt-2 text-[12px] text-[#6b6b6b]">
+                                  {toStringValue(recommendation.reason, "No reason provided")}
+                                </p>
+                              </div>
+                            ))}
+                            {selectedAgent.suggested_commands.slice(0, 2).map((command, index) => (
+                              <div
+                                key={`${selectedAgent.runtime_agent_id}-cmd-${index}`}
+                                className="rounded-xl border border-[#ecebe8] bg-white p-3"
+                              >
+                                <div className="flex flex-wrap items-center justify-between gap-2">
+                                  <p className="text-[13px] font-semibold text-[#37352f]">
+                                    {toStringValue(command.title, toStringValue(command.command, "command"))}
+                                  </p>
+                                  <Badge
+                                    variant="outline"
+                                    className={`rounded-full px-2.5 py-1 text-[11px] font-semibold capitalize ${priorityClass(toStringValue(command.priority, "medium"))}`}
+                                  >
+                                    {toStringValue(command.priority, "medium")}
+                                  </Badge>
+                                </div>
+                                <p className="mt-2 text-[12px] text-[#6b6b6b]">
+                                  {toStringValue(command.reason, "No reason provided")}
+                                </p>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="grid gap-4 sm:grid-cols-2">
+                        <div className="rounded-2xl border border-[#ecebe8] bg-[#fbfbf9] p-4">
+                          <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#9b9a97]">
+                            Agent Issues
+                          </p>
+                          {selectedAgent.issues.length === 0 ? (
+                            <p className="mt-3 text-[13px] text-[#9b9a97]">No agent-linked issues.</p>
+                          ) : (
+                            <div className="mt-3 space-y-3">
+                              {selectedAgent.issues.slice(0, 3).map((issue) => (
+                                <div
+                                  key={`${selectedAgent.runtime_agent_id}-issue-${issue.id}`}
+                                  className="rounded-xl border border-[#ecebe8] bg-white p-3"
+                                >
+                                  <div className="flex flex-wrap items-center justify-between gap-2">
+                                    <p className="font-mono text-[11px] text-[#37352f]">{issue.id}</p>
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      className="h-7 rounded-full border-[#f4e0c4] bg-[#fff6e8] px-2.5 text-[11px] text-[#9a6700] hover:bg-[#fff0d9]"
+                                      onClick={() => {
+                                        setEntitySearch(issue.id);
+                                      }}
+                                    >
+                                      Find in session
+                                    </Button>
+                                  </div>
+                                  <p className="mt-2 text-[12px] text-[#6b6b6b]">
+                                    {issue.title || issue.root_cause || issue.category}
+                                  </p>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+
+                        <div className="rounded-2xl border border-[#ecebe8] bg-[#fbfbf9] p-4">
+                          <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#9b9a97]">
+                            Agent Events
+                          </p>
+                          {selectedAgent.events.length === 0 ? (
+                            <p className="mt-3 text-[13px] text-[#9b9a97]">No agent-linked events.</p>
+                          ) : (
+                            <div className="mt-3 space-y-3">
+                              {selectedAgent.events.slice(-3).reverse().map((event) => (
+                                <div
+                                  key={`${selectedAgent.runtime_agent_id}-${toStringValue(event.event)}-${toStringValue(event.timestamp)}`}
+                                  className="rounded-xl border border-[#ecebe8] bg-white p-3"
+                                >
+                                  <div className="flex flex-wrap items-center justify-between gap-2">
+                                    <p className="font-mono text-[11px] text-[#37352f]">
+                                      {toStringValue(event.event, "unknown_event")}
+                                    </p>
+                                    <Badge
+                                      variant="outline"
+                                      className={`rounded-full px-2.5 py-1 text-[11px] font-medium capitalize ${passStatusClass(toStringValue(event.status, "unknown"))}`}
+                                    >
+                                      {toStringValue(event.status, "unknown")}
+                                    </Badge>
+                                  </div>
+                                  <p className="mt-2 text-[12px] text-[#6b6b6b]">
+                                    {toStringValue(event.message, "No event message")}
+                                  </p>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      </div>
                     </div>
                   )}
                 </CardContent>
@@ -1967,6 +2325,43 @@ export default function ControlPlanePage() {
                         value={String(selectedSession.summary.control_pass_count)}
                         detail={`${selectedSession.summary.run_count} linked runs`}
                       />
+                    </div>
+
+                    <div className="rounded-2xl border border-[#ecebe8] bg-[#fbfbf9] p-4">
+                      <div className="flex items-center justify-between gap-3">
+                        <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#9b9a97]">
+                          Linked Runtime Agents
+                        </p>
+                        <Badge
+                          variant="outline"
+                          className="rounded-full border-[#e5e5e3] bg-white px-2.5 py-1 text-[11px] font-medium text-[#37352f]"
+                        >
+                          {linkedAgentIds.length}
+                        </Badge>
+                      </div>
+                      {!linkedAgentIds.length ? (
+                        <p className="mt-3 text-[13px] text-[#9b9a97]">No linked runtime agents in this session.</p>
+                      ) : (
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          {linkedAgentIds.slice(0, 12).map((runtimeAgentId) => (
+                            <Button
+                              key={`${selectedSession.id}-${runtimeAgentId}`}
+                              size="sm"
+                              variant={selectedAgentId === runtimeAgentId ? "default" : "outline"}
+                              className={`h-8 rounded-full px-3 text-[11px] ${
+                                selectedAgentId === runtimeAgentId
+                                  ? "bg-[#1a1a1a] text-white hover:bg-[#333]"
+                                  : "border-[#e5e5e3] bg-white text-[#37352f] hover:bg-[#f7f7f5]"
+                              }`}
+                              onClick={() => {
+                                focusRuntimeAgent(runtimeAgentId, true);
+                              }}
+                            >
+                              {runtimeAgentId}
+                            </Button>
+                          ))}
+                        </div>
+                      )}
                     </div>
 
                     <div className="rounded-2xl border border-[#ecebe8] bg-[#fbfbf9] p-4">
@@ -2285,7 +2680,7 @@ export default function ControlPlanePage() {
                                               variant="outline"
                                               className="h-7 rounded-full border-[#e5e5e3] bg-white px-2.5 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
                                               onClick={() => {
-                                                setEntitySearch(runtimeAgentId);
+                                                focusRuntimeAgent(runtimeAgentId, true);
                                               }}
                                             >
                                               {runtimeAgentId}
@@ -2467,7 +2862,7 @@ export default function ControlPlanePage() {
                                             variant="outline"
                                             className="h-7 rounded-full border-[#e5e5e3] bg-white px-2.5 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
                                             onClick={() => {
-                                              setEntitySearch(runtimeAgentId);
+                                              focusRuntimeAgent(runtimeAgentId, true);
                                             }}
                                           >
                                             {runtimeAgentId}
@@ -2730,7 +3125,7 @@ export default function ControlPlanePage() {
                                             variant="outline"
                                             className="h-7 rounded-full border-[#e5e5e3] bg-white px-2.5 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
                                             onClick={() => {
-                                              setEntitySearch(runtimeAgentId);
+                                              focusRuntimeAgent(runtimeAgentId, true);
                                             }}
                                           >
                                             {runtimeAgentId}
@@ -2880,7 +3275,7 @@ export default function ControlPlanePage() {
                                             variant="outline"
                                             className="h-7 rounded-full border-[#e5e5e3] bg-white px-2.5 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
                                             onClick={() => {
-                                              setEntitySearch(runtimeAgentId);
+                                              focusRuntimeAgent(runtimeAgentId, true);
                                             }}
                                           >
                                             {runtimeAgentId}

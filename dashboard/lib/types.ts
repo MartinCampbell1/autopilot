@@ -433,6 +433,76 @@ export interface ExecutionAgentActionRunRecord {
   completed_at?: string | null;
 }
 
+export interface ExecutionRuntimeAgentBudgetSummary {
+  tracked: boolean;
+  usage_label?: string | null;
+  metric?: string | null;
+  used?: number | null;
+  limit?: number | null;
+  remaining?: number | null;
+  exhausted: boolean;
+  auto_pause_on_exhaustion: boolean;
+  last_exhaustion_reason?: string | null;
+  auto_paused_at?: string | null;
+}
+
+export interface ExecutionRuntimeAgentAttentionSummary {
+  state: string;
+  recommended_action: string;
+  reasons: string[];
+}
+
+export interface ExecutionRuntimeAgentProjectContext {
+  project_id: string;
+  name: string;
+  path: string;
+  status: string;
+  paused: boolean;
+  current_story_id?: number | null;
+  current_iteration?: number | null;
+}
+
+export interface ExecutionRuntimeAgentStoryContext {
+  id: number;
+  title?: string | null;
+  status: string;
+  phase_id?: string | null;
+  phase_title?: string | null;
+  iteration?: number | null;
+}
+
+export interface ExecutionRuntimeAgentHistorySummary {
+  issue_count: number;
+  open_issue_count: number;
+  approval_count: number;
+  pending_approval_count: number;
+  event_count: number;
+  last_event_at?: string | null;
+}
+
+export interface ExecutionRuntimeAgentDetail {
+  runtime_agent_id: string;
+  project_id: string;
+  project_name: string;
+  initiative: Record<string, unknown>;
+  orchestration: Record<string, unknown>;
+  role: string;
+  status: string;
+  budget: ExecutionRuntimeAgentBudgetSummary;
+  attention: ExecutionRuntimeAgentAttentionSummary;
+  recommendations: Array<Record<string, unknown>>;
+  suggested_commands: Array<Record<string, unknown>>;
+  story_id?: number | null;
+  story_title?: string | null;
+  project: ExecutionRuntimeAgentProjectContext;
+  story: ExecutionRuntimeAgentStoryContext;
+  current: Record<string, unknown> | null;
+  history: ExecutionRuntimeAgentHistorySummary;
+  issues: ExecutionIssueRecord[];
+  approvals: ExecutionApprovalRecord[];
+  events: ExecutionPlaneEvent[];
+}
+
 export interface OrchestratorSessionDetail extends OrchestratorSessionRecord {
   runs: ExecutionAgentActionRunRecord[];
   control_passes: OrchestratorControlPassRecord[];
