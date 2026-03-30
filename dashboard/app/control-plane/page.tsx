@@ -160,6 +160,13 @@ type TriageInboxItem = {
   onSnooze: () => void;
   onDismiss: () => void;
 };
+type TriageInboxFeedback = {
+  itemKey: string;
+  itemLabel: string;
+  message: string;
+  tone: "info" | "success";
+  timestamp: string;
+};
 
 function agentTimelineEntryKey(entry: AgentTimelineEntry): string {
   return `${entry.kind}:${entry.id}`;
@@ -1484,6 +1491,7 @@ export default function ControlPlanePage() {
   const [selectedSessionContextKind, setSelectedSessionContextKind] =
     useState<SessionContextKind>("");
   const [selectedTriageInboxKey, setSelectedTriageInboxKey] = useState("");
+  const [triageInboxFeedback, setTriageInboxFeedback] = useState<TriageInboxFeedback | null>(null);
   const [historySearch, setHistorySearch] = useState("");
   const [entitySearch, setEntitySearch] = useState("");
   const [refreshing, setRefreshing] = useState(false);
@@ -1495,6 +1503,7 @@ export default function ControlPlanePage() {
   const [hydratedLineageQueueSessionId, setHydratedLineageQueueSessionId] = useState("");
   const selectedSessionLineageEntryRef = useRef<SessionLineageEntry | null>(null);
   const selectedAgentTimelineEntryRef = useRef<AgentTimelineEntry | null>(null);
+  const selectedTriageInboxKeyRef = useRef("");
   const sessionLineageFilterRef = useRef("all");
 
   const loadOverview = useCallback(async () => {
@@ -1961,6 +1970,24 @@ export default function ControlPlanePage() {
     },
     [loadAgentDetail, loadOverview, loadSessionDetail, selectedSessionId]
   );
+  const recordTriageInboxFeedback = useCallback(
+    (
+      itemKey: string,
+      itemLabel: string,
+      message: string,
+      tone: "info" | "success" = "success"
+    ) => {
+      if (!itemKey || !itemLabel || !message) return;
+      setTriageInboxFeedback({
+        itemKey,
+        itemLabel,
+        message,
+        tone,
+        timestamp: new Date().toISOString(),
+      });
+    },
+    []
+  );
 
   const runDecisionAction = useCallback(
     async (
@@ -1972,6 +1999,7 @@ export default function ControlPlanePage() {
       setBusyActionKey(actionKey);
       setNotice("");
       setErrorMessage("");
+      const currentTriageInboxKey = selectedTriageInboxKeyRef.current;
       const currentLineageEntry = selectedSessionLineageEntryRef.current;
       const currentLineageFilter = sessionLineageFilterRef.current;
       const currentAgentEntry = selectedAgentTimelineEntryRef.current;
@@ -1995,6 +2023,19 @@ export default function ControlPlanePage() {
       try {
         const message = await task();
         setNotice(message);
+        if (currentTriageInboxKey) {
+          const itemLabel =
+            currentTriageInboxKey === "session-attention"
+              ? "Session Attention"
+              : currentTriageInboxKey === "session-decisions"
+                ? "Session Decision"
+                : currentTriageInboxKey === "agent-critical"
+                  ? "Agent Critical"
+                  : currentTriageInboxKey === "agent-high"
+                    ? "Agent High"
+                    : "";
+          recordTriageInboxFeedback(currentTriageInboxKey, itemLabel, message, "success");
+        }
         if (autoAdvanceFilter && currentLineageEntry) {
           setPendingLineageAutoAdvance({
             filter: autoAdvanceFilter,
@@ -2022,6 +2063,7 @@ export default function ControlPlanePage() {
     },
     [
       loadAgentDetail,
+      recordTriageInboxFeedback,
       refreshAfterMutation,
       selectedAgentId,
       selectedSessionId,
@@ -3398,6 +3440,12 @@ export default function ControlPlanePage() {
       null,
     [triageInboxItems, selectedTriageInboxKey]
   );
+  useEffect(() => {
+    selectedTriageInboxKeyRef.current = selectedTriageInboxKey;
+  }, [selectedTriageInboxKey]);
+  useEffect(() => {
+    setTriageInboxFeedback(null);
+  }, [selectedAgentId, selectedSessionId]);
   const syncedTriageInboxItem = useMemo(
     () => triageInboxItems.find((item) => item.syncedWithSelection) ?? null,
     [triageInboxItems]
@@ -3435,17 +3483,19 @@ export default function ControlPlanePage() {
     (item: TriageInboxItem) => {
       const nextKey = nextTriageInboxCursorKey(item.key);
       setSelectedTriageInboxKey(nextKey || item.key);
+      recordTriageInboxFeedback(item.key, item.label, `${item.label} snoozed for 15m.`, "info");
       item.onSnooze();
     },
-    [nextTriageInboxCursorKey]
+    [nextTriageInboxCursorKey, recordTriageInboxFeedback]
   );
   const dismissTriageInboxItem = useCallback(
     (item: TriageInboxItem) => {
       const nextKey = nextTriageInboxCursorKey(item.key);
       setSelectedTriageInboxKey(nextKey || item.key);
+      recordTriageInboxFeedback(item.key, item.label, `${item.label} dismissed from inbox.`, "info");
       item.onDismiss();
     },
-    [nextTriageInboxCursorKey]
+    [nextTriageInboxCursorKey, recordTriageInboxFeedback]
   );
   const syncTriageInboxCursorToSelection = useCallback(() => {
     if (!syncedTriageInboxItem) return;
@@ -5271,6 +5321,47 @@ export default function ControlPlanePage() {
                           <p className="mt-2 text-[12px] text-[#787774]">
                             {selectedTriageInboxItem.subtitle}
                           </p>
+                          {triageInboxFeedback ? (
+                            <div
+                              className={`mt-3 rounded-lg border p-3 ${
+                                triageInboxFeedback.tone === "success"
+                                  ? "border-[#d6e9dc] bg-[#eef8f1]"
+                                  : "border-[#e5e5e3] bg-white"
+                              }`}
+                            >
+                              <div className="flex flex-wrap items-center justify-between gap-2">
+                                <p
+                                  className={`text-[11px] font-semibold uppercase tracking-[0.08em] ${
+                                    triageInboxFeedback.tone === "success"
+                                      ? "text-[#2b6e3f]"
+                                      : "text-[#9b9a97]"
+                                  }`}
+                                >
+                                  Latest Result
+                                  {triageInboxFeedback.itemLabel
+                                    ? ` · ${triageInboxFeedback.itemLabel}`
+                                    : ""}
+                                </p>
+                                <p className="text-[11px] text-[#9b9a97]">
+                                  {formatTimestamp(triageInboxFeedback.timestamp)}
+                                </p>
+                              </div>
+                              <p
+                                className={`mt-2 text-[12px] ${
+                                  triageInboxFeedback.tone === "success"
+                                    ? "text-[#2b6e3f]"
+                                    : "text-[#6b6b6b]"
+                                }`}
+                              >
+                                {triageInboxFeedback.message}
+                              </p>
+                              {triageInboxFeedback.itemKey !== selectedTriageInboxItem.key ? (
+                                <p className="mt-2 text-[11px] text-[#9b9a97]">
+                                  Cursor moved after that action.
+                                </p>
+                              ) : null}
+                            </div>
+                          ) : null}
                         </div>
                       ) : null}
 
