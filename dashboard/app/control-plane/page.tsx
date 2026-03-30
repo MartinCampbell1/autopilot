@@ -5217,6 +5217,12 @@ export default function ControlPlanePage() {
                                   const queueTraits = sessionLineageTraits(entry).filter(
                                     (trait) => trait.key !== "attention"
                                   );
+                                  const workspaceHref =
+                                    entry.projectId && entry.storyId
+                                      ? `/projects/${entry.projectId}?storyId=${entry.storyId}`
+                                      : entry.projectId
+                                        ? `/projects/${entry.projectId}`
+                                        : "";
                                   return (
                                     <QueueItemCard
                                       key={`attention-queue-${entry.key}`}
@@ -5291,6 +5297,14 @@ export default function ControlPlanePage() {
                                         >
                                           Dismiss
                                         </Button>
+                                        {workspaceHref ? (
+                                          <Link
+                                            href={workspaceHref}
+                                            className="inline-flex h-7 items-center rounded-lg border border-[#e5e5e3] bg-white px-2 text-[11px] font-medium text-[#37352f] transition-colors hover:bg-[#f7f7f5]"
+                                          >
+                                            Open workspace
+                                          </Link>
+                                        ) : null}
                                         </>
                                       }
                                     />
@@ -5356,6 +5370,12 @@ export default function ControlPlanePage() {
                                   const queueTraits = sessionLineageTraits(entry).filter(
                                     (trait) => trait.key !== "decision"
                                   );
+                                  const workspaceHref =
+                                    entry.projectId && entry.storyId
+                                      ? `/projects/${entry.projectId}?storyId=${entry.storyId}`
+                                      : entry.projectId
+                                        ? `/projects/${entry.projectId}`
+                                        : "";
                                   return (
                                     <QueueItemCard
                                       key={`decision-queue-${entry.key}`}
@@ -5430,6 +5450,14 @@ export default function ControlPlanePage() {
                                         >
                                           Dismiss
                                         </Button>
+                                        {workspaceHref ? (
+                                          <Link
+                                            href={workspaceHref}
+                                            className="inline-flex h-7 items-center rounded-lg border border-[#e5e5e3] bg-white px-2 text-[11px] font-medium text-[#37352f] transition-colors hover:bg-[#f7f7f5]"
+                                          >
+                                            Open workspace
+                                          </Link>
+                                        ) : null}
                                         </>
                                       }
                                     />
@@ -6753,6 +6781,20 @@ export default function ControlPlanePage() {
                                           selectedAgentTimelineEntry &&
                                           agentTimelineEntryKey(selectedAgentTimelineEntry) ===
                                             agentTimelineEntryKey(entry);
+                                        const workspaceProjectId =
+                                          entry.issue?.project_id ||
+                                          entry.approval?.project_id ||
+                                          selectedAgent?.project_id ||
+                                          "";
+                                        const workspaceStoryId =
+                                          entry.issue?.story_id ??
+                                          selectedAgent?.story_id ??
+                                          null;
+                                        const workspaceHref = workspaceProjectId
+                                          ? workspaceStoryId
+                                            ? `/projects/${workspaceProjectId}?storyId=${workspaceStoryId}`
+                                            : `/projects/${workspaceProjectId}`
+                                          : "";
                                         return (
                                           <QueueItemCard
                                             key={`agent-priority-${queue.key}-${agentTimelineEntryKey(entry)}`}
@@ -6817,6 +6859,14 @@ export default function ControlPlanePage() {
                                                 >
                                                   Dismiss
                                                 </Button>
+                                                {workspaceHref ? (
+                                                  <Link
+                                                    href={workspaceHref}
+                                                    className="inline-flex h-7 items-center rounded-lg border border-[#e5e5e3] bg-white px-2 text-[11px] font-medium text-[#37352f] transition-colors hover:bg-[#f7f7f5]"
+                                                  >
+                                                    Open workspace
+                                                  </Link>
+                                                ) : null}
                                               </>
                                             }
                                           />
