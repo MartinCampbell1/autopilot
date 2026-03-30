@@ -75,6 +75,11 @@ function toNumber(value: unknown, fallback = 0): number {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+function toNullableNumber(value: unknown): number | null {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 function toStringValue(value: unknown, fallback = ""): string {
   return typeof value === "string" && value.trim() ? value : fallback;
 }
@@ -107,6 +112,42 @@ function extractLatestRunIdFromAppliedSteps(value: Array<Record<string, unknown>
 
 function formatScopeList(values: string[], fallback: string): string {
   return values.length ? values.join(", ") : fallback;
+}
+
+function outcomeProjectId(result: Record<string, unknown>): string {
+  const action = asRecord(result.action);
+  const commandResult = asRecord(result.command_result);
+  const project = asRecord(result.project) || asRecord(commandResult?.project);
+  return (
+    toStringValue(action?.project_id) ||
+    toStringValue(project?.id)
+  );
+}
+
+function outcomeProjectName(result: Record<string, unknown>): string {
+  const action = asRecord(result.action);
+  const commandResult = asRecord(result.command_result);
+  const project = asRecord(result.project) || asRecord(commandResult?.project);
+  return (
+    toStringValue(action?.project_name) ||
+    toStringValue(project?.name) ||
+    outcomeProjectId(result)
+  );
+}
+
+function outcomeStoryId(result: Record<string, unknown>): number | null {
+  const action = asRecord(result.action);
+  return toNullableNumber(action?.story_id);
+}
+
+function outcomeStoryTitle(result: Record<string, unknown>): string {
+  const action = asRecord(result.action);
+  return toStringValue(action?.story_title);
+}
+
+function outcomeRuntimeAgentId(result: Record<string, unknown>): string {
+  const action = asRecord(result.action);
+  return toStringValue(action?.runtime_agent_id);
 }
 
 function formatJson(value: unknown): string {
@@ -1253,16 +1294,46 @@ export default function ControlPlanePage() {
 
                       {selectedRunResult && (
                         <div className="rounded-2xl border border-[#ecebe8] bg-[#fbfbf9] p-4">
+                          {(() => {
+                            const actionPayload = asRecord(selectedRunResult.action);
+                            const commandResultPayload = asRecord(selectedRunResult.command_result);
+                            const projectId = outcomeProjectId(selectedRunResult);
+                            const projectName = outcomeProjectName(selectedRunResult);
+                            const storyId = outcomeStoryId(selectedRunResult);
+                            const storyTitle = outcomeStoryTitle(selectedRunResult);
+                            const runtimeAgentId = outcomeRuntimeAgentId(selectedRunResult);
+                            const commandName = toStringValue(
+                              actionPayload?.command,
+                              toStringValue(commandResultPayload?.command)
+                            );
+                            const workspaceHref =
+                              projectId && storyId
+                                ? `/projects/${projectId}?storyId=${storyId}`
+                                : projectId
+                                  ? `/projects/${projectId}`
+                                  : "";
+                            return (
+                              <>
                           <div className="flex flex-wrap items-center justify-between gap-3">
                             <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#9b9a97]">
                               Selected Outcome
                             </p>
-                            <Badge
-                              variant="outline"
-                              className={`rounded-full px-2.5 py-1 text-[11px] font-semibold capitalize ${passStatusClass(toStringValue(selectedRunResult.status, "unknown"))}`}
-                            >
-                              {toStringValue(selectedRunResult.status, "unknown")}
-                            </Badge>
+                            <div className="flex flex-wrap items-center gap-2">
+                              {workspaceHref && (
+                                <Link
+                                  href={workspaceHref}
+                                  className="inline-flex h-8 items-center rounded-lg border border-[#e5e5e3] bg-white px-3 text-[12px] font-medium text-[#37352f] transition-colors hover:bg-[#f7f7f5]"
+                                >
+                                  Open workspace
+                                </Link>
+                              )}
+                              <Badge
+                                variant="outline"
+                                className={`rounded-full px-2.5 py-1 text-[11px] font-semibold capitalize ${passStatusClass(toStringValue(selectedRunResult.status, "unknown"))}`}
+                              >
+                                {toStringValue(selectedRunResult.status, "unknown")}
+                              </Badge>
+                            </div>
                           </div>
 
                           <div className="mt-3 grid gap-3 sm:grid-cols-2">
@@ -1289,6 +1360,61 @@ export default function ControlPlanePage() {
                               )}
                             />
                           </div>
+
+                          <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                            <SessionMetric
+                              label="Project"
+                              value={projectName || "Unknown project"}
+                              detail={projectId || "No project id in payload"}
+                            />
+                            <SessionMetric
+                              label="Story"
+                              value={storyTitle || (storyId ? `Story ${storyId}` : "No story context")}
+                              detail={storyId ? `story_id ${storyId}` : "Outcome is not story-scoped"}
+                            />
+                            <SessionMetric
+                              label="Command"
+                              value={commandName || "No command recorded"}
+                              detail={toStringValue(
+                                commandResultPayload?.status,
+                                toStringValue(selectedRunResult.planned_mode, "No command status")
+                              )}
+                            />
+                            <SessionMetric
+                              label="Runtime Agent"
+                              value={runtimeAgentId || "No agent linkage"}
+                              detail={toStringValue(actionPayload?.role, "No execution role")}
+                            />
+                          </div>
+
+                          {(projectId || storyId || runtimeAgentId) && (
+                            <div className="mt-4 flex flex-wrap gap-2">
+                              {projectId && (
+                                <Badge
+                                  variant="outline"
+                                  className="rounded-full border-[#e5e5e3] bg-white px-2.5 py-1 text-[11px] font-medium text-[#37352f]"
+                                >
+                                  project {projectId}
+                                </Badge>
+                              )}
+                              {storyId && (
+                                <Badge
+                                  variant="outline"
+                                  className="rounded-full border-[#d3e5ef] bg-[#eef7fb] px-2.5 py-1 text-[11px] font-medium text-[#2a6690]"
+                                >
+                                  story {storyId}
+                                </Badge>
+                              )}
+                              {runtimeAgentId && (
+                                <Badge
+                                  variant="outline"
+                                  className="rounded-full border-[#e5e5e3] bg-[#fafaf9] px-2.5 py-1 text-[11px] font-medium text-[#37352f]"
+                                >
+                                  agent {runtimeAgentId}
+                                </Badge>
+                              )}
+                            </div>
+                          )}
 
                           <p className="mt-4 text-[13px] leading-relaxed text-[#6b6b6b]">
                             {toStringValue(
@@ -1343,6 +1469,9 @@ export default function ControlPlanePage() {
                               </div>
                             )}
                           </div>
+                              </>
+                            );
+                          })()}
                         </div>
                       )}
                     </div>

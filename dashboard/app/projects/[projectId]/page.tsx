@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { AppSidebar } from "@/components/app-sidebar";
 import { KanbanBoard } from "@/components/kanban-board";
 import { StoryDetailPanel } from "@/components/story-detail-panel";
@@ -29,7 +29,14 @@ const STATUS_COPY: Record<ProjectDetail["status"], string> = {
 export default function ProjectWorkspacePage() {
   const params = useParams<{ projectId: string }>();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const projectId = String(params.projectId);
+  const requestedStoryId = useMemo(() => {
+    const raw = searchParams.get("storyId");
+    if (!raw) return null;
+    const parsed = Number(raw);
+    return Number.isFinite(parsed) ? parsed : null;
+  }, [searchParams]);
 
   const [project, setProject] = useState<ProjectDetail | null>(null);
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
@@ -50,13 +57,19 @@ export default function ProjectWorkspacePage() {
       setProjects((projectsData.projects || []) as ProjectSummary[]);
       setHealth(healthData as AccountHealth);
       setSelectedStoryId((current) => {
+        if (
+          requestedStoryId &&
+          detail.stories.some((story) => story.id === requestedStoryId)
+        ) {
+          return requestedStoryId;
+        }
         if (current && detail.stories.some((story) => story.id === current)) return current;
         return detail.current_story_id ?? detail.stories[0]?.id ?? null;
       });
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Failed to load project.");
     }
-  }, [projectId]);
+  }, [projectId, requestedStoryId]);
 
   useEffect(() => {
     void load();
@@ -78,6 +91,13 @@ export default function ProjectWorkspacePage() {
     if (!project || !selectedStoryId) return null;
     return project.stories.find((story) => story.id === selectedStoryId) ?? null;
   }, [project, selectedStoryId]);
+
+  useEffect(() => {
+    if (!project || !requestedStoryId) return;
+    if (project.stories.some((story) => story.id === requestedStoryId)) {
+      setSelectedStoryId(requestedStoryId);
+    }
+  }, [project, requestedStoryId]);
 
   const runAction = async (task: () => Promise<{ message: string }>, next?: () => void) => {
     setBusy(true);
