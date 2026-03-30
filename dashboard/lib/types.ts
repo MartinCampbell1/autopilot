@@ -216,6 +216,91 @@ export interface ProjectRuntimeControl {
   orphaned_worktrees: OrphanedWorktree[];
 }
 
+export type ExecutionPlaneCountMap = Record<string, number>;
+
+export interface OrchestratorSessionSummary {
+  totals: {
+    sessions: number;
+    open: number;
+    completed: number;
+    archived: number;
+  };
+  by_status: ExecutionPlaneCountMap;
+  by_orchestrator: ExecutionPlaneCountMap;
+  by_actor: ExecutionPlaneCountMap;
+  latest_session_at?: string | null;
+}
+
+export interface OrchestratorSessionRecord {
+  id: string;
+  orchestrator: string;
+  actor: string;
+  title: string;
+  initiative_id: string;
+  project_ids: string[];
+  status: string;
+  reason: string;
+  context: Record<string, unknown>;
+  linked_run_ids: string[];
+  linked_control_pass_ids: string[];
+  linked_approval_ids: string[];
+  linked_issue_ids: string[];
+  linked_runtime_agent_ids: string[];
+  created_at: string;
+  updated_at: string;
+  closed_at?: string | null;
+  closed_by: string;
+  close_note: string;
+}
+
+export interface OrchestratorControlPassSummary {
+  totals: {
+    control_passes: number;
+    ok: number;
+    partial: number;
+    error: number;
+    noop: number;
+    customized: number;
+    sessions: number;
+    projects: number;
+    applied_steps: number;
+    error_steps: number;
+  };
+  by_status: ExecutionPlaneCountMap;
+  by_profile: ExecutionPlaneCountMap;
+  by_actor: ExecutionPlaneCountMap;
+  by_orchestrator: ExecutionPlaneCountMap;
+  by_final_state: ExecutionPlaneCountMap;
+  by_stopped_reason: ExecutionPlaneCountMap;
+  by_session_status_before: ExecutionPlaneCountMap;
+  by_session_status_after: ExecutionPlaneCountMap;
+  latest_control_pass_at?: string | null;
+}
+
+export interface OrchestratorControlPassRecord {
+  id: string;
+  orchestrator_session_id: string;
+  actor: string;
+  reason: string;
+  profile: string;
+  customized: boolean;
+  recommendation_kinds: string[];
+  control_before: Record<string, unknown>;
+  control_after: Record<string, unknown>;
+  applied: Array<Record<string, unknown>>;
+  errors: Array<Record<string, unknown>>;
+  summary: Record<string, unknown>;
+  status: string;
+  project_ids: string[];
+  initiative_id: string;
+  orchestrator: string;
+  session_status_before: string;
+  session_status_after: string;
+  created_at: string;
+  updated_at: string;
+  completed_at?: string | null;
+}
+
 export interface AccountHealth {
   total: number;
   available: number;

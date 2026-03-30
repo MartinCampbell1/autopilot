@@ -8,6 +8,10 @@ import type {
   LaunchResult,
   LaunchProfile,
   LaunchPreset,
+  OrchestratorControlPassRecord,
+  OrchestratorControlPassSummary,
+  OrchestratorSessionRecord,
+  OrchestratorSessionSummary,
   PRD,
   ProjectDetail,
   ProjectRuntimeControl,
@@ -18,6 +22,18 @@ import type {
 } from "@/lib/types";
 
 export const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8420/api";
+
+function buildQuery(
+  params: Record<string, string | number | boolean | null | undefined>
+): string {
+  const query = new URLSearchParams();
+  Object.entries(params).forEach(([key, value]) => {
+    if (value === null || value === undefined || value === "") return;
+    query.set(key, String(value));
+  });
+  const rendered = query.toString();
+  return rendered ? `?${rendered}` : "";
+}
 
 async function parseError(res: Response, fallback: string): Promise<never> {
   let detail = fallback;
@@ -60,6 +76,108 @@ export async function fetchProjectRuntimeControl(
     `${API_BASE}/projects/${encodeURIComponent(projectId)}/runtime-control?stale_after_sec=${staleAfterSec}`
   );
   return jsonOrThrow<ProjectRuntimeControl>(res, `Failed to fetch runtime control state: ${res.status}`);
+}
+
+export async function fetchExecutionPlaneOrchestratorSessions(
+  filters?: {
+    sessionId?: string;
+    projectId?: string;
+    initiativeId?: string;
+    orchestrator?: string;
+    actor?: string;
+    status?: string;
+  }
+): Promise<{ sessions: OrchestratorSessionRecord[] }> {
+  const query = buildQuery({
+    session_id: filters?.sessionId,
+    project_id: filters?.projectId,
+    initiative_id: filters?.initiativeId,
+    orchestrator: filters?.orchestrator,
+    actor: filters?.actor,
+    status: filters?.status,
+  });
+  const res = await fetch(`${API_BASE}/execution-plane/orchestrator-sessions${query}`);
+  return jsonOrThrow<{ sessions: OrchestratorSessionRecord[] }>(
+    res,
+    `Failed to fetch orchestrator sessions: ${res.status}`
+  );
+}
+
+export async function fetchExecutionPlaneOrchestratorSessionSummary(
+  filters?: {
+    projectId?: string;
+    initiativeId?: string;
+    orchestrator?: string;
+    actor?: string;
+    status?: string;
+  }
+): Promise<OrchestratorSessionSummary> {
+  const query = buildQuery({
+    project_id: filters?.projectId,
+    initiative_id: filters?.initiativeId,
+    orchestrator: filters?.orchestrator,
+    actor: filters?.actor,
+    status: filters?.status,
+  });
+  const res = await fetch(`${API_BASE}/execution-plane/orchestrator-sessions/summary${query}`);
+  return jsonOrThrow<OrchestratorSessionSummary>(
+    res,
+    `Failed to fetch orchestrator session summary: ${res.status}`
+  );
+}
+
+export async function fetchExecutionPlaneControlPasses(
+  filters?: {
+    orchestratorSessionId?: string;
+    projectId?: string;
+    initiativeId?: string;
+    orchestrator?: string;
+    actor?: string;
+    profile?: string;
+    status?: string;
+  }
+): Promise<{ control_passes: OrchestratorControlPassRecord[] }> {
+  const query = buildQuery({
+    orchestrator_session_id: filters?.orchestratorSessionId,
+    project_id: filters?.projectId,
+    initiative_id: filters?.initiativeId,
+    orchestrator: filters?.orchestrator,
+    actor: filters?.actor,
+    profile: filters?.profile,
+    status: filters?.status,
+  });
+  const res = await fetch(`${API_BASE}/execution-plane/orchestrator-sessions/control/passes${query}`);
+  return jsonOrThrow<{ control_passes: OrchestratorControlPassRecord[] }>(
+    res,
+    `Failed to fetch control passes: ${res.status}`
+  );
+}
+
+export async function fetchExecutionPlaneControlPassSummary(
+  filters?: {
+    orchestratorSessionId?: string;
+    projectId?: string;
+    initiativeId?: string;
+    orchestrator?: string;
+    actor?: string;
+    profile?: string;
+    status?: string;
+  }
+): Promise<OrchestratorControlPassSummary> {
+  const query = buildQuery({
+    orchestrator_session_id: filters?.orchestratorSessionId,
+    project_id: filters?.projectId,
+    initiative_id: filters?.initiativeId,
+    orchestrator: filters?.orchestrator,
+    actor: filters?.actor,
+    profile: filters?.profile,
+    status: filters?.status,
+  });
+  const res = await fetch(`${API_BASE}/execution-plane/orchestrator-sessions/control/passes/summary${query}`);
+  return jsonOrThrow<OrchestratorControlPassSummary>(
+    res,
+    `Failed to fetch control pass summary: ${res.status}`
+  );
 }
 
 export async function createProjectFromPrd(
