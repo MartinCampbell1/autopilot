@@ -1948,6 +1948,8 @@ function QueueAdvanceNotice({
   onReopenPrevious,
   onSignalClick,
   focusSummary,
+  onResetFocus,
+  onOpenMatchingQueue,
 }: {
   label: string;
   feedback: QueueAdvanceFeedback | null;
@@ -1955,6 +1957,8 @@ function QueueAdvanceNotice({
   onReopenPrevious?: (() => void) | undefined;
   onSignalClick?: ((signal: QueueAdvanceSignal) => void) | undefined;
   focusSummary?: QueueAdvanceFocusSummary | null;
+  onResetFocus?: (() => void) | undefined;
+  onOpenMatchingQueue?: (() => void) | undefined;
 }) {
   if (!feedback) return null;
 
@@ -2024,6 +2028,26 @@ function QueueAdvanceNotice({
             </Badge>
           </div>
           <p className="mt-1.5 text-[12px] text-[#46667d]">{focusSummary.detail}</p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 rounded-lg border-[#b6d6e8] bg-white px-2 text-[11px] text-[#214d69] hover:bg-[#f8fcfe]"
+              onClick={onResetFocus}
+              disabled={!onResetFocus || focusSummary.activeFilter === "all"}
+            >
+              Reset to all
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 rounded-lg border-[#b6d6e8] bg-white px-2 text-[11px] text-[#214d69] hover:bg-[#f8fcfe]"
+              onClick={onOpenMatchingQueue}
+              disabled={!onOpenMatchingQueue}
+            >
+              Open matching queue
+            </Button>
+          </div>
         </div>
       ) : null}
       {feedback.nextTarget || feedback.previousTarget ? (
@@ -5880,6 +5904,21 @@ export default function ControlPlanePage() {
                             label="Queue Advance"
                             feedback={sessionQueueAdvanceFeedback}
                             focusSummary={sessionQueueAdvanceFocusSummary}
+                            onResetFocus={() => {
+                              setSessionLineageFilter("all");
+                              if (sessionQueueAdvanceFeedback?.nextTarget?.kind === "session-lineage") {
+                                inspectSessionLineageEntry(
+                                  sessionQueueAdvanceFeedback.nextTarget.entry
+                                );
+                              }
+                            }}
+                            onOpenMatchingQueue={
+                              currentSessionLineageQueue
+                                ? () => {
+                                    openCurrentSessionLineageQueue();
+                                  }
+                                : undefined
+                            }
                             onOpenSelectedNext={
                               sessionQueueAdvanceFeedback?.nextTarget
                                 ? () => {
@@ -7461,6 +7500,26 @@ export default function ControlPlanePage() {
                             label="Queue Advance"
                             feedback={agentQueueAdvanceFeedback}
                             focusSummary={agentQueueAdvanceFocusSummary}
+                            onResetFocus={() => {
+                              focusAgentTimeline(
+                                "all",
+                                agentQueueAdvanceFeedback?.nextTarget?.kind === "agent-timeline"
+                                  ? { entry: agentQueueAdvanceFeedback.nextTarget.entry }
+                                  : undefined
+                              );
+                              if (agentQueueAdvanceFeedback?.nextTarget?.kind === "agent-timeline") {
+                                inspectAgentTimelineEntry(
+                                  agentQueueAdvanceFeedback.nextTarget.entry
+                                );
+                              }
+                            }}
+                            onOpenMatchingQueue={
+                              currentAgentPriorityQueue
+                                ? () => {
+                                    openCurrentAgentPriorityQueue();
+                                  }
+                                : undefined
+                            }
                             onOpenSelectedNext={
                               agentQueueAdvanceFeedback?.nextTarget
                                 ? () => {
