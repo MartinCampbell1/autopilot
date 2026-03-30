@@ -176,6 +176,11 @@ type TriageInboxFeedbackGroup = {
   entries: TriageInboxFeedback[];
   isActive: boolean;
 };
+type QueueAdvanceFeedback = {
+  title: string;
+  detail: string;
+  timestamp: string;
+};
 
 function agentTimelineEntryKey(entry: AgentTimelineEntry): string {
   return `${entry.kind}:${entry.id}`;
@@ -1609,6 +1614,29 @@ function QueueItemCard({
   );
 }
 
+function QueueAdvanceNotice({
+  label,
+  feedback,
+}: {
+  label: string;
+  feedback: QueueAdvanceFeedback | null;
+}) {
+  if (!feedback) return null;
+
+  return (
+    <div className="rounded-xl border border-[#d3e5ef] bg-[#eef7fb] p-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#2a6690]">
+          {label}
+        </p>
+        <p className="text-[11px] text-[#5d7c92]">{formatTimestamp(feedback.timestamp)}</p>
+      </div>
+      <p className="mt-2 text-[13px] font-semibold text-[#214d69]">{feedback.title}</p>
+      <p className="mt-1 text-[12px] text-[#46667d]">{feedback.detail}</p>
+    </div>
+  );
+}
+
 export default function ControlPlanePage() {
   const [health, setHealth] = useState<AccountHealth | null>(null);
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
@@ -1668,6 +1696,10 @@ export default function ControlPlanePage() {
   const [selectedSessionContextKind, setSelectedSessionContextKind] =
     useState<SessionContextKind>("");
   const [selectedTriageInboxKey, setSelectedTriageInboxKey] = useState("");
+  const [sessionQueueAdvanceFeedback, setSessionQueueAdvanceFeedback] =
+    useState<QueueAdvanceFeedback | null>(null);
+  const [agentQueueAdvanceFeedback, setAgentQueueAdvanceFeedback] =
+    useState<QueueAdvanceFeedback | null>(null);
   const [triageInboxFeedbackHistory, setTriageInboxFeedbackHistory] = useState<
     TriageInboxFeedback[]
   >([]);
@@ -1858,6 +1890,7 @@ export default function ControlPlanePage() {
     setSelectedSessionIssueId("");
     setSelectedSessionEventKey("");
     setSelectedSessionContextKind("");
+    setSessionQueueAdvanceFeedback(null);
     setPendingLineageAutoAdvance(null);
     setLineageQueueNow(Date.now());
   }, [selectedSessionId]);
@@ -2008,6 +2041,7 @@ export default function ControlPlanePage() {
     setAgentTimelineFilter("all");
     setAgentTimelineSearch("");
     setSelectedAgentTimelineKey("");
+    setAgentQueueAdvanceFeedback(null);
     setPendingAgentPriorityAutoAdvance(null);
   }, [selectedAgentId]);
 
@@ -2949,6 +2983,11 @@ export default function ControlPlanePage() {
         filter === "attention" ? attentionSessionLineageEntries : decisionSessionLineageEntries;
       const nextEntry = nextSessionLineageQueueEntry(entries, selectedSessionLineageEntry);
       if (!nextEntry) return;
+      setSessionQueueAdvanceFeedback({
+        title: `${filter === "attention" ? "Attention" : "Decision"} queue advanced`,
+        detail: `Selected "${nextEntry.title}" as the next ${filter} item.`,
+        timestamp: new Date().toISOString(),
+      });
       focusSessionLineageEntry(nextEntry, filter);
     },
     [
@@ -2964,6 +3003,11 @@ export default function ControlPlanePage() {
         filter === "attention" ? attentionSessionLineageEntries : decisionSessionLineageEntries;
       const nextEntry = nextSessionLineageQueueEntry(entries, entry);
       if (!nextEntry) return;
+      setSessionQueueAdvanceFeedback({
+        title: `${filter === "attention" ? "Attention" : "Decision"} queue advanced`,
+        detail: `Selected "${nextEntry.title}" as the next ${filter} item.`,
+        timestamp: new Date().toISOString(),
+      });
       focusSessionLineageEntry(nextEntry, filter);
     },
     [attentionSessionLineageEntries, decisionSessionLineageEntries, focusSessionLineageEntry]
@@ -3163,8 +3207,18 @@ export default function ControlPlanePage() {
       currentIndex === -1 ? (entries[0] ?? null) : (entries[currentIndex + 1] ?? entries[0] ?? null);
     setPendingLineageAutoAdvance(null);
     if (nextEntry) {
+      setSessionQueueAdvanceFeedback({
+        title: `${pendingLineageAutoAdvance.filter === "attention" ? "Attention" : "Decision"} queue auto-advanced`,
+        detail: `Moved to "${nextEntry.title}" after the previous queue action completed.`,
+        timestamp: new Date().toISOString(),
+      });
       focusSessionLineageEntry(nextEntry, pendingLineageAutoAdvance.filter);
     } else {
+      setSessionQueueAdvanceFeedback({
+        title: `${pendingLineageAutoAdvance.filter === "attention" ? "Attention" : "Decision"} queue cleared`,
+        detail: `No remaining ${pendingLineageAutoAdvance.filter} items were available after the previous queue action.`,
+        timestamp: new Date().toISOString(),
+      });
       setSessionLineageFilter(pendingLineageAutoAdvance.filter);
     }
   }, [
@@ -3623,6 +3677,11 @@ export default function ControlPlanePage() {
         priority
       );
       if (!nextEntry) return;
+      setAgentQueueAdvanceFeedback({
+        title: `${priority === "critical" ? "Critical" : "High"} queue advanced`,
+        detail: `Selected "${nextEntry.title}" as the next ${priority} item.`,
+        timestamp: new Date().toISOString(),
+      });
       inspectAgentTimelineEntry(nextEntry);
     },
     [filteredAgentTimelineEntries, inspectAgentTimelineEntry]
@@ -3996,7 +4055,18 @@ export default function ControlPlanePage() {
       currentIndex === -1 ? (entries[0] ?? null) : (entries[currentIndex + 1] ?? entries[0] ?? null);
     setPendingAgentPriorityAutoAdvance(null);
     if (nextEntry) {
+      setAgentQueueAdvanceFeedback({
+        title: `${pendingAgentPriorityAutoAdvance.priority === "critical" ? "Critical" : "High"} queue auto-advanced`,
+        detail: `Moved to "${nextEntry.title}" after the previous queue action completed.`,
+        timestamp: new Date().toISOString(),
+      });
       inspectAgentTimelineEntry(nextEntry);
+    } else {
+      setAgentQueueAdvanceFeedback({
+        title: `${pendingAgentPriorityAutoAdvance.priority === "critical" ? "Critical" : "High"} queue cleared`,
+        detail: `No remaining ${pendingAgentPriorityAutoAdvance.priority} items were available after the previous queue action.`,
+        timestamp: new Date().toISOString(),
+      });
     }
   }, [
     criticalAgentTimelineEntries,
@@ -5240,6 +5310,10 @@ export default function ControlPlanePage() {
                             onCollapseAll={collapseAllSessionLineageQueues}
                             onOpenCurrent={openCurrentSessionLineageQueue}
                             canOpenCurrent={Boolean(currentSessionLineageQueue)}
+                          />
+                          <QueueAdvanceNotice
+                            label="Queue Advance"
+                            feedback={sessionQueueAdvanceFeedback}
                           />
                           <div className="grid gap-3 xl:grid-cols-2">
                             <CollapsibleQueuePanel
@@ -6794,6 +6868,10 @@ export default function ControlPlanePage() {
                               </div>
                             </div>
                           </div>
+                          <QueueAdvanceNotice
+                            label="Queue Advance"
+                            feedback={agentQueueAdvanceFeedback}
+                          />
                           <div className="rounded-xl border border-[#ecebe8] bg-white p-3">
                             <div className="flex flex-wrap items-center justify-between gap-3">
                               <div>
