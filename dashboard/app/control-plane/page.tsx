@@ -99,6 +99,7 @@ type LinkedSelectionContext = {
 
 type SessionContextKind = "" | "approval" | "issue" | "event";
 type LineageQueueKind = "attention" | "decisions";
+type TriagePriority = "critical" | "high" | "normal";
 type OperatorVisibilityState = {
   dismissed: string[];
   snoozedUntil: Record<string, number>;
@@ -694,6 +695,100 @@ function sessionLineageTraits(entry: SessionLineageEntry | null): SessionLineage
       ? { key: "agent", label: "Agent-linked", className: "border-[#e5e5e3] bg-white text-[#37352f]" }
       : null,
   ].filter(Boolean) as SessionLineageTrait[];
+}
+
+function triagePriorityRank(priority: TriagePriority): number {
+  switch (priority) {
+    case "critical":
+      return 0;
+    case "high":
+      return 1;
+    default:
+      return 2;
+  }
+}
+
+function triagePriorityClass(priority: TriagePriority): string {
+  switch (priority) {
+    case "critical":
+      return "border-[#f0d0c9] bg-[#fff0ed] text-[#93370d]";
+    case "high":
+      return "border-[#f4e0c4] bg-[#fff6e8] text-[#9a6700]";
+    default:
+      return "border-[#e5e5e3] bg-[#fafaf9] text-[#37352f]";
+  }
+}
+
+function sessionLineagePriority(entry: SessionLineageEntry): TriagePriority {
+  const status = entry.status.toLowerCase();
+  const eventStatus = toStringValue(asRecord(entry.event)?.status).toLowerCase();
+  if (
+    entry.issueId ||
+    ["error", "failed", "blocked", "rejected", "not_executable"].includes(status) ||
+    ["error", "failed"].includes(eventStatus)
+  ) {
+    return "critical";
+  }
+  if (entry.approvalId || isAttentionLineageEntry(entry)) {
+    return "high";
+  }
+  return "normal";
+}
+
+function agentTimelinePriority(entry: AgentTimelineEntry): TriagePriority {
+  const status = entry.status.toLowerCase();
+  if (entry.kind === "issue" && status === "open") {
+    return "critical";
+  }
+  if (entry.kind === "event" && ["error", "failed"].includes(status)) {
+    return "critical";
+  }
+  if (entry.kind === "approval" && ["pending", "approved"].includes(status)) {
+    return "high";
+  }
+  if (entry.kind === "event" && ["partial", "pending_approval", "blocked", "rejected"].includes(status)) {
+    return "high";
+  }
+  return "normal";
+}
+
+function countTriagePriorities<T>(
+  entries: T[],
+  getPriority: (entry: T) => TriagePriority
+): Record<TriagePriority, number> {
+  return entries.reduce<Record<TriagePriority, number>>(
+    (acc, entry) => {
+      const priority = getPriority(entry);
+      acc[priority] += 1;
+      return acc;
+    },
+    {
+      critical: 0,
+      high: 0,
+      normal: 0,
+    }
+  );
+}
+
+function nextBestTriageItem<T>(
+  entries: T[],
+  current: T | null,
+  getKey: (entry: T) => string,
+  getPriority: (entry: T) => TriagePriority
+): T | null {
+  if (!entries.length) return null;
+  const rankedEntries = entries
+    .map((entry, index) => ({ entry, index }))
+    .sort(
+      (left, right) =>
+        triagePriorityRank(getPriority(left.entry)) - triagePriorityRank(getPriority(right.entry)) ||
+        left.index - right.index
+    )
+    .map(({ entry }) => entry);
+  if (!current) return rankedEntries[0] ?? null;
+  const currentIndex = rankedEntries.findIndex((entry) => getKey(entry) === getKey(current));
+  if (currentIndex === -1) return rankedEntries[0] ?? null;
+  return rankedEntries[currentIndex + 1] ?? rankedEntries[0] ?? null;
 }
 
 function nextSessionLineageQueueEntry(
@@ -2235,6 +2330,25 @@ export default function ControlPlanePage() {
       ),
     [sessionLineageEntries, sessionLineageFilter]
   );
+  const sessionLineagePriorityCounts = useMemo(
+    () => countTriagePriorities(filteredSessionLineageEntries, sessionLineagePriority),
+    [filteredSessionLineageEntries]
+  );
+  const nextBestSessionLineageEntry = useMemo(
+    () =>
+      nextBestTriageItem(
+        filteredSessionLineageEntries,
+        selectedSessionLineageEntry,
+        (entry) => entry.key,
+        sessionLineagePriority
+      ),
+    [filteredSessionLineageEntries, selectedSessionLineageEntry]
+  );
+  const selectedSessionLineagePriority = useMemo(
+    () =>
+      selectedSessionLineageEntry ? sessionLineagePriority(selectedSessionLineageEntry) : null,
+    [selectedSessionLineageEntry]
+  );
   const visibleSessionLineageEntries = useMemo(
     () =>
       withSelectedItem(
@@ -2941,6 +3055,45 @@ export default function ControlPlanePage() {
         ? resolveAgentTimelineRunLink(selectedAgentTimelineEntry, linkedRuns)
         : null,
     [linkedRuns, selectedAgentTimelineEntry]
+  );
+  const agentTimelinePriorityCounts = useMemo(
+    () => countTriagePriorities(filteredAgentTimelineEntries, agentTimelinePriority),
+    [filteredAgentTimelineEntries]
+  );
+  const nextBestAgentTimelineEntry = useMemo(
+    () =>
+      nextBestTriageItem(
+        filteredAgentTimelineEntries,
+        selectedAgentTimelineEntry,
+        agentTimelineEntryKey,
+        agentTimelinePriority
+      ),
+    [filteredAgentTimelineEntries, selectedAgentTimelineEntry]
+  );
+  const selectedAgentTimelinePriority = useMemo(
+    () => (selectedAgentTimelineEntry ? agentTimelinePriority(selectedAgentTimelineEntry) : null),
+    [selectedAgentTimelineEntry]
+  );
+  const inspectAgentTimelineEntry = useCallback(
+    (entry: AgentTimelineEntry) => {
+      const relatedRunLink = resolveAgentTimelineRunLink(entry, linkedRuns);
+      setSelectedAgentTimelineKey(agentTimelineEntryKey(entry));
+      syncLinkedSelection({
+        runId:
+          relatedRunLink?.run.id ||
+          toStringValue(entry.event?.agent_action_run_id) ||
+          toStringValue(entry.event?.run_id),
+        resultIndex: relatedRunLink?.resultIndex,
+        approvalId:
+          entry.approval?.id ||
+          entry.issue?.approval_id ||
+          toStringValue(entry.event?.approval_id),
+        issueId: entry.issue?.id || toStringValue(entry.event?.issue_id),
+        runtimeAgentId: selectedAgent?.runtime_agent_id || selectedAgentId,
+        event: entry.event || null,
+      });
+    },
+    [linkedRuns, selectedAgent, selectedAgentId, syncLinkedSelection]
   );
   const selectedSessionContext = useMemo(() => {
     if (selectedSessionContextKind === "issue" && selectedSessionIssue) {
@@ -4004,6 +4157,19 @@ export default function ControlPlanePage() {
                                 {persistedDismissedLineageQueueCount} dismissed ·{" "}
                                 {persistedSnoozedLineageQueueCount} snoozed persisted for this session
                               </p>
+                              <div className="mt-2 flex flex-wrap gap-2">
+                                {(["critical", "high", "normal"] as TriagePriority[]).map((priority) =>
+                                  sessionLineagePriorityCounts[priority] ? (
+                                    <Badge
+                                      key={`session-lineage-priority-${priority}`}
+                                      variant="outline"
+                                      className={`rounded-full px-2.5 py-1 text-[11px] font-medium ${triagePriorityClass(priority)}`}
+                                    >
+                                      {priority} {sessionLineagePriorityCounts[priority]}
+                                    </Badge>
+                                  ) : null
+                                )}
+                              </div>
                             </div>
                             <div className="flex flex-wrap gap-2">
                               <Button
@@ -4037,12 +4203,22 @@ export default function ControlPlanePage() {
                               Active Focus
                             </p>
                             {selectedSessionLineageEntry ? (
-                              <Badge
-                                variant="outline"
-                                className="rounded-full border-[#e5e5e3] bg-[#fafaf9] px-2.5 py-1 text-[11px] font-medium text-[#37352f]"
-                              >
-                                {formatTimestamp(selectedSessionLineageEntry.timestamp)}
-                              </Badge>
+                              <div className="flex flex-wrap items-center gap-2">
+                                {selectedSessionLineagePriority ? (
+                                  <Badge
+                                    variant="outline"
+                                    className={`rounded-full px-2.5 py-1 text-[11px] font-medium ${triagePriorityClass(selectedSessionLineagePriority)}`}
+                                  >
+                                    {selectedSessionLineagePriority}
+                                  </Badge>
+                                ) : null}
+                                <Badge
+                                  variant="outline"
+                                  className="rounded-full border-[#e5e5e3] bg-[#fafaf9] px-2.5 py-1 text-[11px] font-medium text-[#37352f]"
+                                >
+                                  {formatTimestamp(selectedSessionLineageEntry.timestamp)}
+                                </Badge>
+                              </div>
                             ) : null}
                           </div>
                           {!selectedSessionLineageEntry ? (
@@ -4083,6 +4259,19 @@ export default function ControlPlanePage() {
                             </>
                           )}
                           <div className="mt-3 flex flex-wrap gap-2">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-7 rounded-lg border-[#e5e5e3] bg-white px-2 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
+                              onClick={() => {
+                                if (nextBestSessionLineageEntry) {
+                                  inspectSessionLineageEntry(nextBestSessionLineageEntry);
+                                }
+                              }}
+                              disabled={!nextBestSessionLineageEntry}
+                            >
+                              Inspect next best
+                            </Button>
                             <Button
                               size="sm"
                               variant="outline"
@@ -4214,6 +4403,12 @@ export default function ControlPlanePage() {
                                         </p>
                                       </div>
                                       <div className="mt-3 flex flex-wrap gap-2">
+                                        <Badge
+                                          variant="outline"
+                                          className={`rounded-full px-2.5 py-1 text-[11px] font-medium ${triagePriorityClass(sessionLineagePriority(entry))}`}
+                                        >
+                                          {sessionLineagePriority(entry)}
+                                        </Badge>
                                         <Badge
                                           variant="outline"
                                           className={`rounded-full px-2.5 py-1 text-[11px] font-semibold capitalize ${passStatusClass(entry.status)}`}
@@ -4361,6 +4556,12 @@ export default function ControlPlanePage() {
                                       <div className="mt-3 flex flex-wrap gap-2">
                                         <Badge
                                           variant="outline"
+                                          className={`rounded-full px-2.5 py-1 text-[11px] font-medium ${triagePriorityClass(sessionLineagePriority(entry))}`}
+                                        >
+                                          {sessionLineagePriority(entry)}
+                                        </Badge>
+                                        <Badge
+                                          variant="outline"
                                           className={`rounded-full px-2.5 py-1 text-[11px] font-semibold capitalize ${passStatusClass(entry.status)}`}
                                         >
                                           {entry.status}
@@ -4458,6 +4659,12 @@ export default function ControlPlanePage() {
                                       </p>
                                     </div>
                                     <div className="flex flex-wrap items-center gap-2">
+                                      <Badge
+                                        variant="outline"
+                                        className={`rounded-full px-2.5 py-1 text-[11px] font-medium ${triagePriorityClass(sessionLineagePriority(entry))}`}
+                                      >
+                                        {sessionLineagePriority(entry)}
+                                      </Badge>
                                       <Badge
                                         variant="outline"
                                         className={`rounded-full px-2.5 py-1 text-[11px] font-semibold capitalize ${passStatusClass(entry.status)}`}
@@ -5088,8 +5295,34 @@ export default function ControlPlanePage() {
                                   {persistedDismissedAgentTimelineCount} dismissed ·{" "}
                                   {persistedSnoozedAgentTimelineCount} snoozed persisted for this agent
                                 </p>
+                                <div className="mt-2 flex flex-wrap gap-2">
+                                  {(["critical", "high", "normal"] as TriagePriority[]).map((priority) =>
+                                    agentTimelinePriorityCounts[priority] ? (
+                                      <Badge
+                                        key={`agent-timeline-priority-${priority}`}
+                                        variant="outline"
+                                        className={`rounded-full px-2.5 py-1 text-[11px] font-medium ${triagePriorityClass(priority)}`}
+                                      >
+                                        {priority} {agentTimelinePriorityCounts[priority]}
+                                      </Badge>
+                                    ) : null
+                                  )}
+                                </div>
                               </div>
                               <div className="flex flex-wrap gap-2">
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  className="h-7 rounded-lg border-[#e5e5e3] bg-white px-2 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
+                                  onClick={() => {
+                                    if (nextBestAgentTimelineEntry) {
+                                      inspectAgentTimelineEntry(nextBestAgentTimelineEntry);
+                                    }
+                                  }}
+                                  disabled={!nextBestAgentTimelineEntry}
+                                >
+                                  Inspect next best
+                                </Button>
                                 {hiddenAgentTimelineEntryCount ? (
                                   <Button
                                     size="sm"
@@ -5169,6 +5402,12 @@ export default function ControlPlanePage() {
                                       >
                                         {entry.kind}
                                       </Badge>
+                                      <Badge
+                                        variant="outline"
+                                        className={`rounded-full px-2.5 py-1 text-[11px] font-medium ${triagePriorityClass(agentTimelinePriority(entry))}`}
+                                      >
+                                        {agentTimelinePriority(entry)}
+                                      </Badge>
                                       <p className="text-[13px] font-semibold text-[#37352f]">
                                         {entry.title}
                                       </p>
@@ -5195,24 +5434,8 @@ export default function ControlPlanePage() {
                                             ? "bg-[#1a1a1a] text-white hover:bg-[#333]"
                                             : "border-[#e5e5e3] bg-white text-[#37352f] hover:bg-[#f7f7f5]"
                                         }`}
-                                  onClick={() => {
-                                          const relatedRunLink = resolveAgentTimelineRunLink(entry, linkedRuns);
-                                          setSelectedAgentTimelineKey(agentTimelineEntryKey(entry));
-                                          syncLinkedSelection({
-                                            runId:
-                                              relatedRunLink?.run.id ||
-                                              toStringValue(entry.event?.agent_action_run_id) ||
-                                              toStringValue(entry.event?.run_id),
-                                            resultIndex: relatedRunLink?.resultIndex,
-                                            approvalId:
-                                              entry.approval?.id ||
-                                              entry.issue?.approval_id ||
-                                              toStringValue(entry.event?.approval_id),
-                                            issueId:
-                                              entry.issue?.id || toStringValue(entry.event?.issue_id),
-                                            runtimeAgentId: selectedAgent.runtime_agent_id,
-                                            event: entry.event || null,
-                                          });
+                                        onClick={() => {
+                                          inspectAgentTimelineEntry(entry);
                                         }}
                                       >
                                         {selected ? "Selected" : "Inspect"}
@@ -5408,6 +5631,14 @@ export default function ControlPlanePage() {
                                           >
                                             {entry.kind}
                                           </Badge>
+                                          {selectedAgentTimelinePriority ? (
+                                            <Badge
+                                              variant="outline"
+                                              className={`rounded-full px-2.5 py-1 text-[11px] font-medium ${triagePriorityClass(selectedAgentTimelinePriority)}`}
+                                            >
+                                              {selectedAgentTimelinePriority}
+                                            </Badge>
+                                          ) : null}
                                           <Badge
                                             variant="outline"
                                             className={`rounded-full px-2.5 py-1 text-[11px] font-semibold capitalize ${
