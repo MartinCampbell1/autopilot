@@ -99,6 +99,10 @@ type LinkedSelectionContext = {
 
 type SessionContextKind = "" | "approval" | "issue" | "event";
 type LineageQueueKind = "attention" | "decisions";
+type OperatorVisibilityState = {
+  dismissed: string[];
+  snoozedUntil: Record<string, number>;
+};
 type PersistedLineageQueueState = {
   dismissed?: Partial<Record<LineageQueueKind, string[]>>;
   snoozedUntil?: Partial<Record<LineageQueueKind, Record<string, number>>>;
@@ -725,60 +729,16 @@ function emptySnoozedLineageQueueUntil(): Record<LineageQueueKind, Record<string
   };
 }
 
-function sanitizePersistedLineageQueueState(
-  value: PersistedLineageQueueState | null | undefined,
+function sanitizeOperatorVisibilityState(
+  value:
+    | {
+        dismissed?: unknown;
+        snoozedUntil?: unknown;
+      }
+    | null
+    | undefined,
   now: number
-): {
-  dismissed: Record<LineageQueueKind, string[]>;
-  snoozedUntil: Record<LineageQueueKind, Record<string, number>>;
-} {
-  const dismissed = emptyDismissedLineageQueueKeys();
-  const snoozedUntil = emptySnoozedLineageQueueUntil();
-  const kinds: LineageQueueKind[] = ["attention", "decisions"];
-
-  kinds.forEach((kind) => {
-    const rawDismissed = Array.isArray(value?.dismissed?.[kind]) ? value?.dismissed?.[kind] : [];
-    dismissed[kind] = [...new Set(rawDismissed.filter((entry): entry is string => typeof entry === "string"))];
-
-    const rawSnoozed = asRecord(value?.snoozedUntil?.[kind]);
-    if (!rawSnoozed) return;
-    Object.entries(rawSnoozed).forEach(([entryKey, until]) => {
-      if (!entryKey) return;
-      if (typeof until !== "number" || !Number.isFinite(until)) return;
-      if (until <= now) return;
-      snoozedUntil[kind][entryKey] = until;
-    });
-  });
-
-  return {
-    dismissed,
-    snoozedUntil,
-  };
-}
-
-function isPersistedLineageQueueStateEmpty(state: {
-  dismissed: Record<LineageQueueKind, string[]>;
-  snoozedUntil: Record<LineageQueueKind, Record<string, number>>;
-}): boolean {
-  return (
-    state.dismissed.attention.length === 0 &&
-    state.dismissed.decisions.length === 0 &&
-    Object.keys(state.snoozedUntil.attention).length === 0 &&
-    Object.keys(state.snoozedUntil.decisions).length === 0
-  );
-}
-
-function lineageQueueStorageKey(sessionId: string): string {
-  return `${LINEAGE_QUEUE_STORAGE_PREFIX}${sessionId}`;
-}
-
-function sanitizePersistedAgentTimelineState(
-  value: PersistedAgentTimelineState | null | undefined,
-  now: number
-): {
-  dismissed: string[];
-  snoozedUntil: Record<string, number>;
-} {
+): OperatorVisibilityState {
   const dismissed = Array.isArray(value?.dismissed)
     ? [...new Set(value.dismissed.filter((entry): entry is string => typeof entry === "string"))]
     : [];
@@ -798,26 +758,91 @@ function sanitizePersistedAgentTimelineState(
   };
 }
 
+function isOperatorVisibilityStateEmpty(state: OperatorVisibilityState): boolean {
+  return state.dismissed.length === 0 && Object.keys(state.snoozedUntil).length === 0;
+}
+
+function sanitizePersistedLineageQueueState(
+  value: PersistedLineageQueueState | null | undefined,
+  now: number
+): {
+  dismissed: Record<LineageQueueKind, string[]>;
+  snoozedUntil: Record<LineageQueueKind, Record<string, number>>;
+} {
+  const dismissed = emptyDismissedLineageQueueKeys();
+  const snoozedUntil = emptySnoozedLineageQueueUntil();
+  const kinds: LineageQueueKind[] = ["attention", "decisions"];
+
+  kinds.forEach((kind) => {
+    const sanitized = sanitizeOperatorVisibilityState(
+      {
+        dismissed: value?.dismissed?.[kind],
+        snoozedUntil: value?.snoozedUntil?.[kind],
+      },
+      now
+    );
+    dismissed[kind] = sanitized.dismissed;
+    snoozedUntil[kind] = sanitized.snoozedUntil;
+  });
+
+  return {
+    dismissed,
+    snoozedUntil,
+  };
+}
+
+function isPersistedLineageQueueStateEmpty(state: {
+  dismissed: Record<LineageQueueKind, string[]>;
+  snoozedUntil: Record<LineageQueueKind, Record<string, number>>;
+}): boolean {
+  return (
+    isOperatorVisibilityStateEmpty({
+      dismissed: state.dismissed.attention,
+      snoozedUntil: state.snoozedUntil.attention,
+    }) &&
+    isOperatorVisibilityStateEmpty({
+      dismissed: state.dismissed.decisions,
+      snoozedUntil: state.snoozedUntil.decisions,
+    })
+  );
+}
+
+function lineageQueueStorageKey(sessionId: string): string {
+  return `${LINEAGE_QUEUE_STORAGE_PREFIX}${sessionId}`;
+}
+
+function sanitizePersistedAgentTimelineState(
+  value: PersistedAgentTimelineState | null | undefined,
+  now: number
+): {
+  dismissed: string[];
+  snoozedUntil: Record<string, number>;
+} {
+  return sanitizeOperatorVisibilityState(value, now);
+}
+
 function isPersistedAgentTimelineStateEmpty(state: {
   dismissed: string[];
   snoozedUntil: Record<string, number>;
 }): boolean {
-  return state.dismissed.length === 0 && Object.keys(state.snoozedUntil).length === 0;
+  return isOperatorVisibilityStateEmpty(state);
 }
 
 function agentTimelineStorageKey(runtimeAgentId: string): string {
   return `${AGENT_TIMELINE_STORAGE_PREFIX}${runtimeAgentId}`;
 }
 
-function visibleSessionLineageQueueEntries(
-  entries: SessionLineageEntry[],
-  dismissedKeys: string[],
-  snoozedUntilByKey: Record<string, number>,
+function visibleEntriesByOperatorVisibilityState<T>(
+  entries: T[],
+  getKey: (entry: T) => string,
+  state: OperatorVisibilityState,
   now: number
-): SessionLineageEntry[] {
+): T[] {
   return entries.filter((entry) => {
-    if (dismissedKeys.includes(entry.key)) return false;
-    const snoozedUntil = snoozedUntilByKey[entry.key] ?? 0;
+    const entryKey = getKey(entry);
+    if (!entryKey) return true;
+    if (state.dismissed.includes(entryKey)) return false;
+    const snoozedUntil = state.snoozedUntil[entryKey] ?? 0;
     return snoozedUntil <= now;
   });
 }
@@ -2262,33 +2287,53 @@ export default function ControlPlanePage() {
     () => sessionLineageEntries.filter((entry) => matchesSessionLineageFilter(entry, "decisions")),
     [sessionLineageEntries]
   );
+  const attentionOperatorVisibilityState = useMemo(
+    () =>
+      sanitizeOperatorVisibilityState(
+        {
+          dismissed: dismissedLineageQueueKeys.attention,
+          snoozedUntil: snoozedLineageQueueUntil.attention,
+        },
+        lineageQueueNow
+      ),
+    [dismissedLineageQueueKeys.attention, lineageQueueNow, snoozedLineageQueueUntil.attention]
+  );
+  const decisionOperatorVisibilityState = useMemo(
+    () =>
+      sanitizeOperatorVisibilityState(
+        {
+          dismissed: dismissedLineageQueueKeys.decisions,
+          snoozedUntil: snoozedLineageQueueUntil.decisions,
+        },
+        lineageQueueNow
+      ),
+    [dismissedLineageQueueKeys.decisions, lineageQueueNow, snoozedLineageQueueUntil.decisions]
+  );
   const attentionSessionLineageEntries = useMemo(
     () =>
-      visibleSessionLineageQueueEntries(
+      visibleEntriesByOperatorVisibilityState(
         attentionSessionLineageSourceEntries,
-        dismissedLineageQueueKeys.attention,
-        snoozedLineageQueueUntil.attention,
+        (entry) => entry.key,
+        attentionOperatorVisibilityState,
         lineageQueueNow
       ),
     [
+      attentionOperatorVisibilityState,
       attentionSessionLineageSourceEntries,
-      dismissedLineageQueueKeys,
-      snoozedLineageQueueUntil,
       lineageQueueNow,
     ]
   );
   const decisionSessionLineageEntries = useMemo(
     () =>
-      visibleSessionLineageQueueEntries(
+      visibleEntriesByOperatorVisibilityState(
         decisionSessionLineageSourceEntries,
-        dismissedLineageQueueKeys.decisions,
-        snoozedLineageQueueUntil.decisions,
+        (entry) => entry.key,
+        decisionOperatorVisibilityState,
         lineageQueueNow
       ),
     [
+      decisionOperatorVisibilityState,
       decisionSessionLineageSourceEntries,
-      dismissedLineageQueueKeys,
-      snoozedLineageQueueUntil,
       lineageQueueNow,
     ]
   );
@@ -2317,15 +2362,17 @@ export default function ControlPlanePage() {
     [decisionSessionLineageEntries.length, decisionSessionLineageSourceEntries.length]
   );
   const persistedLineageQueueState = useMemo(
-    () =>
-      sanitizePersistedLineageQueueState(
-        {
-          dismissed: dismissedLineageQueueKeys,
-          snoozedUntil: snoozedLineageQueueUntil,
-        },
-        lineageQueueNow
-      ),
-    [dismissedLineageQueueKeys, lineageQueueNow, snoozedLineageQueueUntil]
+    () => ({
+      dismissed: {
+        attention: attentionOperatorVisibilityState.dismissed,
+        decisions: decisionOperatorVisibilityState.dismissed,
+      },
+      snoozedUntil: {
+        attention: attentionOperatorVisibilityState.snoozedUntil,
+        decisions: decisionOperatorVisibilityState.snoozedUntil,
+      },
+    }),
+    [attentionOperatorVisibilityState, decisionOperatorVisibilityState]
   );
   const persistedDismissedLineageQueueCount = useMemo(
     () =>
@@ -2785,15 +2832,26 @@ export default function ControlPlanePage() {
         left.id.localeCompare(right.id)
     );
   }, [selectedAgent]);
+  const agentTimelineOperatorVisibilityState = useMemo(
+    () =>
+      sanitizeOperatorVisibilityState(
+        {
+          dismissed: dismissedAgentTimelineKeys,
+          snoozedUntil: snoozedAgentTimelineUntil,
+        },
+        lineageQueueNow
+      ),
+    [dismissedAgentTimelineKeys, lineageQueueNow, snoozedAgentTimelineUntil]
+  );
   const activeAgentTimelineEntries = useMemo(
     () =>
-      agentTimelineEntries.filter((entry) => {
-        const entryKey = agentTimelineEntryKey(entry);
-        if (dismissedAgentTimelineKeys.includes(entryKey)) return false;
-        const snoozedUntil = snoozedAgentTimelineUntil[entryKey] ?? 0;
-        return snoozedUntil <= lineageQueueNow;
-      }),
-    [agentTimelineEntries, dismissedAgentTimelineKeys, lineageQueueNow, snoozedAgentTimelineUntil]
+      visibleEntriesByOperatorVisibilityState(
+        agentTimelineEntries,
+        agentTimelineEntryKey,
+        agentTimelineOperatorVisibilityState,
+        lineageQueueNow
+      ),
+    [agentTimelineEntries, agentTimelineOperatorVisibilityState, lineageQueueNow]
   );
   const filteredAgentTimelineEntries = useMemo(
     () =>
@@ -2862,15 +2920,8 @@ export default function ControlPlanePage() {
     [activeAgentTimelineEntries.length, agentTimelineEntries.length]
   );
   const persistedAgentTimelineState = useMemo(
-    () =>
-      sanitizePersistedAgentTimelineState(
-        {
-          dismissed: dismissedAgentTimelineKeys,
-          snoozedUntil: snoozedAgentTimelineUntil,
-        },
-        lineageQueueNow
-      ),
-    [dismissedAgentTimelineKeys, lineageQueueNow, snoozedAgentTimelineUntil]
+    () => agentTimelineOperatorVisibilityState,
+    [agentTimelineOperatorVisibilityState]
   );
   const persistedDismissedAgentTimelineCount = useMemo(
     () => persistedAgentTimelineState.dismissed.length,
