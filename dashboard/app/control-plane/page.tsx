@@ -60,6 +60,7 @@ const DEFAULT_CONTROL_ACTOR = "dashboard-control-plane";
 const LINEAGE_QUEUE_STORAGE_PREFIX = "control-plane:lineage-queue:";
 const AGENT_TIMELINE_STORAGE_PREFIX = "control-plane:agent-timeline:";
 const TRIAGE_INBOX_FEEDBACK_LIMIT = 5;
+const SESSION_LINEAGE_QUEUE_KEYS: LineageQueueKind[] = ["attention", "decisions"];
 
 type AgentScopedOutcome = {
   run: ExecutionAgentActionRunRecord;
@@ -1507,6 +1508,9 @@ export default function ControlPlanePage() {
   const [expandedTriageInboxResultGroups, setExpandedTriageInboxResultGroups] = useState<string[]>(
     []
   );
+  const [expandedSessionLineageQueues, setExpandedSessionLineageQueues] = useState<
+    LineageQueueKind[]
+  >([...SESSION_LINEAGE_QUEUE_KEYS]);
   const [historySearch, setHistorySearch] = useState("");
   const [entitySearch, setEntitySearch] = useState("");
   const [refreshing, setRefreshing] = useState(false);
@@ -2624,6 +2628,30 @@ export default function ControlPlanePage() {
       ),
     [decisionSessionLineageEntries, selectedSessionLineageEntry]
   );
+  const currentSessionLineageQueue = useMemo<LineageQueueKind | "">(() => {
+    if (selectedSessionLineageEntry) {
+      if (attentionSessionLineageEntries.some((entry) => entry.key === selectedSessionLineageEntry.key)) {
+        return "attention";
+      }
+      if (decisionSessionLineageEntries.some((entry) => entry.key === selectedSessionLineageEntry.key)) {
+        return "decisions";
+      }
+    }
+    if (sessionLineageFilter === "attention" && attentionSessionLineageEntries.length) {
+      return "attention";
+    }
+    if (sessionLineageFilter === "decisions" && decisionSessionLineageEntries.length) {
+      return "decisions";
+    }
+    if (attentionSessionLineageEntries.length) return "attention";
+    if (decisionSessionLineageEntries.length) return "decisions";
+    return "";
+  }, [
+    attentionSessionLineageEntries,
+    decisionSessionLineageEntries,
+    selectedSessionLineageEntry,
+    sessionLineageFilter,
+  ]);
   const hiddenAttentionQueueCount = useMemo(
     () => Math.max(attentionSessionLineageSourceEntries.length - attentionSessionLineageEntries.length, 0),
     [attentionSessionLineageEntries.length, attentionSessionLineageSourceEntries.length]
@@ -2817,6 +2845,27 @@ export default function ControlPlanePage() {
       window.localStorage.removeItem(lineageQueueStorageKey(selectedSessionId));
     }
   }, [selectedSessionId]);
+  const toggleSessionLineageQueueExpansion = useCallback((filter: LineageQueueKind) => {
+    setExpandedSessionLineageQueues((current) =>
+      current.includes(filter)
+        ? current.filter((key) => key !== filter)
+        : [...current, filter]
+    );
+  }, []);
+  const expandAllSessionLineageQueues = useCallback(() => {
+    setExpandedSessionLineageQueues([...SESSION_LINEAGE_QUEUE_KEYS]);
+  }, []);
+  const collapseAllSessionLineageQueues = useCallback(() => {
+    setExpandedSessionLineageQueues([]);
+  }, []);
+  const openCurrentSessionLineageQueue = useCallback(() => {
+    if (!currentSessionLineageQueue) return;
+    setExpandedSessionLineageQueues((current) =>
+      current.includes(currentSessionLineageQueue)
+        ? current
+        : [...current, currentSessionLineageQueue]
+    );
+  }, [currentSessionLineageQueue]);
   const exportSessionLineageQueuePreferences = useCallback(async () => {
     if (!selectedSessionId) return;
     const payload = {
@@ -3526,6 +3575,9 @@ export default function ControlPlanePage() {
     setTriageInboxFeedbackFilter("all");
     setExpandedTriageInboxResultGroups([]);
   }, [selectedAgentId, selectedSessionId]);
+  useEffect(() => {
+    setExpandedSessionLineageQueues([...SESSION_LINEAGE_QUEUE_KEYS]);
+  }, [selectedSessionId]);
   useEffect(() => {
     const availableKeys = groupedRecentTriageInboxFeedback.map((group) => group.itemKey);
     setExpandedTriageInboxResultGroups((current) => {
@@ -4879,8 +4931,58 @@ export default function ControlPlanePage() {
                             ) : null}
                           </div>
                         </div>
-                        <div className="grid gap-3 xl:grid-cols-2">
-                          <div className="rounded-xl border border-[#ecebe8] bg-white p-3">
+                        <div className="space-y-3">
+                          <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-[#ecebe8] bg-[#fbfbf9] p-3">
+                            <div>
+                              <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#9b9a97]">
+                                Queue Groups
+                              </p>
+                              <p className="mt-1 text-[12px] text-[#787774]">
+                                Attention and decision queues now share the same group controls as
+                                the inbox.
+                              </p>
+                            </div>
+                            <div className="flex flex-wrap items-center gap-2">
+                              <Badge
+                                variant="outline"
+                                className="rounded-full border-[#e5e5e3] bg-white px-2.5 py-1 text-[11px] font-medium text-[#37352f]"
+                              >
+                                {expandedSessionLineageQueues.length}/{SESSION_LINEAGE_QUEUE_KEYS.length} open
+                              </Badge>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="h-7 rounded-lg border-[#e5e5e3] bg-white px-2 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
+                                onClick={expandAllSessionLineageQueues}
+                                disabled={
+                                  expandedSessionLineageQueues.length >=
+                                  SESSION_LINEAGE_QUEUE_KEYS.length
+                                }
+                              >
+                                Expand all
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="h-7 rounded-lg border-[#e5e5e3] bg-white px-2 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
+                                onClick={collapseAllSessionLineageQueues}
+                                disabled={!expandedSessionLineageQueues.length}
+                              >
+                                Collapse all
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="h-7 rounded-lg border-[#e5e5e3] bg-white px-2 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
+                                onClick={openCurrentSessionLineageQueue}
+                                disabled={!currentSessionLineageQueue}
+                              >
+                                Open current queue
+                              </Button>
+                            </div>
+                          </div>
+                          <div className="grid gap-3 xl:grid-cols-2">
+                            <div className="rounded-xl border border-[#ecebe8] bg-white p-3">
                             <div className="flex flex-wrap items-center justify-between gap-3">
                               <div>
                                 <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#9b9a97]">
@@ -4925,9 +5027,29 @@ export default function ControlPlanePage() {
                                     Restore hidden
                                   </Button>
                                 ) : null}
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  className="h-7 rounded-lg border-[#e5e5e3] bg-white px-2 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
+                                  onClick={() => {
+                                    toggleSessionLineageQueueExpansion("attention");
+                                  }}
+                                >
+                                  {expandedSessionLineageQueues.includes("attention")
+                                    ? "Collapse"
+                                    : "Expand"}
+                                </Button>
                               </div>
                             </div>
-                            {!attentionSessionLineageQueue.length ? (
+                            {!expandedSessionLineageQueues.includes("attention") ? (
+                              <p className="mt-3 text-[13px] text-[#9b9a97]">
+                                {attentionSessionLineageEntries.length
+                                  ? `${attentionSessionLineageEntries.length} visible queue item${
+                                      attentionSessionLineageEntries.length === 1 ? "" : "s"
+                                    } hidden`
+                                  : "Queue collapsed."}
+                              </p>
+                            ) : !attentionSessionLineageQueue.length ? (
                               <p className="mt-3 text-[13px] text-[#9b9a97]">
                                 No attention-linked chains in this session.
                               </p>
@@ -5031,7 +5153,7 @@ export default function ControlPlanePage() {
                               </div>
                             )}
                           </div>
-                          <div className="rounded-xl border border-[#ecebe8] bg-white p-3">
+                            <div className="rounded-xl border border-[#ecebe8] bg-white p-3">
                             <div className="flex flex-wrap items-center justify-between gap-3">
                               <div>
                                 <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#9b9a97]">
@@ -5076,9 +5198,29 @@ export default function ControlPlanePage() {
                                     Restore hidden
                                   </Button>
                                 ) : null}
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  className="h-7 rounded-lg border-[#e5e5e3] bg-white px-2 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
+                                  onClick={() => {
+                                    toggleSessionLineageQueueExpansion("decisions");
+                                  }}
+                                >
+                                  {expandedSessionLineageQueues.includes("decisions")
+                                    ? "Collapse"
+                                    : "Expand"}
+                                </Button>
                               </div>
                             </div>
-                            {!decisionSessionLineageQueue.length ? (
+                            {!expandedSessionLineageQueues.includes("decisions") ? (
+                              <p className="mt-3 text-[13px] text-[#9b9a97]">
+                                {decisionSessionLineageEntries.length
+                                  ? `${decisionSessionLineageEntries.length} visible queue item${
+                                      decisionSessionLineageEntries.length === 1 ? "" : "s"
+                                    } hidden`
+                                  : "Queue collapsed."}
+                              </p>
+                            ) : !decisionSessionLineageQueue.length ? (
                               <p className="mt-3 text-[13px] text-[#9b9a97]">
                                 No decision-linked chains in this session.
                               </p>
@@ -5181,6 +5323,7 @@ export default function ControlPlanePage() {
                                 })}
                               </div>
                             )}
+                            </div>
                           </div>
                         </div>
                         {!filteredSessionLineageEntries.length ? (
