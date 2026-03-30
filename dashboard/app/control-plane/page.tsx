@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { AppSidebar } from "@/components/app-sidebar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -1503,6 +1503,64 @@ function QueueGroupControls({
           Open current queue
         </Button>
       </div>
+    </div>
+  );
+}
+
+function CollapsibleQueuePanel({
+  title,
+  detail,
+  expanded,
+  onToggle,
+  collapsedSummary,
+  emptyText,
+  isEmpty,
+  badge,
+  actions,
+  children,
+  className = "rounded-xl border border-[#ecebe8] bg-white p-3",
+}: {
+  title: string;
+  detail: string;
+  expanded: boolean;
+  onToggle: () => void;
+  collapsedSummary: string;
+  emptyText: string;
+  isEmpty: boolean;
+  badge?: ReactNode;
+  actions?: ReactNode;
+  children: ReactNode;
+  className?: string;
+}) {
+  return (
+    <div className={className}>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#9b9a97]">
+            {title}
+          </p>
+          <p className="mt-1 text-[12px] text-[#787774]">{detail}</p>
+        </div>
+        <div className="flex items-center gap-2">
+          {badge}
+          {actions}
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-7 rounded-lg border-[#e5e5e3] bg-white px-2 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
+            onClick={onToggle}
+          >
+            {expanded ? "Collapse" : "Expand"}
+          </Button>
+        </div>
+      </div>
+      {!expanded ? (
+        <p className="mt-3 text-[12px] text-[#9b9a97]">{collapsedSummary}</p>
+      ) : isEmpty ? (
+        <p className="mt-3 text-[12px] text-[#9b9a97]">{emptyText}</p>
+      ) : (
+        children
+      )}
     </div>
   );
 }
@@ -5057,78 +5115,58 @@ export default function ControlPlanePage() {
                             canOpenCurrent={Boolean(currentSessionLineageQueue)}
                           />
                           <div className="grid gap-3 xl:grid-cols-2">
-                            <div className="rounded-xl border border-[#ecebe8] bg-white p-3">
-                            <div className="flex flex-wrap items-center justify-between gap-3">
-                              <div>
-                                <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#9b9a97]">
-                                  Attention Queue
-                                </p>
-                                <p className="mt-1 text-[12px] text-[#787774]">
-                                  {attentionQueuePosition >= 0
-                                    ? `Selected ${attentionQueuePosition + 1} of ${attentionSessionLineageEntries.length}`
-                                    : `${attentionSessionLineageEntries.length} queued`}
-                                  {hiddenAttentionQueueCount
-                                    ? ` · ${hiddenAttentionQueueCount} hidden`
-                                    : ""}
-                                </p>
-                              </div>
-                              <div className="flex items-center gap-2">
+                            <CollapsibleQueuePanel
+                              title="Attention Queue"
+                              detail={`${attentionQueuePosition >= 0 ? `Selected ${attentionQueuePosition + 1} of ${attentionSessionLineageEntries.length}` : `${attentionSessionLineageEntries.length} queued`}${hiddenAttentionQueueCount ? ` · ${hiddenAttentionQueueCount} hidden` : ""}`}
+                              expanded={expandedSessionLineageQueues.includes("attention")}
+                              onToggle={() => {
+                                toggleSessionLineageQueueExpansion("attention");
+                              }}
+                              collapsedSummary={
+                                attentionSessionLineageEntries.length
+                                  ? `${attentionSessionLineageEntries.length} visible queue item${
+                                      attentionSessionLineageEntries.length === 1 ? "" : "s"
+                                    } hidden`
+                                  : "Queue collapsed."
+                              }
+                              emptyText="No attention-linked chains in this session."
+                              isEmpty={!attentionSessionLineageQueue.length}
+                              badge={
                                 <Badge
                                   variant="outline"
                                   className="rounded-full border-[#e5e5e3] bg-[#fafaf9] px-2.5 py-1 text-[11px] font-medium text-[#37352f]"
                                 >
                                   {sessionLineageAttentionCount}
                                 </Badge>
-                                <Button
-                                  size="sm"
-                                  variant="outline"
-                                  className="h-7 rounded-lg border-[#e5e5e3] bg-white px-2 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
-                                  onClick={() => {
-                                    advanceSessionLineageQueue("attention");
-                                  }}
-                                  disabled={!attentionSessionLineageEntries.length}
-                                >
-                                  Inspect next
-                                </Button>
-                                {hiddenAttentionQueueCount ? (
+                              }
+                              actions={
+                                <>
                                   <Button
                                     size="sm"
                                     variant="outline"
                                     className="h-7 rounded-lg border-[#e5e5e3] bg-white px-2 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
                                     onClick={() => {
-                                      restoreSessionLineageQueue("attention");
+                                      advanceSessionLineageQueue("attention");
                                     }}
+                                    disabled={!attentionSessionLineageEntries.length}
                                   >
-                                    Restore hidden
+                                    Inspect next
                                   </Button>
-                                ) : null}
-                                <Button
-                                  size="sm"
-                                  variant="outline"
-                                  className="h-7 rounded-lg border-[#e5e5e3] bg-white px-2 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
-                                  onClick={() => {
-                                    toggleSessionLineageQueueExpansion("attention");
-                                  }}
-                                >
-                                  {expandedSessionLineageQueues.includes("attention")
-                                    ? "Collapse"
-                                    : "Expand"}
-                                </Button>
-                              </div>
-                            </div>
-                            {!expandedSessionLineageQueues.includes("attention") ? (
-                              <p className="mt-3 text-[13px] text-[#9b9a97]">
-                                {attentionSessionLineageEntries.length
-                                  ? `${attentionSessionLineageEntries.length} visible queue item${
-                                      attentionSessionLineageEntries.length === 1 ? "" : "s"
-                                    } hidden`
-                                  : "Queue collapsed."}
-                              </p>
-                            ) : !attentionSessionLineageQueue.length ? (
-                              <p className="mt-3 text-[13px] text-[#9b9a97]">
-                                No attention-linked chains in this session.
-                              </p>
-                            ) : (
+                                  {hiddenAttentionQueueCount ? (
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      className="h-7 rounded-lg border-[#e5e5e3] bg-white px-2 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
+                                      onClick={() => {
+                                        restoreSessionLineageQueue("attention");
+                                      }}
+                                    >
+                                      Restore hidden
+                                    </Button>
+                                  ) : null}
+                                </>
+                              }
+                            >
                               <div className="mt-3 space-y-3">
                                 {attentionSessionLineageQueue.map((entry) => {
                                   const selected = selectedSessionLineageEntry?.key === entry.key;
@@ -5226,80 +5264,59 @@ export default function ControlPlanePage() {
                                   );
                                 })}
                               </div>
-                            )}
-                          </div>
-                            <div className="rounded-xl border border-[#ecebe8] bg-white p-3">
-                            <div className="flex flex-wrap items-center justify-between gap-3">
-                              <div>
-                                <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#9b9a97]">
-                                  Decision Queue
-                                </p>
-                                <p className="mt-1 text-[12px] text-[#787774]">
-                                  {decisionQueuePosition >= 0
-                                    ? `Selected ${decisionQueuePosition + 1} of ${decisionSessionLineageEntries.length}`
-                                    : `${decisionSessionLineageEntries.length} queued`}
-                                  {hiddenDecisionQueueCount
-                                    ? ` · ${hiddenDecisionQueueCount} hidden`
-                                    : ""}
-                                </p>
-                              </div>
-                              <div className="flex items-center gap-2">
+                            </CollapsibleQueuePanel>
+                            <CollapsibleQueuePanel
+                              title="Decision Queue"
+                              detail={`${decisionQueuePosition >= 0 ? `Selected ${decisionQueuePosition + 1} of ${decisionSessionLineageEntries.length}` : `${decisionSessionLineageEntries.length} queued`}${hiddenDecisionQueueCount ? ` · ${hiddenDecisionQueueCount} hidden` : ""}`}
+                              expanded={expandedSessionLineageQueues.includes("decisions")}
+                              onToggle={() => {
+                                toggleSessionLineageQueueExpansion("decisions");
+                              }}
+                              collapsedSummary={
+                                decisionSessionLineageEntries.length
+                                  ? `${decisionSessionLineageEntries.length} visible queue item${
+                                      decisionSessionLineageEntries.length === 1 ? "" : "s"
+                                    } hidden`
+                                  : "Queue collapsed."
+                              }
+                              emptyText="No decision-linked chains in this session."
+                              isEmpty={!decisionSessionLineageQueue.length}
+                              badge={
                                 <Badge
                                   variant="outline"
                                   className="rounded-full border-[#e5e5e3] bg-[#fafaf9] px-2.5 py-1 text-[11px] font-medium text-[#37352f]"
                                 >
                                   {sessionLineageDecisionCount}
                                 </Badge>
-                                <Button
-                                  size="sm"
-                                  variant="outline"
-                                  className="h-7 rounded-lg border-[#e5e5e3] bg-white px-2 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
-                                  onClick={() => {
-                                    advanceSessionLineageQueue("decisions");
-                                  }}
-                                  disabled={!decisionSessionLineageEntries.length}
-                                >
-                                  Inspect next
-                                </Button>
-                                {hiddenDecisionQueueCount ? (
+                              }
+                              actions={
+                                <>
                                   <Button
                                     size="sm"
                                     variant="outline"
                                     className="h-7 rounded-lg border-[#e5e5e3] bg-white px-2 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
                                     onClick={() => {
-                                      restoreSessionLineageQueue("decisions");
+                                      advanceSessionLineageQueue("decisions");
                                     }}
+                                    disabled={!decisionSessionLineageEntries.length}
                                   >
-                                    Restore hidden
+                                    Inspect next
                                   </Button>
-                                ) : null}
-                                <Button
-                                  size="sm"
-                                  variant="outline"
-                                  className="h-7 rounded-lg border-[#e5e5e3] bg-white px-2 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
-                                  onClick={() => {
-                                    toggleSessionLineageQueueExpansion("decisions");
-                                  }}
-                                >
-                                  {expandedSessionLineageQueues.includes("decisions")
-                                    ? "Collapse"
-                                    : "Expand"}
-                                </Button>
-                              </div>
-                            </div>
-                            {!expandedSessionLineageQueues.includes("decisions") ? (
-                              <p className="mt-3 text-[13px] text-[#9b9a97]">
-                                {decisionSessionLineageEntries.length
-                                  ? `${decisionSessionLineageEntries.length} visible queue item${
-                                      decisionSessionLineageEntries.length === 1 ? "" : "s"
-                                    } hidden`
-                                  : "Queue collapsed."}
-                              </p>
-                            ) : !decisionSessionLineageQueue.length ? (
-                              <p className="mt-3 text-[13px] text-[#9b9a97]">
-                                No decision-linked chains in this session.
-                              </p>
-                            ) : (
+                                  {hiddenDecisionQueueCount ? (
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      className="h-7 rounded-lg border-[#e5e5e3] bg-white px-2 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
+                                      onClick={() => {
+                                        restoreSessionLineageQueue("decisions");
+                                      }}
+                                    >
+                                      Restore hidden
+                                    </Button>
+                                  ) : null}
+                                </>
+                              }
+                            >
                               <div className="mt-3 space-y-3">
                                 {decisionSessionLineageQueue.map((entry) => {
                                   const selected = selectedSessionLineageEntry?.key === entry.key;
@@ -5397,8 +5414,7 @@ export default function ControlPlanePage() {
                                   );
                                 })}
                               </div>
-                            )}
-                            </div>
+                            </CollapsibleQueuePanel>
                           </div>
                         </div>
                         {!filteredSessionLineageEntries.length ? (
@@ -6660,75 +6676,55 @@ export default function ControlPlanePage() {
                                   buttonClassName:
                                     "border-[#f4e0c4] bg-[#fff6e8] text-[#9a6700] hover:bg-[#fff0d9]",
                                 },
-                              ].map((queue) => (
-                                <div
+                              ].map((queue) => {
+                                const queuePriority = queue.key as (typeof AGENT_PRIORITY_QUEUE_KEYS)[number];
+                                return (
+                                <CollapsibleQueuePanel
                                   key={`agent-priority-queue-${queue.key}`}
+                                  title={queue.label}
+                                  detail={
+                                    queue.position >= 0
+                                      ? `Selected ${queue.position + 1} of ${queue.total}`
+                                      : `${queue.total} queued`
+                                  }
+                                  expanded={expandedAgentPriorityQueues.includes(queuePriority)}
+                                  onToggle={() => {
+                                    toggleAgentPriorityQueueExpansion(queuePriority);
+                                  }}
+                                  collapsedSummary={
+                                    queue.total
+                                      ? `${queue.total} visible queue item${
+                                          queue.total === 1 ? "" : "s"
+                                        } hidden`
+                                      : "Queue collapsed."
+                                  }
+                                  emptyText={`No ${queue.key} entries in the current slice.`}
+                                  isEmpty={!queue.entries.length}
+                                  badge={
+                                    <Badge
+                                      variant="outline"
+                                      className={`rounded-full px-2.5 py-1 text-[11px] font-medium ${triagePriorityClass(queue.key as TriagePriority)}`}
+                                    >
+                                      {queue.total}
+                                    </Badge>
+                                  }
+                                  actions={
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      className={`h-7 rounded-lg px-2 text-[11px] ${queue.buttonClassName}`}
+                                      onClick={() => {
+                                        if (queue.nextEntry) {
+                                          inspectAgentTimelineEntry(queue.nextEntry);
+                                        }
+                                      }}
+                                      disabled={!queue.nextEntry}
+                                    >
+                                      {queue.buttonLabel}
+                                    </Button>
+                                  }
                                   className="rounded-xl border border-[#ecebe8] bg-[#fbfbf9] p-3"
                                 >
-                                  <div className="flex flex-wrap items-center justify-between gap-2">
-                                    <div>
-                                      <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#9b9a97]">
-                                        {queue.label}
-                                      </p>
-                                      <p className="mt-1 text-[12px] text-[#787774]">
-                                        {queue.position >= 0
-                                          ? `Selected ${queue.position + 1} of ${queue.total}`
-                                          : `${queue.total} queued`}
-                                      </p>
-                                    </div>
-                                    <div className="flex items-center gap-2">
-                                      <Badge
-                                        variant="outline"
-                                        className={`rounded-full px-2.5 py-1 text-[11px] font-medium ${triagePriorityClass(queue.key as TriagePriority)}`}
-                                      >
-                                        {queue.total}
-                                      </Badge>
-                                      <Button
-                                        size="sm"
-                                        variant="outline"
-                                        className={`h-7 rounded-lg px-2 text-[11px] ${queue.buttonClassName}`}
-                                        onClick={() => {
-                                          if (queue.nextEntry) {
-                                            inspectAgentTimelineEntry(queue.nextEntry);
-                                          }
-                                        }}
-                                        disabled={!queue.nextEntry}
-                                      >
-                                        {queue.buttonLabel}
-                                      </Button>
-                                      <Button
-                                        size="sm"
-                                        variant="outline"
-                                        className="h-7 rounded-lg border-[#e5e5e3] bg-white px-2 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
-                                        onClick={() => {
-                                          toggleAgentPriorityQueueExpansion(
-                                            queue.key as (typeof AGENT_PRIORITY_QUEUE_KEYS)[number]
-                                          );
-                                        }}
-                                      >
-                                        {expandedAgentPriorityQueues.includes(
-                                          queue.key as (typeof AGENT_PRIORITY_QUEUE_KEYS)[number]
-                                        )
-                                          ? "Collapse"
-                                          : "Expand"}
-                                      </Button>
-                                    </div>
-                                  </div>
-                                  {!expandedAgentPriorityQueues.includes(
-                                    queue.key as (typeof AGENT_PRIORITY_QUEUE_KEYS)[number]
-                                  ) ? (
-                                    <p className="mt-3 text-[12px] text-[#9b9a97]">
-                                      {queue.total
-                                        ? `${queue.total} visible queue item${
-                                            queue.total === 1 ? "" : "s"
-                                          } hidden`
-                                        : "Queue collapsed."}
-                                    </p>
-                                  ) : !queue.entries.length ? (
-                                    <p className="mt-3 text-[12px] text-[#9b9a97]">
-                                      No {queue.key} entries in the current slice.
-                                    </p>
-                                  ) : (
                                     <div className="mt-3 space-y-2">
                                       {queue.entries.map((entry) => {
                                         const selected =
@@ -6809,9 +6805,9 @@ export default function ControlPlanePage() {
                                         );
                                       })}
                                     </div>
-                                  )}
-                                </div>
-                              ))}
+                                </CollapsibleQueuePanel>
+                              );
+                              })}
                             </div>
                           </div>
                         </div>
