@@ -2958,6 +2958,16 @@ export default function ControlPlanePage() {
       selectedSessionLineageEntry,
     ]
   );
+  const advanceSessionLineageQueueFromEntry = useCallback(
+    (filter: LineageQueueKind, entry: SessionLineageEntry | null) => {
+      const entries =
+        filter === "attention" ? attentionSessionLineageEntries : decisionSessionLineageEntries;
+      const nextEntry = nextSessionLineageQueueEntry(entries, entry);
+      if (!nextEntry) return;
+      focusSessionLineageEntry(nextEntry, filter);
+    },
+    [attentionSessionLineageEntries, decisionSessionLineageEntries, focusSessionLineageEntry]
+  );
   const dismissSessionLineageQueueEntry = useCallback(
     (filter: LineageQueueKind, entry: SessionLineageEntry) => {
       setDismissedLineageQueueKeys((current) => ({
@@ -3599,6 +3609,23 @@ export default function ControlPlanePage() {
       });
     },
     [linkedRuns, selectedAgent, selectedAgentId, syncLinkedSelection]
+  );
+  const advanceAgentPriorityQueueFromEntry = useCallback(
+    (
+      priority: (typeof AGENT_PRIORITY_QUEUE_KEYS)[number],
+      entry: AgentTimelineEntry | null
+    ) => {
+      const nextEntry = nextTriageEntryByPriority(
+        filteredAgentTimelineEntries,
+        entry,
+        agentTimelineEntryKey,
+        agentTimelinePriority,
+        priority
+      );
+      if (!nextEntry) return;
+      inspectAgentTimelineEntry(nextEntry);
+    },
+    [filteredAgentTimelineEntries, inspectAgentTimelineEntry]
   );
   const revealAgentTimelineEntry = useCallback(
     (entry: AgentTimelineEntry) => {
@@ -5346,6 +5373,16 @@ export default function ControlPlanePage() {
                                         <Button
                                           size="sm"
                                           variant="outline"
+                                          className="h-7 rounded-lg border-[#d3e5ef] bg-[#eef7fb] px-2 text-[11px] text-[#2a6690] hover:bg-[#e3f2f8]"
+                                          onClick={() => {
+                                            advanceSessionLineageQueueFromEntry("attention", entry);
+                                          }}
+                                        >
+                                          Next in queue
+                                        </Button>
+                                        <Button
+                                          size="sm"
+                                          variant="outline"
                                           className="h-7 rounded-lg border-[#e5e5e3] bg-white px-2 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
                                           onClick={() => {
                                             dismissSessionLineageQueueEntry("attention", entry);
@@ -5515,6 +5552,16 @@ export default function ControlPlanePage() {
                                           }}
                                         >
                                           Snooze 15m
+                                        </Button>
+                                        <Button
+                                          size="sm"
+                                          variant="outline"
+                                          className="h-7 rounded-lg border-[#d3e5ef] bg-[#eef7fb] px-2 text-[11px] text-[#2a6690] hover:bg-[#e3f2f8]"
+                                          onClick={() => {
+                                            advanceSessionLineageQueueFromEntry("decisions", entry);
+                                          }}
+                                        >
+                                          Next in queue
                                         </Button>
                                         <Button
                                           size="sm"
@@ -6948,6 +6995,16 @@ export default function ControlPlanePage() {
                                                 <Button
                                                   size="sm"
                                                   variant="outline"
+                                                  className="h-7 rounded-lg border-[#d3e5ef] bg-[#eef7fb] px-2 text-[11px] text-[#2a6690] hover:bg-[#e3f2f8]"
+                                                  onClick={() => {
+                                                    advanceAgentPriorityQueueFromEntry(queuePriority, entry);
+                                                  }}
+                                                >
+                                                  Next in queue
+                                                </Button>
+                                                <Button
+                                                  size="sm"
+                                                  variant="outline"
                                                   className="h-7 rounded-lg border-[#e5e5e3] bg-white px-2 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
                                                   onClick={() => {
                                                     dismissAgentTimelineEntry(entry);
@@ -7464,6 +7521,23 @@ export default function ControlPlanePage() {
                                             {busyActionKey === `issue-resolve:${entry.issue.id}` ? "Resolving..." : "Resolve"}
                                           </Button>
                                         )}
+                                        {currentAgentPriorityQueue ? (
+                                          <Button
+                                            size="sm"
+                                            variant="outline"
+                                            className="h-8 rounded-lg border-[#d3e5ef] bg-[#eef7fb] text-[12px] text-[#2a6690] hover:bg-[#e3f2f8]"
+                                            onClick={() => {
+                                              advanceAgentPriorityQueueFromEntry(
+                                                currentAgentPriorityQueue,
+                                                entry
+                                              );
+                                            }}
+                                          >
+                                            {currentAgentPriorityQueue === "critical"
+                                              ? "Next critical"
+                                              : "Next high"}
+                                          </Button>
+                                        ) : null}
                                         {relatedApprovalId && (
                                           <Button
                                             size="sm"
@@ -9451,6 +9525,23 @@ export default function ControlPlanePage() {
                                 Open agent
                               </Button>
                             )}
+                            {currentSessionLineageQueue ? (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="h-8 rounded-lg border-[#d3e5ef] bg-[#eef7fb] text-[12px] text-[#2a6690] hover:bg-[#e3f2f8]"
+                                onClick={() => {
+                                  advanceSessionLineageQueueFromEntry(
+                                    currentSessionLineageQueue,
+                                    selectedSessionLineageEntry
+                                  );
+                                }}
+                              >
+                                {currentSessionLineageQueue === "attention"
+                                  ? "Next attention"
+                                  : "Next decision"}
+                              </Button>
+                            ) : null}
                             <Button
                               size="sm"
                               variant="outline"
