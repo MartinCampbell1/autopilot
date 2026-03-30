@@ -109,6 +109,65 @@ function formatScopeList(values: string[], fallback: string): string {
   return values.length ? values.join(", ") : fallback;
 }
 
+function formatJson(value: unknown): string {
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
+
+function eventFamily(eventName: string): string {
+  if (!eventName) return "other";
+  if (
+    eventName.includes("approval") ||
+    eventName.includes("issue") ||
+    eventName.includes("budget_paused")
+  ) {
+    return "decisions";
+  }
+  if (
+    eventName.startsWith("execution_plane_orchestrator_session") ||
+    eventName.includes("control_pass")
+  ) {
+    return "control";
+  }
+  if (
+    eventName.includes("agent_action") ||
+    eventName.includes("agent_batch") ||
+    eventName.includes("action_run")
+  ) {
+    return "actions";
+  }
+  return "runtime";
+}
+
+function matchesRunFilter(run: ExecutionAgentActionRunRecord, filter: string): boolean {
+  if (filter === "all") return true;
+  if (filter === "execute") return !run.dry_run;
+  if (filter === "preview") return run.dry_run;
+  if (filter === "attention") {
+    return (
+      run.status === "error" ||
+      run.status === "partial" ||
+      run.results.some((result) =>
+        ["error", "pending_approval", "not_executable"].includes(toStringValue(result.status))
+      )
+    );
+  }
+  return true;
+}
+
+function matchesEventFilter(event: Record<string, unknown>, filter: string): boolean {
+  if (filter === "all") return true;
+  const name = toStringValue(event.event);
+  const status = toStringValue(event.status);
+  if (filter === "attention") {
+    return ["error", "partial", "pending_approval", "failed"].includes(status);
+  }
+  return eventFamily(name) === filter;
+}
+
 function describeRunResult(result: Record<string, unknown>): {
   title: string;
   subtitle: string;
@@ -250,6 +309,34 @@ function recommendationActionLabel(recommendation: OrchestratorSessionControlRec
   return "Apply";
 }
 
+function FilterChip({
+  label,
+  active,
+  count,
+  onClick,
+}: {
+  label: string;
+  active: boolean;
+  count?: number;
+  onClick: () => void;
+}) {
+  return (
+    <Button
+      size="sm"
+      variant="outline"
+      className={`h-8 rounded-full px-3 text-[11px] ${
+        active
+          ? "border-[#1a1a1a] bg-[#1a1a1a] text-white hover:bg-[#333]"
+          : "border-[#e5e5e3] bg-white text-[#37352f] hover:bg-[#f7f7f5]"
+      }`}
+      onClick={onClick}
+    >
+      {label}
+      {typeof count === "number" ? ` · ${count}` : ""}
+    </Button>
+  );
+}
+
 function BreakdownChips({
   label,
   values,
@@ -334,8 +421,11 @@ export default function ControlPlanePage() {
   const [controlProfiles, setControlProfiles] = useState<OrchestratorSessionControlProfile[]>([]);
   const [selectedSessionId, setSelectedSessionId] = useState("");
   const [selectedRunId, setSelectedRunId] = useState("");
+  const [selectedRunResultIndex, setSelectedRunResultIndex] = useState(0);
   const [selectedPassId, setSelectedPassId] = useState("");
   const [selectedSession, setSelectedSession] = useState<OrchestratorSessionDetail | null>(null);
+  const [runFilter, setRunFilter] = useState("all");
+  const [eventFilter, setEventFilter] = useState("all");
   const [refreshing, setRefreshing] = useState(false);
   const [sessionLoading, setSessionLoading] = useState(false);
   const [busyActionKey, setBusyActionKey] = useState("");
@@ -477,6 +567,34 @@ export default function ControlPlanePage() {
       cancelled = true;
     };
   }, [selectedSessionId]);
+
+  useEffect(() => {
+    setSelectedRunResultIndex(0);
+  }, [selectedRunId]);
+
+  useEffect(() => {
+    const visibleRuns = ((selectedSession?.runs || []) as ExecutionAgentActionRunRecord[]).filter(
+      (run) => matchesRunFilter(run, runFilter)
+    );
+    if (!visibleRuns.length) {
+      return;
+    }
+    if (!selectedRunId || !visibleRuns.some((run) => run.id === selectedRunId)) {
+      setSelectedRunId(visibleRuns[0].id);
+    }
+  }, [runFilter, selectedRunId, selectedSession]);
+
+  useEffect(() => {
+    const currentRuns = (selectedSession?.runs || []) as ExecutionAgentActionRunRecord[];
+    const currentRun = currentRuns.find((run) => run.id === selectedRunId) ?? null;
+    if (!currentRun) {
+      setSelectedRunResultIndex(0);
+      return;
+    }
+    if (selectedRunResultIndex >= currentRun.results.length) {
+      setSelectedRunResultIndex(0);
+    }
+  }, [selectedRunId, selectedRunResultIndex, selectedSession]);
 
   const refresh = async () => {
     setRefreshing(true);
@@ -654,6 +772,10 @@ export default function ControlPlanePage() {
       ),
     [selectedSession]
   );
+  const filteredRuns = useMemo(
+    () => linkedRuns.filter((run) => matchesRunFilter(run, runFilter)),
+    [linkedRuns, runFilter]
+  );
   const linkedIssues = useMemo(
     () =>
       [...(selectedSession?.issues || [])].sort((left, right) =>
@@ -665,6 +787,14 @@ export default function ControlPlanePage() {
     if (!selectedRunId) return null;
     return linkedRuns.find((run) => run.id === selectedRunId) ?? null;
   }, [linkedRuns, selectedRunId]);
+  const filteredEvents = useMemo(
+    () => (selectedSession?.events || []).filter((event) => matchesEventFilter(event, eventFilter)),
+    [eventFilter, selectedSession]
+  );
+  const selectedRunResult = useMemo(() => {
+    if (!selectedRun) return null;
+    return selectedRun.results[selectedRunResultIndex] ?? selectedRun.results[0] ?? null;
+  }, [selectedRun, selectedRunResultIndex]);
   const selectedControl = selectedSession?.control ?? null;
   const loading = !controlSummary || !sessionSummary;
 
@@ -1049,19 +1179,40 @@ export default function ControlPlanePage() {
                               const approval = asRecord(result.approval);
                               const issue = asRecord(result.issue);
                               const commandResult = asRecord(result.command_result);
+                              const selected = selectedRunResultIndex === index;
                               return (
                                 <div
                                   key={`${selectedRun.id}-result-${index}`}
-                                  className="rounded-xl border border-[#ecebe8] bg-white p-3"
+                                  className={`rounded-xl border p-3 ${
+                                    selected
+                                      ? "border-[#d3e5ef] bg-[#f7fbfd]"
+                                      : "border-[#ecebe8] bg-white"
+                                  }`}
                                 >
                                   <div className="flex flex-wrap items-center justify-between gap-2">
                                     <p className="text-[13px] font-semibold text-[#37352f]">{details.title}</p>
-                                    <Badge
-                                      variant="outline"
-                                      className={`rounded-full px-2.5 py-1 text-[11px] font-semibold capitalize ${passStatusClass(toStringValue(result.status, "unknown"))}`}
-                                    >
-                                      {toStringValue(result.status, "unknown")}
-                                    </Badge>
+                                    <div className="flex flex-wrap items-center gap-2">
+                                      <Badge
+                                        variant="outline"
+                                        className={`rounded-full px-2.5 py-1 text-[11px] font-semibold capitalize ${passStatusClass(toStringValue(result.status, "unknown"))}`}
+                                      >
+                                        {toStringValue(result.status, "unknown")}
+                                      </Badge>
+                                      <Button
+                                        size="sm"
+                                        variant={selected ? "default" : "outline"}
+                                        className={`h-7 rounded-lg px-2 text-[11px] ${
+                                          selected
+                                            ? "bg-[#1a1a1a] text-white hover:bg-[#333]"
+                                            : "border-[#e5e5e3] bg-white text-[#37352f] hover:bg-[#f7f7f5]"
+                                        }`}
+                                        onClick={() => {
+                                          setSelectedRunResultIndex(index);
+                                        }}
+                                      >
+                                        {selected ? "Selected" : "Inspect"}
+                                      </Button>
+                                    </div>
                                   </div>
                                   <p className="mt-2 text-[12px] text-[#787774]">{details.subtitle}</p>
                                   <p className="mt-2 text-[12px] text-[#6b6b6b]">{details.message}</p>
@@ -1099,6 +1250,101 @@ export default function ControlPlanePage() {
                           </div>
                         )}
                       </div>
+
+                      {selectedRunResult && (
+                        <div className="rounded-2xl border border-[#ecebe8] bg-[#fbfbf9] p-4">
+                          <div className="flex flex-wrap items-center justify-between gap-3">
+                            <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#9b9a97]">
+                              Selected Outcome
+                            </p>
+                            <Badge
+                              variant="outline"
+                              className={`rounded-full px-2.5 py-1 text-[11px] font-semibold capitalize ${passStatusClass(toStringValue(selectedRunResult.status, "unknown"))}`}
+                            >
+                              {toStringValue(selectedRunResult.status, "unknown")}
+                            </Badge>
+                          </div>
+
+                          <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                            <SessionMetric
+                              label="Action"
+                              value={toStringValue(
+                                asRecord(selectedRunResult.action)?.action_key,
+                                toStringValue(asRecord(selectedRunResult.action)?.command, "unknown")
+                              )}
+                              detail={toStringValue(
+                                asRecord(selectedRunResult.action)?.action_type,
+                                "No action type"
+                              )}
+                            />
+                            <SessionMetric
+                              label="Mode"
+                              value={toStringValue(
+                                selectedRunResult.planned_mode,
+                                toStringValue(selectedRun.mode, "auto")
+                              )}
+                              detail={toStringValue(
+                                asRecord(selectedRunResult.command_result)?.status,
+                                "No command result"
+                              )}
+                            />
+                          </div>
+
+                          <p className="mt-4 text-[13px] leading-relaxed text-[#6b6b6b]">
+                            {toStringValue(
+                              selectedRunResult.message,
+                              toStringValue(
+                                asRecord(selectedRunResult.command_result)?.message,
+                                "No additional outcome message."
+                              )
+                            )}
+                          </p>
+
+                          <div className="mt-4 space-y-3">
+                            <div className="rounded-xl border border-[#ecebe8] bg-white p-3">
+                              <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#9b9a97]">
+                                Action Payload
+                              </p>
+                              <pre className="mt-3 overflow-x-auto rounded-lg bg-[#fafaf9] p-3 text-[11px] leading-relaxed text-[#37352f]">
+                                {formatJson(asRecord(selectedRunResult.action) || selectedRunResult)}
+                              </pre>
+                            </div>
+
+                            {asRecord(selectedRunResult.command_result) && (
+                              <div className="rounded-xl border border-[#ecebe8] bg-white p-3">
+                                <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#9b9a97]">
+                                  Command Result Payload
+                                </p>
+                                <pre className="mt-3 overflow-x-auto rounded-lg bg-[#fafaf9] p-3 text-[11px] leading-relaxed text-[#37352f]">
+                                  {formatJson(asRecord(selectedRunResult.command_result))}
+                                </pre>
+                              </div>
+                            )}
+
+                            {asRecord(selectedRunResult.approval) && (
+                              <div className="rounded-xl border border-[#d3e5ef] bg-[#eef7fb] p-3">
+                                <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#2a6690]">
+                                  Linked Approval
+                                </p>
+                                <pre className="mt-3 overflow-x-auto rounded-lg bg-white p-3 text-[11px] leading-relaxed text-[#2a6690]">
+                                  {formatJson(asRecord(selectedRunResult.approval))}
+                                </pre>
+                              </div>
+                            )}
+
+                            {asRecord(selectedRunResult.issue) && (
+                              <div className="rounded-xl border border-[#f4e0c4] bg-[#fff6e8] p-3">
+                                <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#9a6700]">
+                                  Linked Issue
+                                </p>
+                                <pre className="mt-3 overflow-x-auto rounded-lg bg-white p-3 text-[11px] leading-relaxed text-[#9a6700]">
+                                  {formatJson(asRecord(selectedRunResult.issue))}
+                                </pre>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      )}
                     </div>
                   )}
                 </CardContent>
@@ -1496,11 +1742,49 @@ export default function ControlPlanePage() {
                             {linkedRuns.length}
                           </Badge>
                         </div>
-                        {!linkedRuns.length ? (
-                          <p className="mt-3 text-[13px] text-[#9b9a97]">No linked action runs recorded yet.</p>
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          <FilterChip
+                            label="All"
+                            active={runFilter === "all"}
+                            count={linkedRuns.length}
+                            onClick={() => {
+                              setRunFilter("all");
+                            }}
+                          />
+                          <FilterChip
+                            label="Execute"
+                            active={runFilter === "execute"}
+                            count={linkedRuns.filter((run) => matchesRunFilter(run, "execute")).length}
+                            onClick={() => {
+                              setRunFilter("execute");
+                            }}
+                          />
+                          <FilterChip
+                            label="Preview"
+                            active={runFilter === "preview"}
+                            count={linkedRuns.filter((run) => matchesRunFilter(run, "preview")).length}
+                            onClick={() => {
+                              setRunFilter("preview");
+                            }}
+                          />
+                          <FilterChip
+                            label="Attention"
+                            active={runFilter === "attention"}
+                            count={linkedRuns.filter((run) => matchesRunFilter(run, "attention")).length}
+                            onClick={() => {
+                              setRunFilter("attention");
+                            }}
+                          />
+                        </div>
+                        {!filteredRuns.length ? (
+                          <p className="mt-3 text-[13px] text-[#9b9a97]">
+                            {linkedRuns.length
+                              ? "No action runs match the current filter."
+                              : "No linked action runs recorded yet."}
+                          </p>
                         ) : (
                           <div className="mt-3 space-y-3">
-                            {linkedRuns.slice(0, 6).map((run) => {
+                            {filteredRuns.slice(0, 6).map((run) => {
                               const selected = selectedRunId === run.id;
                               return (
                                 <div
@@ -1566,25 +1850,87 @@ export default function ControlPlanePage() {
                       </div>
 
                       <div className="rounded-2xl border border-[#ecebe8] bg-[#fbfbf9] p-4">
-                        <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#9b9a97]">
-                          Latest Session Events
-                        </p>
-                        {!selectedSession.events.length ? (
-                          <p className="mt-3 text-[13px] text-[#9b9a97]">No session events recorded yet.</p>
+                        <div className="flex items-center justify-between gap-3">
+                          <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#9b9a97]">
+                            Latest Session Events
+                          </p>
+                          <Badge
+                            variant="outline"
+                            className="rounded-full border-[#e5e5e3] bg-white px-2.5 py-1 text-[11px] font-medium text-[#37352f]"
+                          >
+                            {filteredEvents.length}
+                          </Badge>
+                        </div>
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          <FilterChip
+                            label="All"
+                            active={eventFilter === "all"}
+                            count={(selectedSession.events || []).length}
+                            onClick={() => {
+                              setEventFilter("all");
+                            }}
+                          />
+                          <FilterChip
+                            label="Control"
+                            active={eventFilter === "control"}
+                            count={(selectedSession.events || []).filter((event) => matchesEventFilter(event, "control")).length}
+                            onClick={() => {
+                              setEventFilter("control");
+                            }}
+                          />
+                          <FilterChip
+                            label="Actions"
+                            active={eventFilter === "actions"}
+                            count={(selectedSession.events || []).filter((event) => matchesEventFilter(event, "actions")).length}
+                            onClick={() => {
+                              setEventFilter("actions");
+                            }}
+                          />
+                          <FilterChip
+                            label="Decisions"
+                            active={eventFilter === "decisions"}
+                            count={(selectedSession.events || []).filter((event) => matchesEventFilter(event, "decisions")).length}
+                            onClick={() => {
+                              setEventFilter("decisions");
+                            }}
+                          />
+                          <FilterChip
+                            label="Attention"
+                            active={eventFilter === "attention"}
+                            count={(selectedSession.events || []).filter((event) => matchesEventFilter(event, "attention")).length}
+                            onClick={() => {
+                              setEventFilter("attention");
+                            }}
+                          />
+                        </div>
+                        {!filteredEvents.length ? (
+                          <p className="mt-3 text-[13px] text-[#9b9a97]">
+                            {selectedSession.events.length
+                              ? "No session events match the current filter."
+                              : "No session events recorded yet."}
+                          </p>
                         ) : (
                           <div className="mt-3 space-y-3">
-                            {selectedSession.events.slice(-6).reverse().map((event) => (
+                            {filteredEvents.slice(-6).reverse().map((event) => (
                               <div
                                 key={`${toStringValue(event.event)}-${toStringValue(event.timestamp)}`}
                                 className="rounded-xl border border-[#ecebe8] bg-white p-3"
                               >
                                 <div className="flex flex-wrap items-center justify-between gap-2">
-                                  <p className="font-mono text-[11px] text-[#37352f]">
-                                    {toStringValue(event.event, "unknown_event")}
-                                  </p>
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <p className="font-mono text-[11px] text-[#37352f]">
+                                      {toStringValue(event.event, "unknown_event")}
+                                    </p>
+                                    <Badge
+                                      variant="outline"
+                                      className="rounded-full border-[#e5e5e3] bg-[#fafaf9] px-2.5 py-1 text-[11px] font-medium text-[#37352f]"
+                                    >
+                                      {eventFamily(toStringValue(event.event))}
+                                    </Badge>
+                                  </div>
                                   <Badge
                                     variant="outline"
-                                    className="rounded-full border-[#e5e5e3] bg-[#fafaf9] px-2.5 py-1 text-[11px] font-medium text-[#37352f]"
+                                    className={`rounded-full px-2.5 py-1 text-[11px] font-medium capitalize ${passStatusClass(toStringValue(event.status, "unknown"))}`}
                                   >
                                     {toStringValue(event.status, "unknown")}
                                   </Badge>
