@@ -209,6 +209,13 @@ type QueueAdvanceFocusSummary = {
   activeFilter: string;
   badgeClassName: string;
 };
+type QueueAdvanceFocusDelta = {
+  fromLabel: string;
+  toLabel: string;
+  fromCount: number;
+  toCount: number;
+  timestamp: string;
+};
 
 function agentTimelineEntryKey(entry: AgentTimelineEntry): string {
   return `${entry.kind}:${entry.id}`;
@@ -870,6 +877,20 @@ function agentTimelineFilterClass(filter: string): string {
     default:
       return "border-[#e5e5e3] bg-[#fafaf9] text-[#37352f]";
   }
+}
+
+function queueFocusDeltaChangeLabel(delta: QueueAdvanceFocusDelta): string {
+  const change = delta.toCount - delta.fromCount;
+  if (change > 0) return `+${change} visible`;
+  if (change < 0) return `${change} visible`;
+  return "No change";
+}
+
+function queueFocusDeltaBadgeClass(delta: QueueAdvanceFocusDelta): string {
+  const change = delta.toCount - delta.fromCount;
+  if (change > 0) return "border-[#d6e9dc] bg-[#eef8f1] text-[#2b6e3f]";
+  if (change < 0) return "border-[#f4e0c4] bg-[#fff6e8] text-[#9a6700]";
+  return "border-[#e5e5e3] bg-[#fafaf9] text-[#37352f]";
 }
 
 function queueAdvanceSignal(
@@ -1948,6 +1969,7 @@ function QueueAdvanceNotice({
   onReopenPrevious,
   onSignalClick,
   focusSummary,
+  focusDelta,
   onResetFocus,
   onOpenMatchingQueue,
 }: {
@@ -1957,6 +1979,7 @@ function QueueAdvanceNotice({
   onReopenPrevious?: (() => void) | undefined;
   onSignalClick?: ((signal: QueueAdvanceSignal) => void) | undefined;
   focusSummary?: QueueAdvanceFocusSummary | null;
+  focusDelta?: QueueAdvanceFocusDelta | null;
   onResetFocus?: (() => void) | undefined;
   onOpenMatchingQueue?: (() => void) | undefined;
 }) {
@@ -2028,6 +2051,26 @@ function QueueAdvanceNotice({
             </Badge>
           </div>
           <p className="mt-1.5 text-[12px] text-[#46667d]">{focusSummary.detail}</p>
+          {focusDelta ? (
+            <div className="mt-3 rounded-lg border border-[#d8e6ef] bg-[#f8fcfe] p-2.5">
+              <div className="flex flex-wrap items-center gap-2">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#5d7c92]">
+                  Focus Delta
+                </p>
+                <Badge
+                  variant="outline"
+                  className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${queueFocusDeltaBadgeClass(focusDelta)}`}
+                >
+                  {queueFocusDeltaChangeLabel(focusDelta)}
+                </Badge>
+              </div>
+              <p className="mt-1.5 text-[12px] text-[#46667d]">
+                {focusDelta.fromLabel} showed {focusDelta.fromCount} item
+                {focusDelta.fromCount === 1 ? "" : "s"}, now {focusDelta.toLabel.toLowerCase()} shows{" "}
+                {focusDelta.toCount}.
+              </p>
+            </div>
+          ) : null}
           <div className="mt-3 flex flex-wrap gap-2">
             <Button
               size="sm"
@@ -2142,6 +2185,10 @@ export default function ControlPlanePage() {
     useState<QueueAdvanceFeedback | null>(null);
   const [agentQueueAdvanceFeedback, setAgentQueueAdvanceFeedback] =
     useState<QueueAdvanceFeedback | null>(null);
+  const [sessionQueueFocusDelta, setSessionQueueFocusDelta] =
+    useState<QueueAdvanceFocusDelta | null>(null);
+  const [agentQueueFocusDelta, setAgentQueueFocusDelta] =
+    useState<QueueAdvanceFocusDelta | null>(null);
   const [triageInboxFeedbackHistory, setTriageInboxFeedbackHistory] = useState<
     TriageInboxFeedback[]
   >([]);
@@ -2333,6 +2380,7 @@ export default function ControlPlanePage() {
     setSelectedSessionEventKey("");
     setSelectedSessionContextKind("");
     setSessionQueueAdvanceFeedback(null);
+    setSessionQueueFocusDelta(null);
     setPendingLineageAutoAdvance(null);
     setLineageQueueNow(Date.now());
   }, [selectedSessionId]);
@@ -2484,6 +2532,7 @@ export default function ControlPlanePage() {
     setAgentTimelineSearch("");
     setSelectedAgentTimelineKey("");
     setAgentQueueAdvanceFeedback(null);
+    setAgentQueueFocusDelta(null);
     setPendingAgentPriorityAutoAdvance(null);
   }, [selectedAgentId]);
 
@@ -3184,6 +3233,20 @@ export default function ControlPlanePage() {
   const sessionLineageAgentLinkedCount = useMemo(
     () => sessionLineageEntries.filter((entry) => entry.runtimeAgentId).length,
     [sessionLineageEntries]
+  );
+  const sessionLineageFilterCounts = useMemo<Record<string, number>>(
+    () => ({
+      all: sessionLineageEntries.length,
+      attention: sessionLineageAttentionCount,
+      decisions: sessionLineageDecisionCount,
+      "agent-linked": sessionLineageAgentLinkedCount,
+    }),
+    [
+      sessionLineageAgentLinkedCount,
+      sessionLineageAttentionCount,
+      sessionLineageDecisionCount,
+      sessionLineageEntries.length,
+    ]
   );
   const latestAgentLinkedLineageEntry = useMemo(
     () => sessionLineageEntries.find((entry) => matchesSessionLineageFilter(entry, "agent-linked")) ?? null,
@@ -3935,6 +3998,18 @@ export default function ControlPlanePage() {
     ),
     [activeAgentTimelineEntries, agentTimelineFilter, agentTimelineSearch]
   );
+  const agentTimelineFilterCounts = useMemo<Record<string, number>>(
+    () => ({
+      all: activeAgentTimelineEntries.length,
+      approvals: activeAgentTimelineEntries.filter((entry) => entry.kind === "approval").length,
+      issues: activeAgentTimelineEntries.filter((entry) => entry.kind === "issue").length,
+      events: activeAgentTimelineEntries.filter((entry) => entry.kind === "event").length,
+      attention: activeAgentTimelineEntries.filter((entry) =>
+        matchesAgentTimelineFilter(entry, "attention")
+      ).length,
+    }),
+    [activeAgentTimelineEntries]
+  );
   const sessionQueueAdvanceFocusSummary = useMemo<QueueAdvanceFocusSummary | null>(() => {
     if (!sessionQueueAdvanceFeedback) return null;
     const total = sessionLineageEntries.length;
@@ -4297,22 +4372,65 @@ export default function ControlPlanePage() {
     },
     [inspectAgentTimelineEntry, restoreAgentTimelineEntryVisibility, revealAgentTimelineEntry]
   );
+  const applySessionQueueFocus = useCallback(
+    (nextFilter: string, entry?: SessionLineageEntry | null) => {
+      setSessionQueueFocusDelta({
+        fromLabel: sessionLineageFilterLabel(sessionLineageFilter),
+        toLabel: sessionLineageFilterLabel(nextFilter),
+        fromCount: sessionLineageFilterCounts[sessionLineageFilter] ?? sessionLineageEntries.length,
+        toCount: sessionLineageFilterCounts[nextFilter] ?? sessionLineageEntries.length,
+        timestamp: new Date().toISOString(),
+      });
+      if (entry) {
+        focusSessionLineageEntry(entry, nextFilter);
+        return;
+      }
+      setSessionLineageFilter(nextFilter);
+    },
+    [
+      focusSessionLineageEntry,
+      sessionLineageEntries.length,
+      sessionLineageFilter,
+      sessionLineageFilterCounts,
+    ]
+  );
+  const applyAgentQueueFocus = useCallback(
+    (nextFilter: string, entry?: AgentTimelineEntry | null) => {
+      setAgentQueueFocusDelta({
+        fromLabel: agentTimelineFilterLabel(agentTimelineFilter),
+        toLabel: agentTimelineFilterLabel(nextFilter),
+        fromCount: agentTimelineFilterCounts[agentTimelineFilter] ?? activeAgentTimelineEntries.length,
+        toCount: agentTimelineFilterCounts[nextFilter] ?? activeAgentTimelineEntries.length,
+        timestamp: new Date().toISOString(),
+      });
+      focusAgentTimeline(nextFilter, entry ? { entry } : undefined);
+      if (entry) {
+        inspectAgentTimelineEntry(entry);
+      }
+    },
+    [
+      activeAgentTimelineEntries.length,
+      agentTimelineFilter,
+      agentTimelineFilterCounts,
+      focusAgentTimeline,
+      inspectAgentTimelineEntry,
+    ]
+  );
   const focusSessionQueueAdvanceSignal = useCallback(
     (signal: QueueAdvanceSignal) => {
       const target = sessionQueueAdvanceFeedback?.nextTarget;
       if (!target || target.kind !== "session-lineage") return;
-      focusSessionLineageEntry(target.entry, signal.focusFilter || target.filter);
+      applySessionQueueFocus(signal.focusFilter || target.filter, target.entry);
     },
-    [focusSessionLineageEntry, sessionQueueAdvanceFeedback]
+    [applySessionQueueFocus, sessionQueueAdvanceFeedback]
   );
   const focusAgentQueueAdvanceSignal = useCallback(
     (signal: QueueAdvanceSignal) => {
       const target = agentQueueAdvanceFeedback?.nextTarget;
       if (!target || target.kind !== "agent-timeline") return;
-      focusAgentTimeline(signal.focusFilter || "all", { entry: target.entry });
-      inspectAgentTimelineEntry(target.entry);
+      applyAgentQueueFocus(signal.focusFilter || "all", target.entry);
     },
-    [agentQueueAdvanceFeedback, focusAgentTimeline, inspectAgentTimelineEntry]
+    [agentQueueAdvanceFeedback, applyAgentQueueFocus]
   );
   const triageInboxItems = useMemo(
     () =>
@@ -5904,13 +6022,14 @@ export default function ControlPlanePage() {
                             label="Queue Advance"
                             feedback={sessionQueueAdvanceFeedback}
                             focusSummary={sessionQueueAdvanceFocusSummary}
+                            focusDelta={sessionQueueFocusDelta}
                             onResetFocus={() => {
-                              setSessionLineageFilter("all");
-                              if (sessionQueueAdvanceFeedback?.nextTarget?.kind === "session-lineage") {
-                                inspectSessionLineageEntry(
-                                  sessionQueueAdvanceFeedback.nextTarget.entry
-                                );
-                              }
+                              applySessionQueueFocus(
+                                "all",
+                                sessionQueueAdvanceFeedback?.nextTarget?.kind === "session-lineage"
+                                  ? sessionQueueAdvanceFeedback.nextTarget.entry
+                                  : null
+                              );
                             }}
                             onOpenMatchingQueue={
                               currentSessionLineageQueue
@@ -7500,18 +7619,14 @@ export default function ControlPlanePage() {
                             label="Queue Advance"
                             feedback={agentQueueAdvanceFeedback}
                             focusSummary={agentQueueAdvanceFocusSummary}
+                            focusDelta={agentQueueFocusDelta}
                             onResetFocus={() => {
-                              focusAgentTimeline(
+                              applyAgentQueueFocus(
                                 "all",
                                 agentQueueAdvanceFeedback?.nextTarget?.kind === "agent-timeline"
-                                  ? { entry: agentQueueAdvanceFeedback.nextTarget.entry }
+                                  ? agentQueueAdvanceFeedback.nextTarget.entry
                                   : undefined
                               );
-                              if (agentQueueAdvanceFeedback?.nextTarget?.kind === "agent-timeline") {
-                                inspectAgentTimelineEntry(
-                                  agentQueueAdvanceFeedback.nextTarget.entry
-                                );
-                              }
                             }}
                             onOpenMatchingQueue={
                               currentAgentPriorityQueue
