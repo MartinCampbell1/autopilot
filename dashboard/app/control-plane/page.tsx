@@ -176,10 +176,23 @@ type TriageInboxFeedbackGroup = {
   entries: TriageInboxFeedback[];
   isActive: boolean;
 };
+type SessionQueueAdvanceTarget = {
+  kind: "session-lineage";
+  filter: string;
+  entry: SessionLineageEntry;
+};
+type AgentQueueAdvanceTarget = {
+  kind: "agent-timeline";
+  priority: (typeof AGENT_PRIORITY_QUEUE_KEYS)[number];
+  entry: AgentTimelineEntry;
+};
+type QueueAdvanceTarget = SessionQueueAdvanceTarget | AgentQueueAdvanceTarget;
 type QueueAdvanceFeedback = {
   title: string;
   detail: string;
   timestamp: string;
+  nextTarget?: QueueAdvanceTarget | null;
+  previousTarget?: QueueAdvanceTarget | null;
 };
 
 function agentTimelineEntryKey(entry: AgentTimelineEntry): string {
@@ -202,6 +215,28 @@ function agentTimelineRowDomId(runtimeAgentId: string, key: string): string {
   return runtimeAgentId && key
     ? `agent-timeline-row-${domSafeToken(runtimeAgentId)}-${domSafeToken(key)}`
     : "";
+}
+
+function sessionQueueAdvanceTarget(
+  filter: string,
+  entry: SessionLineageEntry
+): SessionQueueAdvanceTarget {
+  return {
+    kind: "session-lineage",
+    filter,
+    entry,
+  };
+}
+
+function agentQueueAdvanceTarget(
+  priority: (typeof AGENT_PRIORITY_QUEUE_KEYS)[number],
+  entry: AgentTimelineEntry
+): AgentQueueAdvanceTarget {
+  return {
+    kind: "agent-timeline",
+    priority,
+    entry,
+  };
 }
 
 function scrollToDomId(id: string): boolean {
@@ -1617,9 +1652,13 @@ function QueueItemCard({
 function QueueAdvanceNotice({
   label,
   feedback,
+  onOpenSelectedNext,
+  onReopenPrevious,
 }: {
   label: string;
   feedback: QueueAdvanceFeedback | null;
+  onOpenSelectedNext?: (() => void) | undefined;
+  onReopenPrevious?: (() => void) | undefined;
 }) {
   if (!feedback) return null;
 
@@ -1633,6 +1672,28 @@ function QueueAdvanceNotice({
       </div>
       <p className="mt-2 text-[13px] font-semibold text-[#214d69]">{feedback.title}</p>
       <p className="mt-1 text-[12px] text-[#46667d]">{feedback.detail}</p>
+      {feedback.nextTarget || feedback.previousTarget ? (
+        <div className="mt-3 flex flex-wrap gap-2">
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-7 rounded-lg border-[#b6d6e8] bg-white px-2 text-[11px] text-[#214d69] hover:bg-[#f8fcfe]"
+            onClick={onOpenSelectedNext}
+            disabled={!feedback.nextTarget || !onOpenSelectedNext}
+          >
+            Open selected next
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-7 rounded-lg border-[#b6d6e8] bg-white px-2 text-[11px] text-[#214d69] hover:bg-[#f8fcfe]"
+            onClick={onReopenPrevious}
+            disabled={!feedback.previousTarget || !onReopenPrevious}
+          >
+            Re-open previous
+          </Button>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -1670,10 +1731,13 @@ export default function ControlPlanePage() {
   const [pendingAgentPriorityAutoAdvance, setPendingAgentPriorityAutoAdvance] = useState<{
     priority: "critical" | "high";
     previousKey: string;
+    previousEntry: AgentTimelineEntry | null;
   } | null>(null);
   const [pendingLineageAutoAdvance, setPendingLineageAutoAdvance] = useState<{
     filter: "attention" | "decisions";
     previousKey: string;
+    previousEntry: SessionLineageEntry | null;
+    previousFilter: string;
   } | null>(null);
   const [dismissedLineageQueueKeys, setDismissedLineageQueueKeys] = useState<
     Record<LineageQueueKind, string[]>
@@ -2277,12 +2341,15 @@ export default function ControlPlanePage() {
           setPendingLineageAutoAdvance({
             filter: autoAdvanceFilter,
             previousKey: currentLineageEntry.key,
+            previousEntry: currentLineageEntry,
+            previousFilter: currentLineageFilter || autoAdvanceFilter,
           });
         }
         if (autoAdvanceAgentPriority && currentAgentEntry) {
           setPendingAgentPriorityAutoAdvance({
             priority: autoAdvanceAgentPriority,
             previousKey: agentTimelineEntryKey(currentAgentEntry),
+            previousEntry: currentAgentEntry,
           });
         }
         await refreshAfterMutation(selectedSessionId);
@@ -2981,12 +3048,17 @@ export default function ControlPlanePage() {
     (filter: "attention" | "decisions") => {
       const entries =
         filter === "attention" ? attentionSessionLineageEntries : decisionSessionLineageEntries;
+      const previousEntry = selectedSessionLineageEntry;
       const nextEntry = nextSessionLineageQueueEntry(entries, selectedSessionLineageEntry);
       if (!nextEntry) return;
       setSessionQueueAdvanceFeedback({
         title: `${filter === "attention" ? "Attention" : "Decision"} queue advanced`,
         detail: `Selected "${nextEntry.title}" as the next ${filter} item.`,
         timestamp: new Date().toISOString(),
+        nextTarget: sessionQueueAdvanceTarget(filter, nextEntry),
+        previousTarget: previousEntry
+          ? sessionQueueAdvanceTarget(sessionLineageFilter, previousEntry)
+          : null,
       });
       focusSessionLineageEntry(nextEntry, filter);
     },
@@ -2994,6 +3066,7 @@ export default function ControlPlanePage() {
       attentionSessionLineageEntries,
       decisionSessionLineageEntries,
       focusSessionLineageEntry,
+      sessionLineageFilter,
       selectedSessionLineageEntry,
     ]
   );
@@ -3007,6 +3080,8 @@ export default function ControlPlanePage() {
         title: `${filter === "attention" ? "Attention" : "Decision"} queue advanced`,
         detail: `Selected "${nextEntry.title}" as the next ${filter} item.`,
         timestamp: new Date().toISOString(),
+        nextTarget: sessionQueueAdvanceTarget(filter, nextEntry),
+        previousTarget: entry ? sessionQueueAdvanceTarget(filter, entry) : null,
       });
       focusSessionLineageEntry(nextEntry, filter);
     },
@@ -3025,6 +3100,8 @@ export default function ControlPlanePage() {
         setPendingLineageAutoAdvance({
           filter,
           previousKey: entry.key,
+          previousEntry: entry,
+          previousFilter: filter,
         });
       }
     },
@@ -3045,6 +3122,8 @@ export default function ControlPlanePage() {
         setPendingLineageAutoAdvance({
           filter,
           previousKey: entry.key,
+          previousEntry: entry,
+          previousFilter: filter,
         });
       }
     },
@@ -3127,6 +3206,7 @@ export default function ControlPlanePage() {
         setPendingAgentPriorityAutoAdvance({
           priority,
           previousKey: entryKey,
+          previousEntry: entry,
         });
       }
     }
@@ -3146,6 +3226,7 @@ export default function ControlPlanePage() {
         setPendingAgentPriorityAutoAdvance({
           priority,
           previousKey: entryKey,
+          previousEntry: entry,
         });
       }
     }
@@ -3211,6 +3292,13 @@ export default function ControlPlanePage() {
         title: `${pendingLineageAutoAdvance.filter === "attention" ? "Attention" : "Decision"} queue auto-advanced`,
         detail: `Moved to "${nextEntry.title}" after the previous queue action completed.`,
         timestamp: new Date().toISOString(),
+        nextTarget: sessionQueueAdvanceTarget(pendingLineageAutoAdvance.filter, nextEntry),
+        previousTarget: pendingLineageAutoAdvance.previousEntry
+          ? sessionQueueAdvanceTarget(
+              pendingLineageAutoAdvance.previousFilter,
+              pendingLineageAutoAdvance.previousEntry
+            )
+          : null,
       });
       focusSessionLineageEntry(nextEntry, pendingLineageAutoAdvance.filter);
     } else {
@@ -3218,6 +3306,12 @@ export default function ControlPlanePage() {
         title: `${pendingLineageAutoAdvance.filter === "attention" ? "Attention" : "Decision"} queue cleared`,
         detail: `No remaining ${pendingLineageAutoAdvance.filter} items were available after the previous queue action.`,
         timestamp: new Date().toISOString(),
+        previousTarget: pendingLineageAutoAdvance.previousEntry
+          ? sessionQueueAdvanceTarget(
+              pendingLineageAutoAdvance.previousFilter,
+              pendingLineageAutoAdvance.previousEntry
+            )
+          : null,
       });
       setSessionLineageFilter(pendingLineageAutoAdvance.filter);
     }
@@ -3681,11 +3775,24 @@ export default function ControlPlanePage() {
         title: `${priority === "critical" ? "Critical" : "High"} queue advanced`,
         detail: `Selected "${nextEntry.title}" as the next ${priority} item.`,
         timestamp: new Date().toISOString(),
+        nextTarget: agentQueueAdvanceTarget(priority, nextEntry),
+        previousTarget: entry ? agentQueueAdvanceTarget(priority, entry) : null,
       });
       inspectAgentTimelineEntry(nextEntry);
     },
     [filteredAgentTimelineEntries, inspectAgentTimelineEntry]
   );
+  const restoreAgentTimelineEntryVisibility = useCallback((entryKey: string) => {
+    if (!entryKey) return;
+    setDismissedAgentTimelineKeys((current) => current.filter((key) => key !== entryKey));
+    setSnoozedAgentTimelineUntil((current) => {
+      if (!(entryKey in current)) return current;
+      const next = { ...current };
+      delete next[entryKey];
+      return next;
+    });
+    setLineageQueueNow(Date.now());
+  }, []);
   const revealAgentTimelineEntry = useCallback(
     (entry: AgentTimelineEntry) => {
       const entryKey = agentTimelineEntryKey(entry);
@@ -3741,6 +3848,22 @@ export default function ControlPlanePage() {
       setEntitySearch(approvalId || issueId || eventToken);
     },
     [linkedRuns]
+  );
+  const openSessionQueueAdvanceTarget = useCallback(
+    (target: QueueAdvanceTarget | null | undefined) => {
+      if (!target || target.kind !== "session-lineage") return;
+      focusSessionLineageEntry(target.entry, target.filter);
+    },
+    [focusSessionLineageEntry]
+  );
+  const openAgentQueueAdvanceTarget = useCallback(
+    (target: QueueAdvanceTarget | null | undefined) => {
+      if (!target || target.kind !== "agent-timeline") return;
+      restoreAgentTimelineEntryVisibility(agentTimelineEntryKey(target.entry));
+      revealAgentTimelineEntry(target.entry);
+      inspectAgentTimelineEntry(target.entry);
+    },
+    [inspectAgentTimelineEntry, restoreAgentTimelineEntryVisibility, revealAgentTimelineEntry]
   );
   const triageInboxItems = useMemo(
     () =>
@@ -4059,6 +4182,13 @@ export default function ControlPlanePage() {
         title: `${pendingAgentPriorityAutoAdvance.priority === "critical" ? "Critical" : "High"} queue auto-advanced`,
         detail: `Moved to "${nextEntry.title}" after the previous queue action completed.`,
         timestamp: new Date().toISOString(),
+        nextTarget: agentQueueAdvanceTarget(pendingAgentPriorityAutoAdvance.priority, nextEntry),
+        previousTarget: pendingAgentPriorityAutoAdvance.previousEntry
+          ? agentQueueAdvanceTarget(
+              pendingAgentPriorityAutoAdvance.priority,
+              pendingAgentPriorityAutoAdvance.previousEntry
+            )
+          : null,
       });
       inspectAgentTimelineEntry(nextEntry);
     } else {
@@ -4066,6 +4196,12 @@ export default function ControlPlanePage() {
         title: `${pendingAgentPriorityAutoAdvance.priority === "critical" ? "Critical" : "High"} queue cleared`,
         detail: `No remaining ${pendingAgentPriorityAutoAdvance.priority} items were available after the previous queue action.`,
         timestamp: new Date().toISOString(),
+        previousTarget: pendingAgentPriorityAutoAdvance.previousEntry
+          ? agentQueueAdvanceTarget(
+              pendingAgentPriorityAutoAdvance.priority,
+              pendingAgentPriorityAutoAdvance.previousEntry
+            )
+          : null,
       });
     }
   }, [
@@ -5314,6 +5450,24 @@ export default function ControlPlanePage() {
                           <QueueAdvanceNotice
                             label="Queue Advance"
                             feedback={sessionQueueAdvanceFeedback}
+                            onOpenSelectedNext={
+                              sessionQueueAdvanceFeedback?.nextTarget
+                                ? () => {
+                                    openSessionQueueAdvanceTarget(
+                                      sessionQueueAdvanceFeedback.nextTarget
+                                    );
+                                  }
+                                : undefined
+                            }
+                            onReopenPrevious={
+                              sessionQueueAdvanceFeedback?.previousTarget
+                                ? () => {
+                                    openSessionQueueAdvanceTarget(
+                                      sessionQueueAdvanceFeedback.previousTarget
+                                    );
+                                  }
+                                : undefined
+                            }
                           />
                           <div className="grid gap-3 xl:grid-cols-2">
                             <CollapsibleQueuePanel
@@ -6871,6 +7025,24 @@ export default function ControlPlanePage() {
                           <QueueAdvanceNotice
                             label="Queue Advance"
                             feedback={agentQueueAdvanceFeedback}
+                            onOpenSelectedNext={
+                              agentQueueAdvanceFeedback?.nextTarget
+                                ? () => {
+                                    openAgentQueueAdvanceTarget(
+                                      agentQueueAdvanceFeedback.nextTarget
+                                    );
+                                  }
+                                : undefined
+                            }
+                            onReopenPrevious={
+                              agentQueueAdvanceFeedback?.previousTarget
+                                ? () => {
+                                    openAgentQueueAdvanceTarget(
+                                      agentQueueAdvanceFeedback.previousTarget
+                                    );
+                                  }
+                                : undefined
+                            }
                           />
                           <div className="rounded-xl border border-[#ecebe8] bg-white p-3">
                             <div className="flex flex-wrap items-center justify-between gap-3">
