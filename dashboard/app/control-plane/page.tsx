@@ -16,13 +16,9 @@ import {
   type QueueAdvanceSignal,
 } from "@/components/queue-advance-notice";
 import { SelectedActionRunCard } from "@/components/selected-action-run-card";
-import { SelectedControlPassCard } from "@/components/selected-control-pass-card";
-import { LinkedDecisionsCard } from "@/components/linked-decisions-card";
 import { ControlPlaneOverviewSections } from "@/components/control-plane-overview-sections";
-import { SessionDrilldownActivitySection } from "@/components/session-drilldown-activity-section";
-import { SessionDrilldownControlSection } from "@/components/session-drilldown-control-section";
+import { SessionDrilldownSection } from "@/components/session-drilldown-section";
 import { SelectedOutcomeInspector } from "@/components/selected-outcome-inspector";
-import { SelectedSessionContextCard } from "@/components/selected-session-context-card";
 import { SessionLineageSection } from "@/components/session-lineage-section";
 import { TriageInboxSection } from "@/components/triage-inbox-section";
 import { RuntimeAgentActivitySection } from "@/components/runtime-agent-activity-section";
@@ -5280,207 +5276,184 @@ export default function ControlPlanePage() {
             </div>
           </section>
 
-          <section className="grid gap-6 xl:grid-cols-[minmax(0,1.35fr)_minmax(320px,0.95fr)]">
-            <Card className="border border-[#e5e5e3] bg-white shadow-[0_1px_3px_rgba(15,15,15,0.08),0_0_1px_rgba(15,15,15,0.04)]">
-              <CardHeader>
-                <CardTitle className="text-[18px] font-semibold tracking-[-0.02em] text-[#37352f]">
-                  Session Drill-Down
-                </CardTitle>
-                <CardDescription className="text-[13px] text-[#787774]">
-                  Inspect the selected session, apply direct recommendations, or run a session-level
-                  control pass profile from this panel.
-                </CardDescription>
-              </CardHeader>
-              <CardContent>
-                {!selectedSessionId ? (
-                  <div className="rounded-xl border border-dashed border-[#e5e5e3] bg-[#fafaf9] px-5 py-8 text-[13px] text-[#9b9a97]">
-                    Select a recent session or control pass to inspect live control state.
-                  </div>
-                ) : sessionLoading || !selectedSession ? (
-                  <div className="rounded-xl border border-dashed border-[#e5e5e3] bg-[#fafaf9] px-5 py-8 text-[13px] text-[#9b9a97]">
-                    Loading session detail...
-                  </div>
-                ) : (
-                  <div className="space-y-5">
-                    <SessionDrilldownControlSection
-                      selectedSession={selectedSession}
-                      selectedControl={selectedControl}
-                      linkedAgentIds={linkedAgentIds}
-                      selectedAgentId={selectedAgentId}
-                      onFocusRuntimeAgent={(runtimeAgentId) => {
-                        focusRuntimeAgent(runtimeAgentId, true);
-                      }}
-                      filteredRunsCount={filteredRuns.length}
-                      linkedRunsCount={linkedRuns.length}
-                      filteredEventsCount={filteredEvents.length}
-                      filteredApprovalsCount={filteredApprovals.length}
-                      linkedApprovalsCount={linkedApprovals.length}
-                      filteredIssuesCount={filteredIssues.length}
-                      linkedIssuesCount={linkedIssues.length}
-                      entitySearch={entitySearch}
-                      onEntitySearchChange={setEntitySearch}
-                      onClearEntitySearch={() => {
-                        setEntitySearch("");
-                      }}
-                      sortedProfiles={sortedProfiles}
-                      busyActionKey={busyActionKey}
-                      onApplyControlPlan={(profile) => {
-                        void applyControlPlan(profile);
-                      }}
-                      onApplyRecommendation={(recommendation) => {
-                        void applyRecommendation(recommendation);
-                      }}
-                    />
-
-                    <SessionDrilldownActivitySection
-                      selectedSession={selectedSession}
-                      selectedControl={selectedControl}
-                      linkedRuns={linkedRuns}
-                      runFilter={runFilter as "all" | "execute" | "preview" | "attention"}
-                      onRunFilterChange={setRunFilter}
-                      getRunFilterCount={(filter) =>
-                        linkedRuns.filter((run) => matchesRunFilter(run, filter)).length
-                      }
-                      filteredRuns={filteredRuns}
-                      selectedRunId={selectedRunId}
-                      onSelectRun={setSelectedRunId}
-                      onFocusRuntimeAgent={(runtimeAgentId) => {
-                        focusRuntimeAgent(runtimeAgentId, true);
-                      }}
-                      toNumber={toNumber}
-                      eventFilter={eventFilter as
-                        | "all"
-                        | "control"
-                        | "actions"
-                        | "decisions"
-                        | "attention"}
-                      onEventFilterChange={setEventFilter}
-                      getEventFilterCount={(filter) =>
-                        (selectedSession.events || []).filter((event) =>
-                          matchesEventFilter(event, filter)
-                        ).length
-                      }
-                      filteredEvents={filteredEvents}
-                      visibleSessionEvents={visibleSessionEvents}
-                      selectedSessionEventKey={selectedSessionEventKey}
-                      toStringValue={toStringValue}
-                      toStringArray={toStringArray}
-                      toNullableNumber={toNullableNumber}
-                      formatTimestamp={formatTimestamp}
-                      eventFamily={eventFamily}
-                      sessionEventKey={sessionEventKey}
-                      sessionContextRowDomId={sessionContextRowDomId}
-                      onSyncLinkedSelection={syncLinkedSelection}
-                      onSearchEntity={setEntitySearch}
-                    />
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-
-            <div className="space-y-6">
-              <SelectedControlPassCard
-                selectedPass={selectedPass}
-                toStringValue={toStringValue}
-                toNumber={toNumber}
-                onOpenSession={setSelectedSessionId}
-              />
-
-              <LinkedDecisionsCard
-                selectedSession={selectedSession}
-                linkedApprovals={linkedApprovals}
-                filteredApprovals={filteredApprovals}
-                visibleSessionApprovals={visibleSessionApprovals}
-                selectedSessionApprovalId={selectedSessionApprovalId}
-                linkedIssues={linkedIssues}
-                filteredIssues={filteredIssues}
-                visibleSessionIssues={visibleSessionIssues}
-                selectedSessionIssueId={selectedSessionIssueId}
-                busyActionKey={busyActionKey}
-                formatTimestamp={formatTimestamp}
-                sessionContextRowDomId={sessionContextRowDomId}
-                onSearchEntity={setEntitySearch}
-                onFocusRuntimeAgent={(runtimeAgentId) => {
-                  focusRuntimeAgent(runtimeAgentId, true);
-                }}
-                onInspectApproval={(approval) => {
-                  syncLinkedSelection({
-                    approvalId: approval.id,
-                    issueId: approval.issue_id,
-                    runtimeAgentId: approval.runtime_agent_ids[0],
-                  });
-                }}
-                onInspectIssue={(issue) => {
-                  syncLinkedSelection({
-                    issueId: issue.id,
-                    approvalId: issue.approval_id,
-                    runtimeAgentId: issue.runtime_agent_ids[0] || issue.runtime_agent_id,
-                  });
-                }}
-                onApproveApproval={(approval) => {
-                  void approveApproval(approval);
-                }}
-                onRejectApproval={(approval) => {
-                  void rejectApproval(approval);
-                }}
-                onApplyApproval={(approval) => {
-                  void applyApproval(approval);
-                }}
-                onResolveIssue={(issue) => {
-                  void resolveIssue(issue);
-                }}
-              />
-
-              <SelectedSessionContextCard
-                selectedSession={selectedSession}
-                selectedSessionContext={selectedSessionContext}
-                linkedRuns={linkedRuns}
-                busyActionKey={busyActionKey}
-                currentSessionLineageQueue={currentSessionLineageQueue}
-                formatTimestamp={formatTimestamp}
-                formatJson={formatJson}
-                toStringValue={toStringValue}
-                toStringArray={toStringArray}
-                toNullableNumber={toNullableNumber}
-                asRecord={asRecord}
-                eventFamily={eventFamily}
-                describeRunResult={describeRunResult}
-                resolveRunLinkFromContext={resolveRunLinkFromContext}
-                onRevealSessionRow={revealSelectedSessionContextRow}
-                onRevealInAgentTimeline={revealSelectedSessionContextInAgentTimeline}
-                onOpenRuntimeAgent={(runtimeAgentId) => {
-                  focusRuntimeAgent(runtimeAgentId, true);
-                }}
-                onSyncLinkedSelection={syncLinkedSelection}
-                onOpenRunOutcome={(runId, resultIndex) => {
-                  setSelectedRunId(runId);
-                  setSelectedRunResultIndex(resultIndex);
-                }}
-                onApproveApproval={(approval) => {
-                  void approveApproval(approval);
-                }}
-                onRejectApproval={(approval) => {
-                  void rejectApproval(approval);
-                }}
-                onApplyApproval={(approval) => {
-                  void applyApproval(approval);
-                }}
-                onResolveIssue={(issue) => {
-                  void resolveIssue(issue);
-                }}
-                onAdvanceCurrentQueue={
-                  currentSessionLineageQueue && selectedSessionLineageEntry
-                    ? () => {
-                        advanceSessionLineageQueueFromEntry(
-                          currentSessionLineageQueue,
-                          selectedSessionLineageEntry
-                        );
-                      }
-                    : null
-                }
-              />
-            </div>
-          </section>
+          <SessionDrilldownSection
+            selectedSessionId={selectedSessionId}
+            sessionLoading={sessionLoading}
+            selectedSession={selectedSession}
+            controlSectionProps={
+              selectedSession
+                ? {
+                    selectedSession,
+                    selectedControl,
+                    linkedAgentIds,
+                    selectedAgentId,
+                    onFocusRuntimeAgent: (runtimeAgentId) => {
+                      focusRuntimeAgent(runtimeAgentId, true);
+                    },
+                    filteredRunsCount: filteredRuns.length,
+                    linkedRunsCount: linkedRuns.length,
+                    filteredEventsCount: filteredEvents.length,
+                    filteredApprovalsCount: filteredApprovals.length,
+                    linkedApprovalsCount: linkedApprovals.length,
+                    filteredIssuesCount: filteredIssues.length,
+                    linkedIssuesCount: linkedIssues.length,
+                    entitySearch,
+                    onEntitySearchChange: setEntitySearch,
+                    onClearEntitySearch: () => {
+                      setEntitySearch("");
+                    },
+                    sortedProfiles,
+                    busyActionKey,
+                    onApplyControlPlan: (profile) => {
+                      void applyControlPlan(profile);
+                    },
+                    onApplyRecommendation: (recommendation) => {
+                      void applyRecommendation(recommendation);
+                    },
+                  }
+                : null
+            }
+            activitySectionProps={
+              selectedSession
+                ? {
+                    selectedSession,
+                    selectedControl,
+                    linkedRuns,
+                    runFilter: runFilter as "all" | "execute" | "preview" | "attention",
+                    onRunFilterChange: setRunFilter,
+                    getRunFilterCount: (filter) =>
+                      linkedRuns.filter((run) => matchesRunFilter(run, filter)).length,
+                    filteredRuns,
+                    selectedRunId,
+                    onSelectRun: setSelectedRunId,
+                    onFocusRuntimeAgent: (runtimeAgentId) => {
+                      focusRuntimeAgent(runtimeAgentId, true);
+                    },
+                    toNumber,
+                    eventFilter: eventFilter as
+                      | "all"
+                      | "control"
+                      | "actions"
+                      | "decisions"
+                      | "attention",
+                    onEventFilterChange: setEventFilter,
+                    getEventFilterCount: (filter) =>
+                      (selectedSession.events || []).filter((event) =>
+                        matchesEventFilter(event, filter)
+                      ).length,
+                    filteredEvents,
+                    visibleSessionEvents,
+                    selectedSessionEventKey,
+                    toStringValue,
+                    toStringArray,
+                    toNullableNumber,
+                    formatTimestamp,
+                    eventFamily,
+                    sessionEventKey,
+                    sessionContextRowDomId,
+                    onSyncLinkedSelection: syncLinkedSelection,
+                    onSearchEntity: setEntitySearch,
+                  }
+                : null
+            }
+            selectedControlPassCardProps={{
+              selectedPass,
+              toStringValue,
+              toNumber,
+              onOpenSession: setSelectedSessionId,
+            }}
+            linkedDecisionsCardProps={{
+              selectedSession,
+              linkedApprovals,
+              filteredApprovals,
+              visibleSessionApprovals,
+              selectedSessionApprovalId,
+              linkedIssues,
+              filteredIssues,
+              visibleSessionIssues,
+              selectedSessionIssueId,
+              busyActionKey,
+              formatTimestamp,
+              sessionContextRowDomId,
+              onSearchEntity: setEntitySearch,
+              onFocusRuntimeAgent: (runtimeAgentId) => {
+                focusRuntimeAgent(runtimeAgentId, true);
+              },
+              onInspectApproval: (approval) => {
+                syncLinkedSelection({
+                  approvalId: approval.id,
+                  issueId: approval.issue_id,
+                  runtimeAgentId: approval.runtime_agent_ids[0],
+                });
+              },
+              onInspectIssue: (issue) => {
+                syncLinkedSelection({
+                  issueId: issue.id,
+                  approvalId: issue.approval_id,
+                  runtimeAgentId: issue.runtime_agent_ids[0] || issue.runtime_agent_id,
+                });
+              },
+              onApproveApproval: (approval) => {
+                void approveApproval(approval);
+              },
+              onRejectApproval: (approval) => {
+                void rejectApproval(approval);
+              },
+              onApplyApproval: (approval) => {
+                void applyApproval(approval);
+              },
+              onResolveIssue: (issue) => {
+                void resolveIssue(issue);
+              },
+            }}
+            selectedSessionContextCardProps={{
+              selectedSession,
+              selectedSessionContext,
+              linkedRuns,
+              busyActionKey,
+              currentSessionLineageQueue,
+              formatTimestamp,
+              formatJson,
+              toStringValue,
+              toStringArray,
+              toNullableNumber,
+              asRecord,
+              eventFamily,
+              describeRunResult,
+              resolveRunLinkFromContext,
+              onRevealSessionRow: revealSelectedSessionContextRow,
+              onRevealInAgentTimeline: revealSelectedSessionContextInAgentTimeline,
+              onOpenRuntimeAgent: (runtimeAgentId) => {
+                focusRuntimeAgent(runtimeAgentId, true);
+              },
+              onSyncLinkedSelection: syncLinkedSelection,
+              onOpenRunOutcome: (runId, resultIndex) => {
+                setSelectedRunId(runId);
+                setSelectedRunResultIndex(resultIndex);
+              },
+              onApproveApproval: (approval) => {
+                void approveApproval(approval);
+              },
+              onRejectApproval: (approval) => {
+                void rejectApproval(approval);
+              },
+              onApplyApproval: (approval) => {
+                void applyApproval(approval);
+              },
+              onResolveIssue: (issue) => {
+                void resolveIssue(issue);
+              },
+              onAdvanceCurrentQueue:
+                currentSessionLineageQueue && selectedSessionLineageEntry
+                  ? () => {
+                      advanceSessionLineageQueueFromEntry(
+                        currentSessionLineageQueue,
+                        selectedSessionLineageEntry
+                      );
+                    }
+                  : null,
+            }}
+          />
         </div>
       </main>
     </div>
