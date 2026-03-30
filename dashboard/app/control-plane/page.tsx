@@ -3600,6 +3600,62 @@ export default function ControlPlanePage() {
     },
     [linkedRuns, selectedAgent, selectedAgentId, syncLinkedSelection]
   );
+  const revealAgentTimelineEntry = useCallback(
+    (entry: AgentTimelineEntry) => {
+      const entryKey = agentTimelineEntryKey(entry);
+      setAgentTimelineFilter("all");
+      setAgentTimelineSearch("");
+      setSelectedAgentTimelineKey(entryKey);
+      if (selectedAgentId) {
+        setPendingAgentTimelineRowDomId(agentTimelineRowDomId(selectedAgentId, entryKey));
+      }
+    },
+    [selectedAgentId]
+  );
+  const findSessionLineageEntryInSession = useCallback((entry: SessionLineageEntry) => {
+    setEntitySearch(entry.runId || entry.issueId || entry.approvalId || entry.title);
+    if (entry.runId) {
+      setSelectedRunId(entry.runId);
+      setSelectedRunResultIndex(entry.resultIndex);
+    }
+  }, []);
+  const revealSessionLineageEntryInTimeline = useCallback(
+    (entry: SessionLineageEntry) => {
+      syncLinkedSelection({
+        runId: entry.runId,
+        resultIndex: entry.resultIndex,
+        approvalId: entry.approvalId,
+        issueId: entry.issueId,
+        runtimeAgentId: entry.runtimeAgentId,
+        event: entry.event,
+      });
+    },
+    [syncLinkedSelection]
+  );
+  const findAgentTimelineEntryInSession = useCallback(
+    (entry: AgentTimelineEntry) => {
+      const relatedRunLink = resolveAgentTimelineRunLink(entry, linkedRuns);
+      const approvalId =
+        entry.approval?.id ||
+        entry.issue?.approval_id ||
+        toStringValue(entry.event?.approval_id);
+      const issueId = entry.issue?.id || toStringValue(entry.event?.issue_id);
+      const eventToken =
+        toStringValue(entry.event?.event) ||
+        toStringValue(entry.event?.message) ||
+        entry.id;
+
+      if (relatedRunLink) {
+        setEntitySearch(relatedRunLink.run.id || approvalId || issueId || eventToken);
+        setSelectedRunId(relatedRunLink.run.id);
+        setSelectedRunResultIndex(relatedRunLink.resultIndex);
+        return;
+      }
+
+      setEntitySearch(approvalId || issueId || eventToken);
+    },
+    [linkedRuns]
+  );
   const triageInboxItems = useMemo(
     () =>
       [
@@ -5297,6 +5353,26 @@ export default function ControlPlanePage() {
                                         >
                                           Dismiss
                                         </Button>
+                                        <Button
+                                          size="sm"
+                                          variant="outline"
+                                          className="h-7 rounded-lg border-[#e5e5e3] bg-white px-2 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
+                                          onClick={() => {
+                                            findSessionLineageEntryInSession(entry);
+                                          }}
+                                        >
+                                          Find in session
+                                        </Button>
+                                        <Button
+                                          size="sm"
+                                          variant="outline"
+                                          className="h-7 rounded-lg border-[#d3e5ef] bg-[#eef7fb] px-2 text-[11px] text-[#2a6690] hover:bg-[#e3f2f8]"
+                                          onClick={() => {
+                                            revealSessionLineageEntryInTimeline(entry);
+                                          }}
+                                        >
+                                          Reveal in timeline
+                                        </Button>
                                         {workspaceHref ? (
                                           <Link
                                             href={workspaceHref}
@@ -5449,6 +5525,26 @@ export default function ControlPlanePage() {
                                           }}
                                         >
                                           Dismiss
+                                        </Button>
+                                        <Button
+                                          size="sm"
+                                          variant="outline"
+                                          className="h-7 rounded-lg border-[#e5e5e3] bg-white px-2 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
+                                          onClick={() => {
+                                            findSessionLineageEntryInSession(entry);
+                                          }}
+                                        >
+                                          Find in session
+                                        </Button>
+                                        <Button
+                                          size="sm"
+                                          variant="outline"
+                                          className="h-7 rounded-lg border-[#d3e5ef] bg-[#eef7fb] px-2 text-[11px] text-[#2a6690] hover:bg-[#e3f2f8]"
+                                          onClick={() => {
+                                            revealSessionLineageEntryInTimeline(entry);
+                                          }}
+                                        >
+                                          Reveal in timeline
                                         </Button>
                                         {workspaceHref ? (
                                           <Link
@@ -6858,6 +6954,26 @@ export default function ControlPlanePage() {
                                                   }}
                                                 >
                                                   Dismiss
+                                                </Button>
+                                                <Button
+                                                  size="sm"
+                                                  variant="outline"
+                                                  className="h-7 rounded-lg border-[#e5e5e3] bg-white px-2 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
+                                                  onClick={() => {
+                                                    findAgentTimelineEntryInSession(entry);
+                                                  }}
+                                                >
+                                                  Find in session
+                                                </Button>
+                                                <Button
+                                                  size="sm"
+                                                  variant="outline"
+                                                  className="h-7 rounded-lg border-[#d3e5ef] bg-[#eef7fb] px-2 text-[11px] text-[#2a6690] hover:bg-[#e3f2f8]"
+                                                  onClick={() => {
+                                                    revealAgentTimelineEntry(entry);
+                                                  }}
+                                                >
+                                                  Reveal in timeline
                                                 </Button>
                                                 {workspaceHref ? (
                                                   <Link
