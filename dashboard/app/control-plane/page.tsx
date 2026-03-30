@@ -31,7 +31,7 @@ import { LinkedDecisionsCard } from "@/components/linked-decisions-card";
 import { SelectedOutcomeInspector } from "@/components/selected-outcome-inspector";
 import { SelectedSessionContextCard } from "@/components/selected-session-context-card";
 import { RuntimeAgentActivitySection } from "@/components/runtime-agent-activity-section";
-import { RuntimeAgentInspectorColumn } from "@/components/runtime-agent-inspector-column";
+import { RuntimeAgentTimelineSection } from "@/components/runtime-agent-timeline-section";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -6326,677 +6326,103 @@ export default function ControlPlanePage() {
                         }}
                       />
 
-                      <div className="rounded-2xl border border-[#ecebe8] bg-[#fbfbf9] p-4">
-                        <div className="flex flex-wrap items-center justify-between gap-2">
-                          <div>
-                            <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#9b9a97]">
-                              Agent Timeline
-                            </p>
-                            <p className="mt-1 text-[13px] text-[#787774]">
-                              Unified approvals, issues, and runtime events for this agent. Detailed history lives here.
-                            </p>
-                          </div>
-                          <Badge
-                            variant="outline"
-                            className="rounded-full border-[#e5e5e3] bg-white px-2.5 py-1 text-[11px] font-medium text-[#37352f]"
-                          >
-                            {activeAgentTimelineEntries.length} active
-                            {hiddenAgentTimelineEntryCount ? ` · ${hiddenAgentTimelineEntryCount} hidden` : ""}
-                          </Badge>
-                        </div>
-
-                        <div className="mt-3 space-y-3">
-                          <Input
-                            value={agentTimelineSearch}
-                            onChange={(event) => setAgentTimelineSearch(event.target.value)}
-                            placeholder="Search approvals, issues, and agent events..."
-                            className="h-9 rounded-xl border-[#e5e5e3] bg-white text-[13px] text-[#37352f] placeholder:text-[#9b9a97]"
-                          />
-                          <div className="flex flex-wrap gap-2">
-                            {[
-                              { value: "all", label: "All" },
-                              { value: "approvals", label: "Approvals" },
-                              { value: "issues", label: "Issues" },
-                              { value: "events", label: "Events" },
-                              { value: "attention", label: "Attention" },
-                            ].map((option) => {
-                              const selected = agentTimelineFilter === option.value;
-                              return (
-                                <Button
-                                  key={`agent-timeline-filter-${option.value}`}
-                                  size="sm"
-                                  variant={selected ? "default" : "outline"}
-                                  className={`h-7 rounded-full px-3 text-[11px] ${
-                                    selected
-                                      ? "bg-[#1a1a1a] text-white hover:bg-[#333]"
-                                      : "border-[#e5e5e3] bg-white text-[#37352f] hover:bg-[#f7f7f5]"
-                                  }`}
-                                  onClick={() => {
-                                    setAgentTimelineFilter(option.value);
-                                  }}
-                                >
-                                  {option.label}
-                                </Button>
-                              );
-                            })}
-                          </div>
-                          <div className="rounded-xl border border-[#ecebe8] bg-white p-3">
-                            <div className="flex flex-wrap items-center justify-between gap-3">
-                              <div>
-                                <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#9b9a97]">
-                                  Operator State
-                                </p>
-                                <p className="mt-1 text-[12px] text-[#787774]">
-                                  {persistedDismissedAgentTimelineCount} dismissed ·{" "}
-                                  {persistedSnoozedAgentTimelineCount} snoozed persisted for this agent
-                                </p>
-                                <div className="mt-2 flex flex-wrap gap-2">
-                                  {(["critical", "high", "normal"] as TriagePriority[]).map((priority) =>
-                                    agentTimelinePriorityCounts[priority] ? (
-                                      <Badge
-                                        key={`agent-timeline-priority-${priority}`}
-                                        variant="outline"
-                                        className={`rounded-full px-2.5 py-1 text-[11px] font-medium ${triagePriorityClass(priority)}`}
-                                      >
-                                        {priority} {agentTimelinePriorityCounts[priority]}
-                                      </Badge>
-                                    ) : null
-                                  )}
-                                </div>
-                              </div>
-                              <div className="flex flex-wrap gap-2">
-                                <Button
-                                  size="sm"
-                                  variant="outline"
-                                  className="h-7 rounded-lg border-[#e5e5e3] bg-white px-2 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
-                                  onClick={() => {
-                                    if (nextBestAgentTimelineEntry) {
-                                      inspectAgentTimelineEntry(nextBestAgentTimelineEntry);
-                                    }
-                                  }}
-                                  disabled={!nextBestAgentTimelineEntry}
-                                >
-                                  Inspect next best
-                                </Button>
-                                {hiddenAgentTimelineEntryCount ? (
-                                  <Button
-                                    size="sm"
-                                    variant="outline"
-                                    className="h-7 rounded-lg border-[#e5e5e3] bg-white px-2 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
-                                    onClick={() => {
-                                      restoreAgentTimelineHidden();
-                                    }}
-                                  >
-                                    Restore hidden
-                                  </Button>
-                                ) : null}
-                                <Button
-                                  size="sm"
-                                  variant="outline"
-                                  className="h-7 rounded-lg border-[#e5e5e3] bg-white px-2 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
-                                  onClick={() => {
-                                    void exportAgentTimelinePreferences();
-                                  }}
-                                  disabled={!hasPersistedAgentTimelinePreferences}
-                                >
-                                  Copy timeline state
-                                </Button>
-                                <Button
-                                  size="sm"
-                                  variant="outline"
-                                  className="h-7 rounded-lg border-[#e5e5e3] bg-white px-2 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
-                                  onClick={() => {
-                                    resetAgentTimelinePreferences();
-                                  }}
-                                  disabled={!hasPersistedAgentTimelinePreferences}
-                                >
-                                  Reset timeline state
-                                </Button>
-                              </div>
-                            </div>
-                          </div>
-                          <QueueAdvanceNotice
-                            label="Queue Advance"
-                            feedback={agentQueueAdvanceFeedback}
-                            focusSummary={agentQueueAdvanceFocusSummary}
-                            focusDelta={agentQueueFocusDelta}
-                            {...agentQueueAdvanceNoticeActions}
-                          />
-                          <div className="rounded-xl border border-[#ecebe8] bg-white p-3">
-                            <div className="flex flex-wrap items-center justify-between gap-3">
-                              <div>
-                                <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#9b9a97]">
-                                  Priority Queue
-                                </p>
-                                <p className="mt-1 text-[12px] text-[#787774]">
-                                  Next-best triage for the current agent timeline slice.
-                                </p>
-                              </div>
-                              <div className="flex flex-wrap gap-2">
-                                <Button
-                                  size="sm"
-                                  variant="outline"
-                                  className="h-7 rounded-lg border-[#f0d0c9] bg-[#fff0ed] px-2 text-[11px] text-[#93370d] hover:bg-[#ffe5df]"
-                                  onClick={() => {
-                                    if (nextCriticalAgentTimelineEntry) {
-                                      inspectAgentTimelineEntry(nextCriticalAgentTimelineEntry);
-                                    }
-                                  }}
-                                  disabled={!nextCriticalAgentTimelineEntry}
-                                >
-                                  Inspect next critical
-                                </Button>
-                                <Button
-                                  size="sm"
-                                  variant="outline"
-                                  className="h-7 rounded-lg border-[#f4e0c4] bg-[#fff6e8] px-2 text-[11px] text-[#9a6700] hover:bg-[#fff0d9]"
-                                  onClick={() => {
-                                    if (nextHighAgentTimelineEntry) {
-                                      inspectAgentTimelineEntry(nextHighAgentTimelineEntry);
-                                    }
-                                  }}
-                                  disabled={!nextHighAgentTimelineEntry}
-                                >
-                                  Inspect next high
-                                </Button>
-                              </div>
-                            </div>
-                            <div className="mt-3">
-                              <QueueGroupControls
-                                title="Queue Groups"
-                                detail="Critical and high slices now share the same group controls as the other triage surfaces."
-                                openCount={expandedAgentPriorityQueues.length}
-                                totalCount={AGENT_PRIORITY_QUEUE_KEYS.length}
-                                onExpandAll={expandAllAgentPriorityQueues}
-                                onCollapseAll={collapseAllAgentPriorityQueues}
-                                onOpenCurrent={openCurrentAgentPriorityQueue}
-                                canOpenCurrent={Boolean(currentAgentPriorityQueue)}
-                              />
-                            </div>
-                            <div className="mt-3 grid gap-3 xl:grid-cols-2">
-                              {[
-                                {
-                                  key: "critical",
-                                  label: "Critical Queue",
-                                  entries: criticalAgentTimelineQueue,
-                                  total: criticalAgentTimelineEntries.length,
-                                  position: criticalAgentTimelinePosition,
-                                  buttonLabel: "Inspect next critical",
-                                  nextEntry: nextCriticalAgentTimelineEntry,
-                                  buttonClassName:
-                                    "border-[#f0d0c9] bg-[#fff0ed] text-[#93370d] hover:bg-[#ffe5df]",
-                                },
-                                {
-                                  key: "high",
-                                  label: "High Queue",
-                                  entries: highAgentTimelineQueue,
-                                  total: highAgentTimelineEntries.length,
-                                  position: highAgentTimelinePosition,
-                                  buttonLabel: "Inspect next high",
-                                  nextEntry: nextHighAgentTimelineEntry,
-                                  buttonClassName:
-                                    "border-[#f4e0c4] bg-[#fff6e8] text-[#9a6700] hover:bg-[#fff0d9]",
-                                },
-                              ].map((queue) => {
-                                const queuePriority = queue.key as (typeof AGENT_PRIORITY_QUEUE_KEYS)[number];
-                                return (
-                                <CollapsibleQueuePanel
-                                  key={`agent-priority-queue-${queue.key}`}
-                                  title={queue.label}
-                                  detail={
-                                    queue.position >= 0
-                                      ? `Selected ${queue.position + 1} of ${queue.total}`
-                                      : `${queue.total} queued`
-                                  }
-                                  expanded={expandedAgentPriorityQueues.includes(queuePriority)}
-                                  onToggle={() => {
-                                    toggleAgentPriorityQueueExpansion(queuePriority);
-                                  }}
-                                  collapsedSummary={
-                                    queue.total
-                                      ? `${queue.total} visible queue item${
-                                          queue.total === 1 ? "" : "s"
-                                        } hidden`
-                                      : "Queue collapsed."
-                                  }
-                                  emptyText={`No ${queue.key} entries in the current slice.`}
-                                  isEmpty={!queue.entries.length}
-                                  badge={
-                                    <Badge
-                                      variant="outline"
-                                      className={`rounded-full px-2.5 py-1 text-[11px] font-medium ${triagePriorityClass(queue.key as TriagePriority)}`}
-                                    >
-                                      {queue.total}
-                                    </Badge>
-                                  }
-                                  actions={
-                                    <Button
-                                      size="sm"
-                                      variant="outline"
-                                      className={`h-7 rounded-lg px-2 text-[11px] ${queue.buttonClassName}`}
-                                      onClick={() => {
-                                        if (queue.nextEntry) {
-                                          inspectAgentTimelineEntry(queue.nextEntry);
-                                        }
-                                      }}
-                                      disabled={!queue.nextEntry}
-                                    >
-                                      {queue.buttonLabel}
-                                    </Button>
-                                  }
-                                  className="rounded-xl border border-[#ecebe8] bg-[#fbfbf9] p-3"
-                                >
-                                    <div className="mt-3 space-y-2">
-                                      {queue.entries.map((entry) => {
-                                        const selected =
-                                          selectedAgentTimelineEntry &&
-                                          agentTimelineEntryKey(selectedAgentTimelineEntry) ===
-                                            agentTimelineEntryKey(entry);
-                                        const workspaceProjectId =
-                                          entry.issue?.project_id ||
-                                          entry.approval?.project_id ||
-                                          selectedAgent?.project_id ||
-                                          "";
-                                        const workspaceStoryId =
-                                          entry.issue?.story_id ??
-                                          selectedAgent?.story_id ??
-                                          null;
-                                        const workspaceHref = workspaceProjectId
-                                          ? workspaceStoryId
-                                            ? `/projects/${workspaceProjectId}?storyId=${workspaceStoryId}`
-                                            : `/projects/${workspaceProjectId}`
-                                          : "";
-                                        return (
-                                          <QueueItemCard
-                                            key={`agent-priority-${queue.key}-${agentTimelineEntryKey(entry)}`}
-                                            title={entry.title}
-                                            subtitle={`${entry.kind} · ${entry.subtitle || "No scope metadata"}`}
-                                            timestamp={formatTimestamp(entry.timestamp)}
-                                            selected={Boolean(selected)}
-                                            className="rounded-lg border p-2.5"
-                                            unselectedClassName="border-[#ecebe8] bg-white"
-                                            subtitleClassName="mt-1 text-[11px] text-[#787774]"
-                                            badgeRowClassName="mt-2 flex flex-wrap items-center gap-2"
-                                            actionRowClassName="mt-2 flex flex-wrap items-center gap-2"
-                                            badges={
-                                              <>
-                                              <Badge
-                                                variant="outline"
-                                                className={`rounded-full px-2.5 py-1 text-[11px] font-semibold capitalize ${
-                                                  entry.kind === "approval"
-                                                    ? approvalStatusClass(entry.status)
-                                                    : entry.kind === "issue"
-                                                      ? passStatusClass(entry.status === "open" ? "partial" : "ok")
-                                                      : passStatusClass(entry.status)
-                                                }`}
-                                                >
-                                                  {entry.status}
-                                              </Badge>
-                                              </>
-                                            }
-                                            actions={
-                                              <>
-                                                <Button
-                                                  size="sm"
-                                                  variant={selected ? "default" : "outline"}
-                                                  className={`h-7 rounded-lg px-2 text-[11px] ${
-                                                    selected
-                                                      ? "bg-[#1a1a1a] text-white hover:bg-[#333]"
-                                                      : "border-[#e5e5e3] bg-white text-[#37352f] hover:bg-[#f7f7f5]"
-                                                  }`}
-                                                  onClick={() => {
-                                                    inspectAgentTimelineEntry(entry);
-                                                  }}
-                                                >
-                                                  {selected ? "Selected" : "Inspect"}
-                                                </Button>
-                                                <Button
-                                                  size="sm"
-                                                  variant="outline"
-                                                  className="h-7 rounded-lg border-[#e5e5e3] bg-white px-2 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
-                                                  onClick={() => {
-                                                    snoozeAgentTimelineEntry(entry);
-                                                  }}
-                                                >
-                                                  Snooze 15m
-                                                </Button>
-                                                <Button
-                                                  size="sm"
-                                                  variant="outline"
-                                                  className="h-7 rounded-lg border-[#d3e5ef] bg-[#eef7fb] px-2 text-[11px] text-[#2a6690] hover:bg-[#e3f2f8]"
-                                                  onClick={() => {
-                                                    advanceAgentPriorityQueueFromEntry(queuePriority, entry);
-                                                  }}
-                                                >
-                                                  Next in queue
-                                                </Button>
-                                                <Button
-                                                  size="sm"
-                                                  variant="outline"
-                                                  className="h-7 rounded-lg border-[#e5e5e3] bg-white px-2 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
-                                                  onClick={() => {
-                                                    dismissAgentTimelineEntry(entry);
-                                                  }}
-                                                >
-                                                  Dismiss
-                                                </Button>
-                                                <Button
-                                                  size="sm"
-                                                  variant="outline"
-                                                  className="h-7 rounded-lg border-[#e5e5e3] bg-white px-2 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
-                                                  onClick={() => {
-                                                    findAgentTimelineEntryInSession(entry);
-                                                  }}
-                                                >
-                                                  Find in session
-                                                </Button>
-                                                <Button
-                                                  size="sm"
-                                                  variant="outline"
-                                                  className="h-7 rounded-lg border-[#d3e5ef] bg-[#eef7fb] px-2 text-[11px] text-[#2a6690] hover:bg-[#e3f2f8]"
-                                                  onClick={() => {
-                                                    revealAgentTimelineEntry(entry);
-                                                  }}
-                                                >
-                                                  Reveal in timeline
-                                                </Button>
-                                                {workspaceHref ? (
-                                                  <Link
-                                                    href={workspaceHref}
-                                                    className="inline-flex h-7 items-center rounded-lg border border-[#e5e5e3] bg-white px-2 text-[11px] font-medium text-[#37352f] transition-colors hover:bg-[#f7f7f5]"
-                                                  >
-                                                    Open workspace
-                                                  </Link>
-                                                ) : null}
-                                              </>
-                                            }
-                                          />
-                                        );
-                                      })}
-                                    </div>
-                                </CollapsibleQueuePanel>
-                              );
-                              })}
-                            </div>
-                          </div>
-                        </div>
-
-                        {filteredAgentTimelineEntries.length === 0 ? (
-                          <p className="mt-3 text-[13px] text-[#9b9a97]">
-                            No timeline entries match the current filters.
-                          </p>
-                        ) : (
-                          <div className="mt-4 grid gap-4 lg:grid-cols-2">
-                            <div className="space-y-3">
-                              {visibleAgentTimelineEntries.map((entry) => {
-                                const selected =
-                                  selectedAgentTimelineEntry &&
-                                  agentTimelineEntryKey(selectedAgentTimelineEntry) ===
-                                    agentTimelineEntryKey(entry);
-                                const eventApprovalId = toStringValue(entry.event?.approval_id);
-                                const eventIssueId = toStringValue(entry.event?.issue_id);
-                                const eventToken =
-                                  toStringValue(entry.event?.event) ||
-                                  toStringValue(entry.event?.message) ||
-                                  entry.id;
-
-                                return (
-                                  <div
-                                    key={`${selectedAgent.runtime_agent_id}-timeline-${entry.kind}-${entry.id}`}
-                                    id={agentTimelineRowDomId(
-                                      selectedAgent.runtime_agent_id,
-                                      agentTimelineEntryKey(entry)
-                                    )}
-                                    className={`rounded-xl border p-3 ${
-                                      selected
-                                        ? "border-[#d3e5ef] bg-[#f7fbfd]"
-                                        : "border-[#ecebe8] bg-white"
-                                    }`}
-                                  >
-                                    <div className="flex flex-wrap items-center justify-between gap-2">
-                                      <div className="flex flex-wrap items-center gap-2">
-                                        <Badge
-                                          variant="outline"
-                                          className="rounded-full border-[#e5e5e3] bg-[#fafaf9] px-2.5 py-1 text-[11px] font-medium capitalize text-[#37352f]"
-                                        >
-                                          {entry.kind}
-                                        </Badge>
-                                        <Badge
-                                          variant="outline"
-                                          className={`rounded-full px-2.5 py-1 text-[11px] font-medium ${triagePriorityClass(agentTimelinePriority(entry))}`}
-                                        >
-                                          {agentTimelinePriority(entry)}
-                                        </Badge>
-                                        <p className="text-[13px] font-semibold text-[#37352f]">
-                                          {entry.title}
-                                        </p>
-                                      </div>
-                                      <div className="flex flex-wrap items-center gap-2">
-                                        <Badge
-                                          variant="outline"
-                                          className={`rounded-full px-2.5 py-1 text-[11px] font-semibold capitalize ${
-                                            entry.kind === "approval"
-                                              ? approvalStatusClass(entry.status)
-                                              : entry.kind === "issue"
-                                                ? passStatusClass(entry.status === "open" ? "partial" : "ok")
-                                                : passStatusClass(entry.status)
-                                          }`}
-                                        >
-                                          {entry.status}
-                                        </Badge>
-                                        <p className="text-[11px] text-[#9b9a97]">
-                                          {formatTimestamp(entry.timestamp)}
-                                        </p>
-                                        <Button
-                                          size="sm"
-                                          variant={selected ? "default" : "outline"}
-                                          className={`h-7 rounded-lg px-2 text-[11px] ${
-                                            selected
-                                              ? "bg-[#1a1a1a] text-white hover:bg-[#333]"
-                                              : "border-[#e5e5e3] bg-white text-[#37352f] hover:bg-[#f7f7f5]"
-                                          }`}
-                                          onClick={() => {
-                                            inspectAgentTimelineEntry(entry);
-                                          }}
-                                        >
-                                          {selected ? "Selected" : "Inspect"}
-                                        </Button>
-                                      </div>
-                                    </div>
-
-                                    <p className="mt-2 text-[12px] text-[#787774]">{entry.subtitle}</p>
-                                    <p className="mt-2 text-[12px] text-[#6b6b6b]">{entry.message}</p>
-
-                                    <div className="mt-3 flex flex-wrap gap-2">
-                                      {entry.approval?.status === "pending" && (
-                                        <>
-                                          <Button
-                                            size="sm"
-                                            className="h-7 rounded-full bg-[#1a1a1a] px-2.5 text-[11px] text-white hover:bg-[#333]"
-                                            disabled={Boolean(busyActionKey)}
-                                            onClick={() => {
-                                              void approveApproval(entry.approval!);
-                                            }}
-                                          >
-                                            {busyActionKey === `approval-approve:${entry.approval.id}`
-                                              ? "Approving..."
-                                              : "Approve"}
-                                          </Button>
-                                          <Button
-                                            size="sm"
-                                            variant="outline"
-                                            className="h-7 rounded-full border-[#e5e5e3] bg-white px-2.5 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
-                                            disabled={Boolean(busyActionKey)}
-                                            onClick={() => {
-                                              void rejectApproval(entry.approval!);
-                                            }}
-                                          >
-                                            {busyActionKey === `approval-reject:${entry.approval.id}`
-                                              ? "Rejecting..."
-                                              : "Reject"}
-                                          </Button>
-                                        </>
-                                      )}
-                                      {entry.approval?.status === "approved" && (
-                                        <Button
-                                          size="sm"
-                                          className="h-7 rounded-full bg-[#1a1a1a] px-2.5 text-[11px] text-white hover:bg-[#333]"
-                                          disabled={Boolean(busyActionKey)}
-                                          onClick={() => {
-                                            void applyApproval(entry.approval!);
-                                          }}
-                                        >
-                                          {busyActionKey === `approval-apply:${entry.approval.id}`
-                                            ? "Applying..."
-                                            : "Apply"}
-                                        </Button>
-                                      )}
-                                      {entry.issue?.status === "open" && (
-                                        <Button
-                                          size="sm"
-                                          variant="outline"
-                                          className="h-7 rounded-full border-[#e5e5e3] bg-white px-2.5 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
-                                          disabled={Boolean(busyActionKey)}
-                                          onClick={() => {
-                                            void resolveIssue(entry.issue!);
-                                          }}
-                                        >
-                                          {busyActionKey === `issue-resolve:${entry.issue.id}`
-                                            ? "Resolving..."
-                                            : "Resolve"}
-                                        </Button>
-                                      )}
-                                      {(entry.approval?.id || entry.issue?.id) && (
-                                        <Button
-                                          size="sm"
-                                          variant="outline"
-                                          className="h-7 rounded-full border-[#d3e5ef] bg-[#eef7fb] px-2.5 text-[11px] text-[#2a6690] hover:bg-[#e3f2f8]"
-                                          onClick={() => {
-                                            setEntitySearch(entry.approval?.id || entry.issue?.id || "");
-                                          }}
-                                        >
-                                          Find in session
-                                        </Button>
-                                      )}
-                                      {eventApprovalId && (
-                                        <Button
-                                          size="sm"
-                                          variant="outline"
-                                          className="h-7 rounded-full border-[#d3e5ef] bg-[#eef7fb] px-2.5 text-[11px] text-[#2a6690] hover:bg-[#e3f2f8]"
-                                          onClick={() => {
-                                            setEntitySearch(eventApprovalId);
-                                          }}
-                                        >
-                                          Find approval
-                                        </Button>
-                                      )}
-                                      {eventIssueId && (
-                                        <Button
-                                          size="sm"
-                                          variant="outline"
-                                          className="h-7 rounded-full border-[#f4e0c4] bg-[#fff6e8] px-2.5 text-[11px] text-[#9a6700] hover:bg-[#fff0d9]"
-                                          onClick={() => {
-                                            setEntitySearch(eventIssueId);
-                                          }}
-                                        >
-                                          Find issue
-                                        </Button>
-                                      )}
-                                      {entry.kind === "event" && (
-                                        <Button
-                                          size="sm"
-                                          variant="outline"
-                                          className="h-7 rounded-full border-[#e5e5e3] bg-white px-2.5 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
-                                          onClick={() => {
-                                            setEventFilter("all");
-                                            setEntitySearch(eventToken);
-                                          }}
-                                        >
-                                          Filter session
-                                        </Button>
-                                      )}
-                                      <Button
-                                        size="sm"
-                                        variant="outline"
-                                        className="h-7 rounded-full border-[#e5e5e3] bg-white px-2.5 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
-                                        onClick={() => {
-                                          snoozeAgentTimelineEntry(entry);
-                                        }}
-                                      >
-                                        Snooze 15m
-                                      </Button>
-                                      <Button
-                                        size="sm"
-                                        variant="outline"
-                                        className="h-7 rounded-full border-[#e5e5e3] bg-white px-2.5 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
-                                        onClick={() => {
-                                          dismissAgentTimelineEntry(entry);
-                                        }}
-                                      >
-                                        Dismiss
-                                      </Button>
-                                    </div>
-                                  </div>
-                                );
-                              })}
-                            </div>
-
-                            <RuntimeAgentInspectorColumn
-                              selectedAgent={selectedAgent}
-                              selectedAgentTimelineEntry={selectedAgentTimelineEntry}
-                              selectedAgentTimelineRunLink={selectedAgentTimelineRunLink}
-                              selectedAgentTimelinePriority={selectedAgentTimelinePriority}
-                              currentAgentPriorityQueue={currentAgentPriorityQueue || null}
-                              latestAgentIssueEntry={latestAgentIssueEntry}
-                              latestAgentApprovalEntry={latestAgentApprovalEntry}
-                              latestAgentEventEntry={latestAgentEventEntry}
-                              busyActionKey={busyActionKey}
-                              formatTimestamp={formatTimestamp}
-                              formatJson={formatJson}
-                              toStringValue={toStringValue}
-                              toNullableNumber={toNullableNumber}
-                              asRecord={asRecord}
-                              describeRunResult={describeRunResult}
-                              onSelectTimelineEntry={(entry) => {
-                                setSelectedAgentTimelineKey(agentTimelineEntryKey(entry));
-                              }}
-                              onSyncLinkedSelection={syncLinkedSelection}
-                              onFocusRuntimeAgent={(runtimeAgentId) => {
-                                focusRuntimeAgent(runtimeAgentId, true);
-                              }}
-                              onSelectRun={(runId, resultIndex) => {
-                                setSelectedRunId(runId);
-                                setSelectedRunResultIndex(resultIndex);
-                              }}
-                              onApproveApproval={(approval) => {
-                                void approveApproval(approval as ExecutionApprovalRecord);
-                              }}
-                              onRejectApproval={(approval) => {
-                                void rejectApproval(approval as ExecutionApprovalRecord);
-                              }}
-                              onApplyApproval={(approval) => {
-                                void applyApproval(approval as ExecutionApprovalRecord);
-                              }}
-                              onResolveIssue={(issue) => {
-                                void resolveIssue(issue as ExecutionIssueRecord);
-                              }}
-                              onAdvanceCurrentPriorityQueue={(entry) => {
-                                if (currentAgentPriorityQueue) {
-                                  advanceAgentPriorityQueueFromEntry(currentAgentPriorityQueue, entry);
-                                }
-                              }}
-                              onSearchEntity={setEntitySearch}
-                              onFocusAgentTimeline={(filter, entry) => {
-                                focusAgentTimeline(filter, entry ? { entry } : undefined);
-                              }}
-                              onFilterSessionByToken={(value) => {
-                                setEventFilter("all");
-                                setEntitySearch(value);
-                              }}
-                            />
-                          </div>
-                        )}
-                      </div>
+                      <RuntimeAgentTimelineSection
+                        selectedAgent={selectedAgent}
+                        activeAgentTimelineEntries={activeAgentTimelineEntries}
+                        hiddenAgentTimelineEntryCount={hiddenAgentTimelineEntryCount}
+                        agentTimelineSearch={agentTimelineSearch}
+                        onAgentTimelineSearchChange={setAgentTimelineSearch}
+                        agentTimelineFilter={agentTimelineFilter as "all" | "approvals" | "issues" | "events" | "attention"}
+                        onAgentTimelineFilterChange={(value) => {
+                          setAgentTimelineFilter(value);
+                        }}
+                        persistedDismissedAgentTimelineCount={persistedDismissedAgentTimelineCount}
+                        persistedSnoozedAgentTimelineCount={persistedSnoozedAgentTimelineCount}
+                        agentTimelinePriorityCounts={agentTimelinePriorityCounts}
+                        nextBestAgentTimelineEntry={nextBestAgentTimelineEntry}
+                        hasPersistedAgentTimelinePreferences={hasPersistedAgentTimelinePreferences}
+                        onInspectAgentTimelineEntry={inspectAgentTimelineEntry}
+                        onRestoreAgentTimelineHidden={restoreAgentTimelineHidden}
+                        onExportAgentTimelinePreferences={exportAgentTimelinePreferences}
+                        onResetAgentTimelinePreferences={resetAgentTimelinePreferences}
+                        agentQueueAdvanceFeedback={agentQueueAdvanceFeedback}
+                        agentQueueAdvanceFocusSummary={agentQueueAdvanceFocusSummary}
+                        agentQueueFocusDelta={agentQueueFocusDelta}
+                        agentQueueAdvanceNoticeActions={agentQueueAdvanceNoticeActions}
+                        nextCriticalAgentTimelineEntry={nextCriticalAgentTimelineEntry}
+                        nextHighAgentTimelineEntry={nextHighAgentTimelineEntry}
+                        expandedAgentPriorityQueues={expandedAgentPriorityQueues}
+                        currentAgentPriorityQueue={currentAgentPriorityQueue}
+                        onExpandAllAgentPriorityQueues={expandAllAgentPriorityQueues}
+                        onCollapseAllAgentPriorityQueues={collapseAllAgentPriorityQueues}
+                        onOpenCurrentAgentPriorityQueue={openCurrentAgentPriorityQueue}
+                        criticalAgentTimelineQueue={criticalAgentTimelineQueue}
+                        criticalAgentTimelineTotal={criticalAgentTimelineEntries.length}
+                        criticalAgentTimelinePosition={criticalAgentTimelinePosition}
+                        highAgentTimelineQueue={highAgentTimelineQueue}
+                        highAgentTimelineTotal={highAgentTimelineEntries.length}
+                        highAgentTimelinePosition={highAgentTimelinePosition}
+                        onToggleAgentPriorityQueueExpansion={toggleAgentPriorityQueueExpansion}
+                        filteredAgentTimelineEntriesCount={filteredAgentTimelineEntries.length}
+                        visibleAgentTimelineEntries={visibleAgentTimelineEntries}
+                        selectedAgentTimelineEntry={selectedAgentTimelineEntry}
+                        selectedAgentTimelineRunLink={selectedAgentTimelineRunLink}
+                        selectedAgentTimelinePriority={selectedAgentTimelinePriority}
+                        latestAgentIssueEntry={latestAgentIssueEntry}
+                        latestAgentApprovalEntry={latestAgentApprovalEntry}
+                        latestAgentEventEntry={latestAgentEventEntry}
+                        busyActionKey={busyActionKey}
+                        formatTimestamp={formatTimestamp}
+                        formatJson={formatJson}
+                        toStringValue={toStringValue}
+                        toNullableNumber={toNullableNumber}
+                        asRecord={asRecord}
+                        describeRunResult={describeRunResult}
+                        onSelectTimelineEntry={(entry) => {
+                          setSelectedAgentTimelineKey(agentTimelineEntryKey(entry));
+                        }}
+                        onSyncLinkedSelection={syncLinkedSelection}
+                        onFocusRuntimeAgent={(runtimeAgentId) => {
+                          focusRuntimeAgent(runtimeAgentId, true);
+                        }}
+                        onSelectRun={(runId, resultIndex) => {
+                          setSelectedRunId(runId);
+                          setSelectedRunResultIndex(resultIndex);
+                        }}
+                        onApproveApproval={(approval) => {
+                          void approveApproval(approval);
+                        }}
+                        onRejectApproval={(approval) => {
+                          void rejectApproval(approval);
+                        }}
+                        onApplyApproval={(approval) => {
+                          void applyApproval(approval);
+                        }}
+                        onResolveIssue={(issue) => {
+                          void resolveIssue(issue);
+                        }}
+                        onAdvanceCurrentPriorityQueue={(entry) => {
+                          if (currentAgentPriorityQueue) {
+                            advanceAgentPriorityQueueFromEntry(currentAgentPriorityQueue, entry);
+                          }
+                        }}
+                        onSearchEntity={setEntitySearch}
+                        onFocusAgentTimeline={(filter, entry) => {
+                          focusAgentTimeline(filter, entry ? { entry } : undefined);
+                        }}
+                        onFilterSessionByToken={(value) => {
+                          setEventFilter("all");
+                          setEntitySearch(value);
+                        }}
+                        onSnoozeAgentTimelineEntry={snoozeAgentTimelineEntry}
+                        onDismissAgentTimelineEntry={dismissAgentTimelineEntry}
+                        onAdvanceAgentPriorityQueueFromEntry={advanceAgentPriorityQueueFromEntry}
+                        onFindAgentTimelineEntryInSession={findAgentTimelineEntryInSession}
+                        onRevealAgentTimelineEntry={revealAgentTimelineEntry}
+                        agentTimelineEntryKey={agentTimelineEntryKey}
+                        agentTimelinePriority={agentTimelinePriority}
+                        agentTimelineRowDomId={agentTimelineRowDomId}
+                      />
                     </div>
                   )}
                 </CardContent>
