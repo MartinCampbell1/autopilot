@@ -96,6 +96,7 @@ type LinkedSelectionContext = {
 };
 
 type SessionContextKind = "" | "approval" | "issue" | "event";
+type LineageQueueKind = "attention" | "decisions";
 type RelationshipTone = "run" | "outcome" | "approval" | "issue" | "event" | "agent";
 type RelationshipStripItem = {
   key: string;
@@ -700,6 +701,19 @@ function sessionLineageQueuePosition(
   return entries.findIndex((entry) => entry.key === current.key);
 }
 
+function visibleSessionLineageQueueEntries(
+  entries: SessionLineageEntry[],
+  dismissedKeys: string[],
+  snoozedUntilByKey: Record<string, number>,
+  now: number
+): SessionLineageEntry[] {
+  return entries.filter((entry) => {
+    if (dismissedKeys.includes(entry.key)) return false;
+    const snoozedUntil = snoozedUntilByKey[entry.key] ?? 0;
+    return snoozedUntil <= now;
+  });
+}
+
 function runMatchesSearch(run: ExecutionAgentActionRunRecord, query: string): boolean {
   return matchesSearch(
     [
@@ -1162,6 +1176,19 @@ export default function ControlPlanePage() {
     filter: "attention" | "decisions";
     previousKey: string;
   } | null>(null);
+  const [dismissedLineageQueueKeys, setDismissedLineageQueueKeys] = useState<
+    Record<LineageQueueKind, string[]>
+  >({
+    attention: [],
+    decisions: [],
+  });
+  const [snoozedLineageQueueUntil, setSnoozedLineageQueueUntil] = useState<
+    Record<LineageQueueKind, Record<string, number>>
+  >({
+    attention: {},
+    decisions: {},
+  });
+  const [lineageQueueNow, setLineageQueueNow] = useState(() => Date.now());
   const [pendingSessionRowDomId, setPendingSessionRowDomId] = useState("");
   const [pendingAgentTimelineRowDomId, setPendingAgentTimelineRowDomId] = useState("");
   const [selectedSessionApprovalId, setSelectedSessionApprovalId] = useState("");
@@ -1265,6 +1292,12 @@ export default function ControlPlanePage() {
       sessions.some((session) => session.id === current) ? current : sessions[0].id
     );
   }, [sessions]);
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setLineageQueueNow(Date.now());
+    }, 30000);
+    return () => clearInterval(interval);
+  }, []);
 
   useEffect(() => {
     if (controlPasses.length === 0) {
@@ -1334,6 +1367,16 @@ export default function ControlPlanePage() {
     setSelectedSessionIssueId("");
     setSelectedSessionEventKey("");
     setSelectedSessionContextKind("");
+    setPendingLineageAutoAdvance(null);
+    setDismissedLineageQueueKeys({
+      attention: [],
+      decisions: [],
+    });
+    setSnoozedLineageQueueUntil({
+      attention: {},
+      decisions: {},
+    });
+    setLineageQueueNow(Date.now());
   }, [selectedSessionId]);
 
   useEffect(() => {
@@ -1964,13 +2007,43 @@ export default function ControlPlanePage() {
     () => sessionLineageEntries.find((entry) => matchesSessionLineageFilter(entry, "agent-linked")) ?? null,
     [sessionLineageEntries]
   );
-  const attentionSessionLineageEntries = useMemo(
+  const attentionSessionLineageSourceEntries = useMemo(
     () => sessionLineageEntries.filter((entry) => matchesSessionLineageFilter(entry, "attention")),
     [sessionLineageEntries]
   );
-  const decisionSessionLineageEntries = useMemo(
+  const decisionSessionLineageSourceEntries = useMemo(
     () => sessionLineageEntries.filter((entry) => matchesSessionLineageFilter(entry, "decisions")),
     [sessionLineageEntries]
+  );
+  const attentionSessionLineageEntries = useMemo(
+    () =>
+      visibleSessionLineageQueueEntries(
+        attentionSessionLineageSourceEntries,
+        dismissedLineageQueueKeys.attention,
+        snoozedLineageQueueUntil.attention,
+        lineageQueueNow
+      ),
+    [
+      attentionSessionLineageSourceEntries,
+      dismissedLineageQueueKeys,
+      snoozedLineageQueueUntil,
+      lineageQueueNow,
+    ]
+  );
+  const decisionSessionLineageEntries = useMemo(
+    () =>
+      visibleSessionLineageQueueEntries(
+        decisionSessionLineageSourceEntries,
+        dismissedLineageQueueKeys.decisions,
+        snoozedLineageQueueUntil.decisions,
+        lineageQueueNow
+      ),
+    [
+      decisionSessionLineageSourceEntries,
+      dismissedLineageQueueKeys,
+      snoozedLineageQueueUntil,
+      lineageQueueNow,
+    ]
   );
   const attentionSessionLineageQueue = useMemo(
     () => attentionSessionLineageEntries.slice(0, 3),
@@ -1987,6 +2060,14 @@ export default function ControlPlanePage() {
   const decisionQueuePosition = useMemo(
     () => sessionLineageQueuePosition(decisionSessionLineageEntries, selectedSessionLineageEntry),
     [decisionSessionLineageEntries, selectedSessionLineageEntry]
+  );
+  const hiddenAttentionQueueCount = useMemo(
+    () => Math.max(attentionSessionLineageSourceEntries.length - attentionSessionLineageEntries.length, 0),
+    [attentionSessionLineageEntries.length, attentionSessionLineageSourceEntries.length]
+  );
+  const hiddenDecisionQueueCount = useMemo(
+    () => Math.max(decisionSessionLineageSourceEntries.length - decisionSessionLineageEntries.length, 0),
+    [decisionSessionLineageEntries.length, decisionSessionLineageSourceEntries.length]
   );
   const selectedSessionLineageTraits = useMemo(() => {
     return sessionLineageTraits(selectedSessionLineageEntry);
@@ -2085,6 +2166,55 @@ export default function ControlPlanePage() {
       selectedSessionLineageEntry,
     ]
   );
+  const dismissSessionLineageQueueEntry = useCallback(
+    (filter: LineageQueueKind, entry: SessionLineageEntry) => {
+      setDismissedLineageQueueKeys((current) => ({
+        ...current,
+        [filter]: current[filter].includes(entry.key)
+          ? current[filter]
+          : [...current[filter], entry.key],
+      }));
+      setLineageQueueNow(Date.now());
+      if (selectedSessionLineageEntry?.key === entry.key) {
+        setPendingLineageAutoAdvance({
+          filter,
+          previousKey: entry.key,
+        });
+      }
+    },
+    [selectedSessionLineageEntry]
+  );
+  const snoozeSessionLineageQueueEntry = useCallback(
+    (filter: LineageQueueKind, entry: SessionLineageEntry, minutes = 15) => {
+      const snoozedUntil = Date.now() + minutes * 60 * 1000;
+      setSnoozedLineageQueueUntil((current) => ({
+        ...current,
+        [filter]: {
+          ...current[filter],
+          [entry.key]: snoozedUntil,
+        },
+      }));
+      setLineageQueueNow(Date.now());
+      if (selectedSessionLineageEntry?.key === entry.key) {
+        setPendingLineageAutoAdvance({
+          filter,
+          previousKey: entry.key,
+        });
+      }
+    },
+    [selectedSessionLineageEntry]
+  );
+  const restoreSessionLineageQueue = useCallback((filter: LineageQueueKind) => {
+    setDismissedLineageQueueKeys((current) => ({
+      ...current,
+      [filter]: [],
+    }));
+    setSnoozedLineageQueueUntil((current) => ({
+      ...current,
+      [filter]: {},
+    }));
+    setLineageQueueNow(Date.now());
+  }, []);
   useEffect(() => {
     if (!pendingLineageAutoAdvance) return;
     const entries =
@@ -3522,6 +3652,9 @@ export default function ControlPlanePage() {
                                   {attentionQueuePosition >= 0
                                     ? `Selected ${attentionQueuePosition + 1} of ${attentionSessionLineageEntries.length}`
                                     : `${attentionSessionLineageEntries.length} queued`}
+                                  {hiddenAttentionQueueCount
+                                    ? ` · ${hiddenAttentionQueueCount} hidden`
+                                    : ""}
                                 </p>
                               </div>
                               <div className="flex items-center gap-2">
@@ -3542,6 +3675,18 @@ export default function ControlPlanePage() {
                                 >
                                   Inspect next
                                 </Button>
+                                {hiddenAttentionQueueCount ? (
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    className="h-7 rounded-lg border-[#e5e5e3] bg-white px-2 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
+                                    onClick={() => {
+                                      restoreSessionLineageQueue("attention");
+                                    }}
+                                  >
+                                    Restore hidden
+                                  </Button>
+                                ) : null}
                               </div>
                             </div>
                             {!attentionSessionLineageQueue.length ? (
@@ -3615,6 +3760,26 @@ export default function ControlPlanePage() {
                                             ? "Selected"
                                             : "Inspect"}
                                         </Button>
+                                        <Button
+                                          size="sm"
+                                          variant="outline"
+                                          className="h-7 rounded-lg border-[#e5e5e3] bg-white px-2 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
+                                          onClick={() => {
+                                            snoozeSessionLineageQueueEntry("attention", entry);
+                                          }}
+                                        >
+                                          Snooze 15m
+                                        </Button>
+                                        <Button
+                                          size="sm"
+                                          variant="outline"
+                                          className="h-7 rounded-lg border-[#e5e5e3] bg-white px-2 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
+                                          onClick={() => {
+                                            dismissSessionLineageQueueEntry("attention", entry);
+                                          }}
+                                        >
+                                          Dismiss
+                                        </Button>
                                       </div>
                                     </div>
                                   );
@@ -3632,6 +3797,9 @@ export default function ControlPlanePage() {
                                   {decisionQueuePosition >= 0
                                     ? `Selected ${decisionQueuePosition + 1} of ${decisionSessionLineageEntries.length}`
                                     : `${decisionSessionLineageEntries.length} queued`}
+                                  {hiddenDecisionQueueCount
+                                    ? ` · ${hiddenDecisionQueueCount} hidden`
+                                    : ""}
                                 </p>
                               </div>
                               <div className="flex items-center gap-2">
@@ -3652,6 +3820,18 @@ export default function ControlPlanePage() {
                                 >
                                   Inspect next
                                 </Button>
+                                {hiddenDecisionQueueCount ? (
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    className="h-7 rounded-lg border-[#e5e5e3] bg-white px-2 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
+                                    onClick={() => {
+                                      restoreSessionLineageQueue("decisions");
+                                    }}
+                                  >
+                                    Restore hidden
+                                  </Button>
+                                ) : null}
                               </div>
                             </div>
                             {!decisionSessionLineageQueue.length ? (
@@ -3724,6 +3904,26 @@ export default function ControlPlanePage() {
                                           {selected && sessionLineageFilter === "decisions"
                                             ? "Selected"
                                             : "Inspect"}
+                                        </Button>
+                                        <Button
+                                          size="sm"
+                                          variant="outline"
+                                          className="h-7 rounded-lg border-[#e5e5e3] bg-white px-2 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
+                                          onClick={() => {
+                                            snoozeSessionLineageQueueEntry("decisions", entry);
+                                          }}
+                                        >
+                                          Snooze 15m
+                                        </Button>
+                                        <Button
+                                          size="sm"
+                                          variant="outline"
+                                          className="h-7 rounded-lg border-[#e5e5e3] bg-white px-2 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
+                                          onClick={() => {
+                                            dismissSessionLineageQueueEntry("decisions", entry);
+                                          }}
+                                        >
+                                          Dismiss
                                         </Button>
                                       </div>
                                     </div>
