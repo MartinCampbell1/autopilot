@@ -1504,6 +1504,9 @@ export default function ControlPlanePage() {
   const [triageInboxFeedbackFilter, setTriageInboxFeedbackFilter] = useState<
     "all" | "success" | "info"
   >("all");
+  const [expandedTriageInboxResultGroups, setExpandedTriageInboxResultGroups] = useState<string[]>(
+    []
+  );
   const [historySearch, setHistorySearch] = useState("");
   const [entitySearch, setEntitySearch] = useState("");
   const [refreshing, setRefreshing] = useState(false);
@@ -3512,7 +3515,16 @@ export default function ControlPlanePage() {
   useEffect(() => {
     setTriageInboxFeedbackHistory([]);
     setTriageInboxFeedbackFilter("all");
+    setExpandedTriageInboxResultGroups([]);
   }, [selectedAgentId, selectedSessionId]);
+  useEffect(() => {
+    const availableKeys = groupedRecentTriageInboxFeedback.map((group) => group.itemKey);
+    setExpandedTriageInboxResultGroups((current) => {
+      const next = current.filter((key) => availableKeys.includes(key));
+      if (next.length > 0 || availableKeys.length === 0) return next;
+      return [availableKeys[0]];
+    });
+  }, [groupedRecentTriageInboxFeedback]);
   const syncedTriageInboxItem = useMemo(
     () => triageInboxItems.find((item) => item.syncedWithSelection) ?? null,
     [triageInboxItems]
@@ -3576,6 +3588,14 @@ export default function ControlPlanePage() {
     if (!syncedTriageInboxItem) return;
     setSelectedTriageInboxKey(syncedTriageInboxItem.key);
   }, [syncedTriageInboxItem]);
+  const toggleTriageInboxResultGroup = useCallback((itemKey: string) => {
+    if (!itemKey) return;
+    setExpandedTriageInboxResultGroups((current) =>
+      current.includes(itemKey)
+        ? current.filter((key) => key !== itemKey)
+        : [...current, itemKey]
+    );
+  }, []);
   useEffect(() => {
     if (!triageInboxItems.length) {
       setSelectedTriageInboxKey("");
@@ -5494,6 +5514,12 @@ export default function ControlPlanePage() {
                                         key={`triage-feedback-group-${group.itemKey}`}
                                         className="rounded-lg border border-[#ecebe8] bg-[#fbfbf9] p-2.5"
                                       >
+                                        {(() => {
+                                          const expanded = expandedTriageInboxResultGroups.includes(
+                                            group.itemKey
+                                          );
+                                          return (
+                                            <>
                                         <div className="flex flex-wrap items-center justify-between gap-2">
                                           <div className="flex flex-wrap items-center gap-2">
                                             <p className="text-[11px] font-semibold text-[#37352f]">
@@ -5523,6 +5549,16 @@ export default function ControlPlanePage() {
                                               variant="outline"
                                               className="h-7 rounded-lg border-[#e5e5e3] bg-white px-2 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
                                               onClick={() => {
+                                                toggleTriageInboxResultGroup(group.itemKey);
+                                              }}
+                                            >
+                                              {expanded ? "Collapse" : "Expand"}
+                                            </Button>
+                                            <Button
+                                              size="sm"
+                                              variant="outline"
+                                              className="h-7 rounded-lg border-[#e5e5e3] bg-white px-2 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
+                                              onClick={() => {
                                                 openTriageInboxHistoryGroup(group.itemKey);
                                               }}
                                               disabled={!group.isActive}
@@ -5531,33 +5567,43 @@ export default function ControlPlanePage() {
                                             </Button>
                                           </div>
                                         </div>
-                                        <div className="mt-2 space-y-2">
-                                          {group.entries.map((feedback) => (
-                                            <div
-                                              key={`${feedback.itemKey}:${feedback.timestamp}`}
-                                              className="rounded-lg border border-[#ecebe8] bg-white p-2"
-                                            >
-                                              <div className="flex flex-wrap items-center justify-between gap-2">
-                                                <Badge
-                                                  variant="outline"
-                                                  className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
-                                                    feedback.tone === "success"
-                                                      ? "border-[#d6e9dc] bg-[#eef8f1] text-[#2b6e3f]"
-                                                      : "border-[#e5e5e3] bg-[#fafaf9] text-[#37352f]"
-                                                  }`}
-                                                >
-                                                  {feedback.tone}
-                                                </Badge>
-                                                <p className="text-[11px] text-[#9b9a97]">
-                                                  {formatTimestamp(feedback.timestamp)}
+                                        {expanded ? (
+                                          <div className="mt-2 space-y-2">
+                                            {group.entries.map((feedback) => (
+                                              <div
+                                                key={`${feedback.itemKey}:${feedback.timestamp}`}
+                                                className="rounded-lg border border-[#ecebe8] bg-white p-2"
+                                              >
+                                                <div className="flex flex-wrap items-center justify-between gap-2">
+                                                  <Badge
+                                                    variant="outline"
+                                                    className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
+                                                      feedback.tone === "success"
+                                                        ? "border-[#d6e9dc] bg-[#eef8f1] text-[#2b6e3f]"
+                                                        : "border-[#e5e5e3] bg-[#fafaf9] text-[#37352f]"
+                                                    }`}
+                                                  >
+                                                    {feedback.tone}
+                                                  </Badge>
+                                                  <p className="text-[11px] text-[#9b9a97]">
+                                                    {formatTimestamp(feedback.timestamp)}
+                                                  </p>
+                                                </div>
+                                                <p className="mt-1 text-[12px] text-[#6b6b6b]">
+                                                  {feedback.message}
                                                 </p>
                                               </div>
-                                              <p className="mt-1 text-[12px] text-[#6b6b6b]">
-                                                {feedback.message}
-                                              </p>
-                                            </div>
-                                          ))}
-                                        </div>
+                                            ))}
+                                          </div>
+                                        ) : (
+                                          <p className="mt-2 text-[12px] text-[#9b9a97]">
+                                            {group.entries.length} result
+                                            {group.entries.length === 1 ? "" : "s"} hidden
+                                          </p>
+                                        )}
+                                            </>
+                                          );
+                                        })()}
                                       </div>
                                     ))}
                                   </div>
