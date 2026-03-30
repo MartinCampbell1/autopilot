@@ -752,6 +752,16 @@ function agentTimelinePriority(entry: AgentTimelineEntry): TriagePriority {
   return "normal";
 }
 
+function agentTimelineEntryStatusClass(entry: AgentTimelineEntry): string {
+  if (entry.kind === "approval") {
+    return approvalStatusClass(entry.status);
+  }
+  if (entry.kind === "issue") {
+    return passStatusClass(entry.status === "open" ? "partial" : "ok");
+  }
+  return passStatusClass(entry.status);
+}
+
 function countTriagePriorities<T>(
   entries: T[],
   getPriority: (entry: T) => TriagePriority
@@ -2513,6 +2523,22 @@ export default function ControlPlanePage() {
     () => sessionLineageQueuePosition(decisionSessionLineageEntries, selectedSessionLineageEntry),
     [decisionSessionLineageEntries, selectedSessionLineageEntry]
   );
+  const nextAttentionSessionLineageEntry = useMemo(
+    () =>
+      nextSessionLineageQueueEntry(
+        attentionSessionLineageEntries,
+        selectedSessionLineageEntry
+      ),
+    [attentionSessionLineageEntries, selectedSessionLineageEntry]
+  );
+  const nextDecisionSessionLineageEntry = useMemo(
+    () =>
+      nextSessionLineageQueueEntry(
+        decisionSessionLineageEntries,
+        selectedSessionLineageEntry
+      ),
+    [decisionSessionLineageEntries, selectedSessionLineageEntry]
+  );
   const hiddenAttentionQueueCount = useMemo(
     () => Math.max(attentionSessionLineageSourceEntries.length - attentionSessionLineageEntries.length, 0),
     [attentionSessionLineageEntries.length, attentionSessionLineageSourceEntries.length]
@@ -3203,6 +3229,11 @@ export default function ControlPlanePage() {
       ),
     [filteredAgentTimelineEntries, selectedAgentTimelineEntry]
   );
+  const triageInboxItemCount =
+    Number(Boolean(nextAttentionSessionLineageEntry)) +
+    Number(Boolean(nextDecisionSessionLineageEntry)) +
+    Number(Boolean(nextCriticalAgentTimelineEntry)) +
+    Number(Boolean(nextHighAgentTimelineEntry));
   const inspectAgentTimelineEntry = useCallback(
     (entry: AgentTimelineEntry) => {
       const relatedRunLink = resolveAgentTimelineRunLink(entry, linkedRuns);
@@ -4915,6 +4946,215 @@ export default function ControlPlanePage() {
                           </div>
                         )}
                       </div>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+
+              <Card className="border border-[#e5e5e3] bg-white shadow-[0_1px_3px_rgba(15,15,15,0.08),0_0_1px_rgba(15,15,15,0.04)]">
+                <CardHeader>
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <CardTitle className="text-[18px] font-semibold tracking-[-0.02em] text-[#37352f]">
+                        Triage Inbox
+                      </CardTitle>
+                      <CardDescription className="text-[13px] text-[#787774]">
+                        One compact next-up strip across session lineage and runtime agent queues.
+                      </CardDescription>
+                    </div>
+                    <Badge
+                      variant="outline"
+                      className="rounded-full border-[#e5e5e3] bg-white px-2.5 py-1 text-[11px] font-medium text-[#37352f]"
+                    >
+                      {triageInboxItemCount} active
+                    </Badge>
+                  </div>
+                </CardHeader>
+                <CardContent>
+                  {triageInboxItemCount === 0 ? (
+                    <div className="rounded-xl border border-dashed border-[#e5e5e3] bg-[#fafaf9] px-5 py-8 text-[13px] text-[#9b9a97]">
+                      No session or agent triage items are active in the current slice.
+                    </div>
+                  ) : (
+                    <div className="grid gap-3 xl:grid-cols-2 2xl:grid-cols-4">
+                      {[
+                        nextAttentionSessionLineageEntry
+                          ? {
+                              key: "session-attention",
+                              label: "Session Attention",
+                              queueDetail: `${attentionSessionLineageEntries.length} queued`,
+                              entry: nextAttentionSessionLineageEntry,
+                              selected: selectedSessionLineageEntry?.key === nextAttentionSessionLineageEntry.key,
+                              statusClassName: passStatusClass(nextAttentionSessionLineageEntry.status),
+                              priority: sessionLineagePriority(nextAttentionSessionLineageEntry),
+                              onInspect: () => {
+                                focusSessionLineageEntry(nextAttentionSessionLineageEntry, "attention");
+                              },
+                              onSnooze: () => {
+                                snoozeSessionLineageQueueEntry(
+                                  "attention",
+                                  nextAttentionSessionLineageEntry
+                                );
+                              },
+                              onDismiss: () => {
+                                dismissSessionLineageQueueEntry(
+                                  "attention",
+                                  nextAttentionSessionLineageEntry
+                                );
+                              },
+                              subtitle: `run ${nextAttentionSessionLineageEntry.runId} · outcome ${nextAttentionSessionLineageEntry.resultIndex + 1}`,
+                            }
+                          : null,
+                        nextDecisionSessionLineageEntry
+                          ? {
+                              key: "session-decisions",
+                              label: "Session Decision",
+                              queueDetail: `${decisionSessionLineageEntries.length} queued`,
+                              entry: nextDecisionSessionLineageEntry,
+                              selected: selectedSessionLineageEntry?.key === nextDecisionSessionLineageEntry.key,
+                              statusClassName: passStatusClass(nextDecisionSessionLineageEntry.status),
+                              priority: sessionLineagePriority(nextDecisionSessionLineageEntry),
+                              onInspect: () => {
+                                focusSessionLineageEntry(nextDecisionSessionLineageEntry, "decisions");
+                              },
+                              onSnooze: () => {
+                                snoozeSessionLineageQueueEntry(
+                                  "decisions",
+                                  nextDecisionSessionLineageEntry
+                                );
+                              },
+                              onDismiss: () => {
+                                dismissSessionLineageQueueEntry(
+                                  "decisions",
+                                  nextDecisionSessionLineageEntry
+                                );
+                              },
+                              subtitle: `run ${nextDecisionSessionLineageEntry.runId} · outcome ${nextDecisionSessionLineageEntry.resultIndex + 1}`,
+                            }
+                          : null,
+                        nextCriticalAgentTimelineEntry
+                          ? {
+                              key: "agent-critical",
+                              label: "Agent Critical",
+                              queueDetail: `${criticalAgentTimelineEntries.length} queued`,
+                              entry: nextCriticalAgentTimelineEntry,
+                              selected:
+                                selectedAgentTimelineEntry &&
+                                agentTimelineEntryKey(selectedAgentTimelineEntry) ===
+                                  agentTimelineEntryKey(nextCriticalAgentTimelineEntry),
+                              statusClassName: agentTimelineEntryStatusClass(nextCriticalAgentTimelineEntry),
+                              priority: agentTimelinePriority(nextCriticalAgentTimelineEntry),
+                              onInspect: () => {
+                                inspectAgentTimelineEntry(nextCriticalAgentTimelineEntry);
+                              },
+                              onSnooze: () => {
+                                snoozeAgentTimelineEntry(nextCriticalAgentTimelineEntry);
+                              },
+                              onDismiss: () => {
+                                dismissAgentTimelineEntry(nextCriticalAgentTimelineEntry);
+                              },
+                              subtitle: `${nextCriticalAgentTimelineEntry.kind} · ${nextCriticalAgentTimelineEntry.subtitle || "No scope metadata"}`,
+                            }
+                          : null,
+                        nextHighAgentTimelineEntry
+                          ? {
+                              key: "agent-high",
+                              label: "Agent High",
+                              queueDetail: `${highAgentTimelineEntries.length} queued`,
+                              entry: nextHighAgentTimelineEntry,
+                              selected:
+                                selectedAgentTimelineEntry &&
+                                agentTimelineEntryKey(selectedAgentTimelineEntry) ===
+                                  agentTimelineEntryKey(nextHighAgentTimelineEntry),
+                              statusClassName: agentTimelineEntryStatusClass(nextHighAgentTimelineEntry),
+                              priority: agentTimelinePriority(nextHighAgentTimelineEntry),
+                              onInspect: () => {
+                                inspectAgentTimelineEntry(nextHighAgentTimelineEntry);
+                              },
+                              onSnooze: () => {
+                                snoozeAgentTimelineEntry(nextHighAgentTimelineEntry);
+                              },
+                              onDismiss: () => {
+                                dismissAgentTimelineEntry(nextHighAgentTimelineEntry);
+                              },
+                              subtitle: `${nextHighAgentTimelineEntry.kind} · ${nextHighAgentTimelineEntry.subtitle || "No scope metadata"}`,
+                            }
+                          : null,
+                      ]
+                        .filter(Boolean)
+                        .map((item) => {
+                          if (!item) return null;
+                          return (
+                            <div
+                              key={`triage-inbox-${item.key}`}
+                              className={`rounded-xl border p-3 ${
+                                item.selected
+                                  ? "border-[#d3e5ef] bg-[#f7fbfd]"
+                                  : "border-[#ecebe8] bg-[#fbfbf9]"
+                              }`}
+                            >
+                              <div className="flex flex-wrap items-start justify-between gap-2">
+                                <div>
+                                  <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#9b9a97]">
+                                    {item.label}
+                                  </p>
+                                  <p className="mt-1 text-[12px] text-[#787774]">{item.queueDetail}</p>
+                                </div>
+                                <p className="text-[11px] text-[#9b9a97]">
+                                  {formatTimestamp(item.entry.timestamp)}
+                                </p>
+                              </div>
+                              <p className="mt-3 text-[13px] font-semibold text-[#37352f]">
+                                {item.entry.title}
+                              </p>
+                              <p className="mt-2 text-[12px] text-[#787774]">{item.subtitle}</p>
+                              <div className="mt-3 flex flex-wrap gap-2">
+                                <Badge
+                                  variant="outline"
+                                  className={`rounded-full px-2.5 py-1 text-[11px] font-medium ${triagePriorityClass(item.priority)}`}
+                                >
+                                  {item.priority}
+                                </Badge>
+                                <Badge
+                                  variant="outline"
+                                  className={`rounded-full px-2.5 py-1 text-[11px] font-semibold capitalize ${item.statusClassName}`}
+                                >
+                                  {item.entry.status}
+                                </Badge>
+                              </div>
+                              <div className="mt-3 flex flex-wrap gap-2">
+                                <Button
+                                  size="sm"
+                                  variant={item.selected ? "default" : "outline"}
+                                  className={`h-7 rounded-lg px-2 text-[11px] ${
+                                    item.selected
+                                      ? "bg-[#1a1a1a] text-white hover:bg-[#333]"
+                                      : "border-[#e5e5e3] bg-white text-[#37352f] hover:bg-[#f7f7f5]"
+                                  }`}
+                                  onClick={item.onInspect}
+                                >
+                                  {item.selected ? "Selected" : "Inspect"}
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  className="h-7 rounded-lg border-[#e5e5e3] bg-white px-2 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
+                                  onClick={item.onSnooze}
+                                >
+                                  Snooze 15m
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  className="h-7 rounded-lg border-[#e5e5e3] bg-white px-2 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
+                                  onClick={item.onDismiss}
+                                >
+                                  Dismiss
+                                </Button>
+                              </div>
+                            </div>
+                          );
+                        })}
                     </div>
                   )}
                 </CardContent>
