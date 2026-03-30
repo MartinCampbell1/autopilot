@@ -1,6 +1,4 @@
 "use client";
-
-import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AppSidebar } from "@/components/app-sidebar";
 import {
@@ -21,8 +19,7 @@ import { SessionDrilldownSection } from "@/components/session-drilldown-section"
 import { SelectedOutcomeInspector } from "@/components/selected-outcome-inspector";
 import { SessionLineageSection } from "@/components/session-lineage-section";
 import { TriageInboxSection } from "@/components/triage-inbox-section";
-import { RuntimeAgentActivitySection } from "@/components/runtime-agent-activity-section";
-import { RuntimeAgentTimelineSection } from "@/components/runtime-agent-timeline-section";
+import { RuntimeAgentSection } from "@/components/runtime-agent-section";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -51,12 +48,7 @@ import {
   rejectExecutionPlaneApproval,
   resolveExecutionPlaneIssue,
 } from "@/lib/api";
-import {
-  approvalStatusClass,
-  controlStateClass,
-  passStatusClass,
-  priorityClass,
-} from "@/lib/control-plane-ui";
+import { approvalStatusClass, controlStateClass, passStatusClass } from "@/lib/control-plane-ui";
 import { useSSE } from "@/lib/sse";
 import type {
   AccountHealth,
@@ -4912,358 +4904,160 @@ export default function ControlPlanePage() {
                 onDismissTriageInboxItem={dismissTriageInboxItem}
               />
 
-              <Card className="border border-[#e5e5e3] bg-white shadow-[0_1px_3px_rgba(15,15,15,0.08),0_0_1px_rgba(15,15,15,0.04)]">
-                <CardHeader>
-                  <CardTitle className="text-[18px] font-semibold tracking-[-0.02em] text-[#37352f]">
-                    Runtime Agent
-                  </CardTitle>
-                  <CardDescription className="text-[13px] text-[#787774]">
-                    Agent-centric control view for the currently selected runtime agent.
-                  </CardDescription>
-                </CardHeader>
-                <CardContent>
-                  {!selectedAgentId ? (
-                    <div className="rounded-xl border border-dashed border-[#e5e5e3] bg-[#fafaf9] px-5 py-8 text-[13px] text-[#9b9a97]">
-                      Select a linked runtime agent to inspect its current state and history.
-                    </div>
-                  ) : agentLoading || !selectedAgent ? (
-                    <div className="rounded-xl border border-dashed border-[#e5e5e3] bg-[#fafaf9] px-5 py-8 text-[13px] text-[#9b9a97]">
-                      Loading runtime agent detail...
-                    </div>
-                  ) : (
-                    <div className="space-y-4">
-                      <div className="flex flex-wrap items-start justify-between gap-3">
-                        <div>
-                          <div className="flex flex-wrap items-center gap-2">
-                            <p className="font-mono text-[12px] font-semibold text-[#37352f]">
-                              {selectedAgent.runtime_agent_id}
-                            </p>
-                            <Badge
-                              variant="outline"
-                              className={`rounded-full px-2.5 py-1 text-[11px] font-semibold capitalize ${passStatusClass(selectedAgent.status)}`}
-                            >
-                              {selectedAgent.status}
-                            </Badge>
-                            <Badge
-                              variant="outline"
-                              className={`rounded-full px-2.5 py-1 text-[11px] font-semibold capitalize ${controlStateClass(selectedAgent.attention.state)}`}
-                            >
-                              {selectedAgent.attention.state}
-                            </Badge>
-                            <Badge
-                              variant="outline"
-                              className="rounded-full border-[#e5e5e3] bg-[#fafaf9] px-2.5 py-1 text-[11px] font-medium text-[#37352f]"
-                            >
-                              {selectedAgent.role}
-                            </Badge>
-                          </div>
-                          <p className="mt-2 text-[13px] text-[#6b6b6b]">
-                            {selectedAgent.project_name || selectedAgent.project_id}
-                            {" · "}
-                            {selectedAgent.story_title || `Story ${selectedAgent.story_id || "unknown"}`}
-                          </p>
-                        </div>
-                        <div className="flex flex-wrap gap-2">
-                          <Link
-                            href={
-                              selectedAgent.story_id
-                                ? `/projects/${selectedAgent.project_id}?storyId=${selectedAgent.story_id}`
-                                : `/projects/${selectedAgent.project_id}`
-                            }
-                            className="inline-flex h-8 items-center rounded-lg border border-[#e5e5e3] bg-white px-3 text-[12px] font-medium text-[#37352f] transition-colors hover:bg-[#f7f7f5]"
-                          >
-                            Open workspace
-                          </Link>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="h-8 rounded-lg border-[#e5e5e3] bg-white text-[12px] text-[#37352f] hover:bg-[#f7f7f5]"
-                            onClick={() => {
-                              focusRuntimeAgent(selectedAgent.runtime_agent_id, true);
-                            }}
-                          >
-                            Filter session
-                          </Button>
-                        </div>
-                      </div>
-
-                      <div className="grid gap-3 sm:grid-cols-2">
-                        <SessionMetric
-                          label="Open Issues"
-                          value={String(selectedAgent.history.open_issue_count)}
-                          detail={`${selectedAgent.history.issue_count} total issues`}
-                        />
-                        <SessionMetric
-                          label="Pending Approvals"
-                          value={String(selectedAgent.history.pending_approval_count)}
-                          detail={`${selectedAgent.history.approval_count} total approvals`}
-                        />
-                        <SessionMetric
-                          label="Events"
-                          value={String(selectedAgent.history.event_count)}
-                          detail={formatTimestamp(selectedAgent.history.last_event_at)}
-                        />
-                        <SessionMetric
-                          label="Budget"
-                          value={
-                            selectedAgent.budget.tracked
-                              ? `${toNumber(selectedAgent.budget.remaining, 0)} left`
-                              : "Untracked"
-                          }
-                          detail={
-                            selectedAgent.budget.tracked
-                              ? `${selectedAgent.budget.used ?? 0}/${selectedAgent.budget.limit ?? 0} ${selectedAgent.budget.metric || ""}`.trim()
-                              : "No tracked budget metric"
-                          }
-                        />
-                      </div>
-
-                      <div className="rounded-2xl border border-[#ecebe8] bg-[#fbfbf9] p-4">
-                        <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#9b9a97]">
-                          Attention
-                        </p>
-                        <p className="mt-3 text-[13px] leading-relaxed text-[#6b6b6b]">
-                          {selectedAgent.attention.recommended_action}
-                        </p>
-                        {selectedAgent.attention.reasons.length > 0 && (
-                          <div className="mt-3 flex flex-wrap gap-2">
-                            {selectedAgent.attention.reasons.map((reason) => (
-                              <Badge
-                                key={`${selectedAgent.runtime_agent_id}-${reason}`}
-                                variant="outline"
-                                className="rounded-full border-[#e5e5e3] bg-white px-2.5 py-1 text-[11px] font-medium text-[#37352f]"
-                              >
-                                {reason}
-                              </Badge>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-
-                      <div className="rounded-2xl border border-[#ecebe8] bg-[#fbfbf9] p-4">
-                        <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#9b9a97]">
-                          Agent Recommendations
-                        </p>
-                        {selectedAgent.recommendations.length === 0 && selectedAgent.suggested_commands.length === 0 ? (
-                          <p className="mt-3 text-[13px] text-[#9b9a97]">No current agent recommendations.</p>
-                        ) : (
-                          <div className="mt-3 space-y-3">
-                            {selectedAgent.recommendations.slice(0, 3).map((recommendation, index) => (
-                              <div
-                                key={`${selectedAgent.runtime_agent_id}-rec-${index}`}
-                                className="rounded-xl border border-[#ecebe8] bg-white p-3"
-                              >
-                                <div className="flex flex-wrap items-center justify-between gap-2">
-                                  <p className="text-[13px] font-semibold text-[#37352f]">
-                                    {toStringValue(recommendation.title, toStringValue(recommendation.kind, "recommendation"))}
-                                  </p>
-                                  <Badge
-                                    variant="outline"
-                                    className={`rounded-full px-2.5 py-1 text-[11px] font-semibold capitalize ${priorityClass(toStringValue(recommendation.priority, "medium"))}`}
-                                  >
-                                    {toStringValue(recommendation.priority, "medium")}
-                                  </Badge>
-                                </div>
-                                <p className="mt-2 text-[12px] text-[#6b6b6b]">
-                                  {toStringValue(recommendation.reason, "No reason provided")}
-                                </p>
-                              </div>
-                            ))}
-                            {selectedAgent.suggested_commands.slice(0, 2).map((command, index) => (
-                              <div
-                                key={`${selectedAgent.runtime_agent_id}-cmd-${index}`}
-                                className="rounded-xl border border-[#ecebe8] bg-white p-3"
-                              >
-                                <div className="flex flex-wrap items-center justify-between gap-2">
-                                  <p className="text-[13px] font-semibold text-[#37352f]">
-                                    {toStringValue(command.title, toStringValue(command.command, "command"))}
-                                  </p>
-                                  <div className="flex flex-wrap items-center gap-2">
-                                    <Badge
-                                      variant="outline"
-                                      className={`rounded-full px-2.5 py-1 text-[11px] font-semibold capitalize ${priorityClass(toStringValue(command.priority, "medium"))}`}
-                                    >
-                                      {toStringValue(command.priority, "medium")}
-                                    </Badge>
-                                    {Boolean(command.approval_required) && (
-                                      <Badge
-                                        variant="outline"
-                                        className="rounded-full border-[#f4e0c4] bg-[#fff6e8] px-2.5 py-1 text-[11px] font-medium text-[#9a6700]"
-                                      >
-                                        approval required
-                                      </Badge>
-                                    )}
-                                  </div>
-                                </div>
-                                <p className="mt-2 text-[12px] text-[#6b6b6b]">
-                                  {toStringValue(command.reason, "No reason provided")}
-                                </p>
-                                <div className="mt-3 flex flex-wrap gap-2">
-                                  {!Boolean(command.approval_required) && (
-                                    <Button
-                                      size="sm"
-                                      className="h-8 rounded-lg bg-[#1a1a1a] text-[12px] hover:bg-[#333]"
-                                      disabled={Boolean(busyActionKey)}
-                                      onClick={() => {
-                                        void runAgentSuggestedCommand(command, "execute_now");
-                                      }}
-                                    >
-                                      {busyActionKey === `agent-command:${selectedAgent.runtime_agent_id}:${toStringValue(command.command)}:execute_now`
-                                        ? "Executing..."
-                                        : "Execute"}
-                                    </Button>
-                                  )}
-                                  <Button
-                                    size="sm"
-                                    variant="outline"
-                                    className="h-8 rounded-lg border-[#e5e5e3] bg-white text-[12px] text-[#37352f] hover:bg-[#f7f7f5]"
-                                    disabled={Boolean(busyActionKey)}
-                                    onClick={() => {
-                                      void runAgentSuggestedCommand(command, "request_approval");
-                                    }}
-                                  >
-                                    {busyActionKey === `agent-command:${selectedAgent.runtime_agent_id}:${toStringValue(command.command)}:request_approval`
-                                      ? "Requesting..."
-                                      : "Request approval"}
-                                  </Button>
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-
-                      <RuntimeAgentActivitySection
-                        selectedAgent={selectedAgent}
-                        agentScopedRuns={agentScopedRuns}
-                        agentActivitySearch={agentActivitySearch}
-                        onAgentActivitySearchChange={setAgentActivitySearch}
-                        agentActivityFilter={agentActivityFilter}
-                        onAgentActivityFilterChange={setAgentActivityFilter}
-                        filteredAgentScopedRuns={filteredAgentScopedRuns}
-                        selectedRunId={selectedRunId}
-                        selectedRunResultIndex={selectedRunResultIndex}
-                        onSelectRun={(runId, resultIndex) => {
+              <RuntimeAgentSection
+                selectedAgentId={selectedAgentId}
+                agentLoading={agentLoading}
+                selectedAgent={selectedAgent}
+                busyActionKey={busyActionKey}
+                formatTimestamp={formatTimestamp}
+                toNumber={toNumber}
+                toStringValue={toStringValue}
+                onFocusRuntimeAgent={(runtimeAgentId) => {
+                  focusRuntimeAgent(runtimeAgentId, true);
+                }}
+                onRunSuggestedCommand={(command, mode) => {
+                  void runAgentSuggestedCommand(command, mode);
+                }}
+                activitySectionProps={
+                  selectedAgent
+                    ? {
+                        selectedAgent,
+                        agentScopedRuns,
+                        agentActivitySearch,
+                        onAgentActivitySearchChange: setAgentActivitySearch,
+                        agentActivityFilter,
+                        onAgentActivityFilterChange: setAgentActivityFilter,
+                        filteredAgentScopedRuns,
+                        selectedRunId,
+                        selectedRunResultIndex,
+                        onSelectRun: (runId, resultIndex) => {
                           setSelectedRunId(runId);
                           setSelectedRunResultIndex(resultIndex);
-                        }}
-                        formatTimestamp={formatTimestamp}
-                        toNumber={toNumber}
-                        describeRunResult={describeRunResult}
-                        agentScopedOutcomes={agentScopedOutcomes}
-                        filteredAgentScopedOutcomes={filteredAgentScopedOutcomes}
-                        outcomeProjectId={outcomeProjectId}
-                        outcomeStoryId={outcomeStoryId}
-                        toStringValue={toStringValue}
-                        asRecord={asRecord}
-                        onFindOutcomeInSession={(runId, resultIndex) => {
+                        },
+                        formatTimestamp,
+                        toNumber,
+                        describeRunResult,
+                        agentScopedOutcomes,
+                        filteredAgentScopedOutcomes,
+                        outcomeProjectId,
+                        outcomeStoryId,
+                        toStringValue,
+                        asRecord,
+                        onFindOutcomeInSession: (runId, resultIndex) => {
                           setEntitySearch(runId);
                           setSelectedRunId(runId);
                           setSelectedRunResultIndex(resultIndex);
-                        }}
-                      />
-
-                      <RuntimeAgentTimelineSection
-                        selectedAgent={selectedAgent}
-                        activeAgentTimelineEntries={activeAgentTimelineEntries}
-                        hiddenAgentTimelineEntryCount={hiddenAgentTimelineEntryCount}
-                        agentTimelineSearch={agentTimelineSearch}
-                        onAgentTimelineSearchChange={setAgentTimelineSearch}
-                        agentTimelineFilter={agentTimelineFilter as "all" | "approvals" | "issues" | "events" | "attention"}
-                        onAgentTimelineFilterChange={(value) => {
+                        },
+                      }
+                    : null
+                }
+                timelineSectionProps={
+                  selectedAgent
+                    ? {
+                        selectedAgent,
+                        activeAgentTimelineEntries,
+                        hiddenAgentTimelineEntryCount,
+                        agentTimelineSearch,
+                        onAgentTimelineSearchChange: setAgentTimelineSearch,
+                        agentTimelineFilter: agentTimelineFilter as
+                          | "all"
+                          | "approvals"
+                          | "issues"
+                          | "events"
+                          | "attention",
+                        onAgentTimelineFilterChange: (value) => {
                           setAgentTimelineFilter(value);
-                        }}
-                        persistedDismissedAgentTimelineCount={persistedDismissedAgentTimelineCount}
-                        persistedSnoozedAgentTimelineCount={persistedSnoozedAgentTimelineCount}
-                        agentTimelinePriorityCounts={agentTimelinePriorityCounts}
-                        nextBestAgentTimelineEntry={nextBestAgentTimelineEntry}
-                        hasPersistedAgentTimelinePreferences={hasPersistedAgentTimelinePreferences}
-                        onInspectAgentTimelineEntry={inspectAgentTimelineEntry}
-                        onRestoreAgentTimelineHidden={restoreAgentTimelineHidden}
-                        onExportAgentTimelinePreferences={exportAgentTimelinePreferences}
-                        onResetAgentTimelinePreferences={resetAgentTimelinePreferences}
-                        agentQueueAdvanceFeedback={agentQueueAdvanceFeedback}
-                        agentQueueAdvanceFocusSummary={agentQueueAdvanceFocusSummary}
-                        agentQueueFocusDelta={agentQueueFocusDelta}
-                        agentQueueAdvanceNoticeActions={agentQueueAdvanceNoticeActions}
-                        nextCriticalAgentTimelineEntry={nextCriticalAgentTimelineEntry}
-                        nextHighAgentTimelineEntry={nextHighAgentTimelineEntry}
-                        expandedAgentPriorityQueues={expandedAgentPriorityQueues}
-                        currentAgentPriorityQueue={currentAgentPriorityQueue}
-                        onExpandAllAgentPriorityQueues={expandAllAgentPriorityQueues}
-                        onCollapseAllAgentPriorityQueues={collapseAllAgentPriorityQueues}
-                        onOpenCurrentAgentPriorityQueue={openCurrentAgentPriorityQueue}
-                        criticalAgentTimelineQueue={criticalAgentTimelineQueue}
-                        criticalAgentTimelineTotal={criticalAgentTimelineEntries.length}
-                        criticalAgentTimelinePosition={criticalAgentTimelinePosition}
-                        highAgentTimelineQueue={highAgentTimelineQueue}
-                        highAgentTimelineTotal={highAgentTimelineEntries.length}
-                        highAgentTimelinePosition={highAgentTimelinePosition}
-                        onToggleAgentPriorityQueueExpansion={toggleAgentPriorityQueueExpansion}
-                        filteredAgentTimelineEntriesCount={filteredAgentTimelineEntries.length}
-                        visibleAgentTimelineEntries={visibleAgentTimelineEntries}
-                        selectedAgentTimelineEntry={selectedAgentTimelineEntry}
-                        selectedAgentTimelineRunLink={selectedAgentTimelineRunLink}
-                        selectedAgentTimelinePriority={selectedAgentTimelinePriority}
-                        latestAgentIssueEntry={latestAgentIssueEntry}
-                        latestAgentApprovalEntry={latestAgentApprovalEntry}
-                        latestAgentEventEntry={latestAgentEventEntry}
-                        busyActionKey={busyActionKey}
-                        formatTimestamp={formatTimestamp}
-                        formatJson={formatJson}
-                        toStringValue={toStringValue}
-                        toNullableNumber={toNullableNumber}
-                        asRecord={asRecord}
-                        describeRunResult={describeRunResult}
-                        onSelectTimelineEntry={(entry) => {
+                        },
+                        persistedDismissedAgentTimelineCount,
+                        persistedSnoozedAgentTimelineCount,
+                        agentTimelinePriorityCounts,
+                        nextBestAgentTimelineEntry,
+                        hasPersistedAgentTimelinePreferences,
+                        onInspectAgentTimelineEntry: inspectAgentTimelineEntry,
+                        onRestoreAgentTimelineHidden: restoreAgentTimelineHidden,
+                        onExportAgentTimelinePreferences: exportAgentTimelinePreferences,
+                        onResetAgentTimelinePreferences: resetAgentTimelinePreferences,
+                        agentQueueAdvanceFeedback,
+                        agentQueueAdvanceFocusSummary,
+                        agentQueueFocusDelta,
+                        agentQueueAdvanceNoticeActions: agentQueueAdvanceNoticeActions,
+                        nextCriticalAgentTimelineEntry,
+                        nextHighAgentTimelineEntry,
+                        expandedAgentPriorityQueues,
+                        currentAgentPriorityQueue,
+                        onExpandAllAgentPriorityQueues: expandAllAgentPriorityQueues,
+                        onCollapseAllAgentPriorityQueues: collapseAllAgentPriorityQueues,
+                        onOpenCurrentAgentPriorityQueue: openCurrentAgentPriorityQueue,
+                        criticalAgentTimelineQueue,
+                        criticalAgentTimelineTotal: criticalAgentTimelineEntries.length,
+                        criticalAgentTimelinePosition,
+                        highAgentTimelineQueue,
+                        highAgentTimelineTotal: highAgentTimelineEntries.length,
+                        highAgentTimelinePosition,
+                        onToggleAgentPriorityQueueExpansion: toggleAgentPriorityQueueExpansion,
+                        filteredAgentTimelineEntriesCount: filteredAgentTimelineEntries.length,
+                        visibleAgentTimelineEntries,
+                        selectedAgentTimelineEntry,
+                        selectedAgentTimelineRunLink,
+                        selectedAgentTimelinePriority,
+                        latestAgentIssueEntry,
+                        latestAgentApprovalEntry,
+                        latestAgentEventEntry,
+                        busyActionKey,
+                        formatTimestamp,
+                        formatJson,
+                        toStringValue,
+                        toNullableNumber,
+                        asRecord,
+                        describeRunResult,
+                        onSelectTimelineEntry: (entry) => {
                           setSelectedAgentTimelineKey(agentTimelineEntryKey(entry));
-                        }}
-                        onSyncLinkedSelection={syncLinkedSelection}
-                        onFocusRuntimeAgent={(runtimeAgentId) => {
+                        },
+                        onSyncLinkedSelection: syncLinkedSelection,
+                        onFocusRuntimeAgent: (runtimeAgentId) => {
                           focusRuntimeAgent(runtimeAgentId, true);
-                        }}
-                        onSelectRun={(runId, resultIndex) => {
+                        },
+                        onSelectRun: (runId, resultIndex) => {
                           setSelectedRunId(runId);
                           setSelectedRunResultIndex(resultIndex);
-                        }}
-                        onApproveApproval={(approval) => {
+                        },
+                        onApproveApproval: (approval) => {
                           void approveApproval(approval);
-                        }}
-                        onRejectApproval={(approval) => {
+                        },
+                        onRejectApproval: (approval) => {
                           void rejectApproval(approval);
-                        }}
-                        onApplyApproval={(approval) => {
+                        },
+                        onApplyApproval: (approval) => {
                           void applyApproval(approval);
-                        }}
-                        onResolveIssue={(issue) => {
+                        },
+                        onResolveIssue: (issue) => {
                           void resolveIssue(issue);
-                        }}
-                        onAdvanceCurrentPriorityQueue={(entry) => {
+                        },
+                        onAdvanceCurrentPriorityQueue: (entry) => {
                           if (currentAgentPriorityQueue) {
                             advanceAgentPriorityQueueFromEntry(currentAgentPriorityQueue, entry);
                           }
-                        }}
-                        onSearchEntity={setEntitySearch}
-                        onFocusAgentTimeline={(filter, entry) => {
+                        },
+                        onSearchEntity: setEntitySearch,
+                        onFocusAgentTimeline: (filter, entry) => {
                           focusAgentTimeline(filter, entry ? { entry } : undefined);
-                        }}
-                        onFilterSessionByToken={(value) => {
+                        },
+                        onFilterSessionByToken: (value) => {
                           setEventFilter("all");
                           setEntitySearch(value);
-                        }}
-                        onSnoozeAgentTimelineEntry={snoozeAgentTimelineEntry}
-                        onDismissAgentTimelineEntry={dismissAgentTimelineEntry}
-                        onAdvanceAgentPriorityQueueFromEntry={advanceAgentPriorityQueueFromEntry}
-                        onFindAgentTimelineEntryInSession={findAgentTimelineEntryInSession}
-                        onRevealAgentTimelineEntry={revealAgentTimelineEntry}
-                        agentTimelineEntryKey={agentTimelineEntryKey}
-                        agentTimelinePriority={agentTimelinePriority}
-                        agentTimelineRowDomId={agentTimelineRowDomId}
-                      />
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
+                        },
+                        onSnoozeAgentTimelineEntry: snoozeAgentTimelineEntry,
+                        onDismissAgentTimelineEntry: dismissAgentTimelineEntry,
+                        onAdvanceAgentPriorityQueueFromEntry: advanceAgentPriorityQueueFromEntry,
+                        onFindAgentTimelineEntryInSession: findAgentTimelineEntryInSession,
+                        onRevealAgentTimelineEntry: revealAgentTimelineEntry,
+                        agentTimelineEntryKey,
+                        agentTimelinePriority,
+                        agentTimelineRowDomId,
+                      }
+                    : null
+                }
+              />
 
               <ControlPlaneOverviewSections
                 controlSummary={controlSummary}
