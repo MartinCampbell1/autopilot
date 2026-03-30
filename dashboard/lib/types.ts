@@ -349,11 +349,63 @@ export interface OrchestratorSessionControl {
   recommendations: OrchestratorSessionControlRecommendation[];
 }
 
+export interface ExecutionApprovalRecord {
+  id: string;
+  project_id: string;
+  project_name: string;
+  action: string;
+  payload: Record<string, unknown>;
+  status: string;
+  requested_by: string;
+  reason: string;
+  initiative_id: string;
+  orchestrator: string;
+  orchestration_run_id: string;
+  issue_id: string;
+  runtime_agent_ids: string[];
+  policy_reasons: string[];
+  created_at: string;
+  updated_at: string;
+  decided_at?: string | null;
+  decided_by?: string | null;
+  decision_note: string;
+  applied_at?: string | null;
+  applied_by?: string | null;
+}
+
+export interface ExecutionIssueRecord {
+  id: string;
+  project_id: string;
+  project_name: string;
+  title: string;
+  description: string;
+  root_cause: string;
+  category: string;
+  severity: string;
+  status: string;
+  source_event: string;
+  related_command: string;
+  story_id?: number | null;
+  runtime_agent_id: string;
+  runtime_agent_ids: string[];
+  approval_id: string;
+  dedupe_key: string;
+  initiative_id: string;
+  orchestrator: string;
+  orchestration_run_id: string;
+  context: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+  resolved_at?: string | null;
+  resolved_by?: string | null;
+  resolution_note: string;
+}
+
 export interface OrchestratorSessionDetail extends OrchestratorSessionRecord {
   runs: Array<Record<string, unknown>>;
   control_passes: OrchestratorControlPassRecord[];
-  approvals: Array<Record<string, unknown>>;
-  issues: Array<Record<string, unknown>>;
+  approvals: ExecutionApprovalRecord[];
+  issues: ExecutionIssueRecord[];
   events: ExecutionPlaneEvent[];
   control: OrchestratorSessionControl;
   summary: {
@@ -406,6 +458,22 @@ export interface OrchestratorSessionControlPlanApplyResult {
   errors: Array<Record<string, unknown>>;
   summary: Record<string, unknown>;
   skipped_recommendation_kinds: string[];
+}
+
+export interface ApprovalDecisionResult {
+  status: string;
+  approval: ExecutionApprovalRecord;
+}
+
+export interface ApprovalApplyResult {
+  status: string;
+  approval: ExecutionApprovalRecord;
+  command_result: Record<string, unknown>;
+}
+
+export interface IssueResolutionResult {
+  status: string;
+  issue: ExecutionIssueRecord;
 }
 
 export interface AccountHealth {

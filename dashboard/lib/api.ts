@@ -1,9 +1,12 @@
 import type {
+  ApprovalApplyResult,
+  ApprovalDecisionResult,
   CapabilitiesCatalog,
   AccountHealth,
   AccountsByProvider,
   ConnectorValidationResult,
   CreateProjectResult,
+  IssueResolutionResult,
   IntakeSession,
   LaunchResult,
   LaunchProfile,
@@ -268,6 +271,66 @@ export async function applyExecutionPlaneOrchestratorSessionControlPlan(
     res,
     `Failed to apply session control plan: ${res.status}`
   );
+}
+
+export async function approveExecutionPlaneApproval(
+  approvalId: string,
+  payload?: { actor?: string; note?: string }
+): Promise<ApprovalDecisionResult> {
+  const res = await fetch(`${API_BASE}/execution-plane/approvals/${encodeURIComponent(approvalId)}/approve`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      actor: payload?.actor ?? "dashboard-control-plane",
+      note: payload?.note ?? "",
+    }),
+  });
+  return jsonOrThrow<ApprovalDecisionResult>(res, `Failed to approve control-plane approval: ${res.status}`);
+}
+
+export async function rejectExecutionPlaneApproval(
+  approvalId: string,
+  payload?: { actor?: string; note?: string }
+): Promise<ApprovalDecisionResult> {
+  const res = await fetch(`${API_BASE}/execution-plane/approvals/${encodeURIComponent(approvalId)}/reject`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      actor: payload?.actor ?? "dashboard-control-plane",
+      note: payload?.note ?? "",
+    }),
+  });
+  return jsonOrThrow<ApprovalDecisionResult>(res, `Failed to reject control-plane approval: ${res.status}`);
+}
+
+export async function applyExecutionPlaneApproval(
+  approvalId: string,
+  payload?: { actor?: string; note?: string }
+): Promise<ApprovalApplyResult> {
+  const res = await fetch(`${API_BASE}/execution-plane/approvals/${encodeURIComponent(approvalId)}/apply`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      actor: payload?.actor ?? "dashboard-control-plane",
+      note: payload?.note ?? "",
+    }),
+  });
+  return jsonOrThrow<ApprovalApplyResult>(res, `Failed to apply control-plane approval: ${res.status}`);
+}
+
+export async function resolveExecutionPlaneIssue(
+  issueId: string,
+  payload?: { actor?: string; note?: string }
+): Promise<IssueResolutionResult> {
+  const res = await fetch(`${API_BASE}/execution-plane/issues/${encodeURIComponent(issueId)}/resolve`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      actor: payload?.actor ?? "dashboard-control-plane",
+      note: payload?.note ?? "",
+    }),
+  });
+  return jsonOrThrow<IssueResolutionResult>(res, `Failed to resolve control-plane issue: ${res.status}`);
 }
 
 export async function createProjectFromPrd(

@@ -15,6 +15,8 @@ import {
 import {
   applyExecutionPlaneOrchestratorSessionControlPlan,
   applyExecutionPlaneOrchestratorSessionRecommendation,
+  applyExecutionPlaneApproval,
+  approveExecutionPlaneApproval,
   fetchAccountsHealth,
   fetchExecutionPlaneControlPassSummary,
   fetchExecutionPlaneControlPasses,
@@ -23,11 +25,15 @@ import {
   fetchExecutionPlaneOrchestratorSessions,
   fetchExecutionPlaneOrchestratorSessionSummary,
   fetchProjects,
+  rejectExecutionPlaneApproval,
+  resolveExecutionPlaneIssue,
 } from "@/lib/api";
 import { useSSE } from "@/lib/sse";
 import type {
   AccountHealth,
+  ExecutionApprovalRecord,
   ExecutionPlaneCountMap,
+  ExecutionIssueRecord,
   OrchestratorControlPassRecord,
   OrchestratorControlPassSummary,
   OrchestratorSessionControlProfile,
@@ -125,6 +131,46 @@ function priorityClass(priority: string): string {
       return "border-[#d3e5ef] bg-[#eef7fb] text-[#2a6690]";
     case "low":
       return "border-[#e5e5e3] bg-[#f7f7f5] text-[#787774]";
+    default:
+      return "border-[#e5e5e3] bg-white text-[#37352f]";
+  }
+}
+
+function approvalStatusClass(status: string): string {
+  switch (status) {
+    case "pending":
+      return "border-[#f4e0c4] bg-[#fff6e8] text-[#9a6700]";
+    case "approved":
+      return "border-[#d3e5ef] bg-[#eef7fb] text-[#2a6690]";
+    case "rejected":
+      return "border-[#f0d0c9] bg-[#fff0ed] text-[#93370d]";
+    case "applied":
+      return "border-[#d6e9dc] bg-[#eef8f1] text-[#2b6e3f]";
+    default:
+      return "border-[#e5e5e3] bg-white text-[#37352f]";
+  }
+}
+
+function issueStatusClass(status: string): string {
+  switch (status) {
+    case "open":
+      return "border-[#f4e0c4] bg-[#fff6e8] text-[#9a6700]";
+    case "resolved":
+      return "border-[#d6e9dc] bg-[#eef8f1] text-[#2b6e3f]";
+    default:
+      return "border-[#e5e5e3] bg-white text-[#37352f]";
+  }
+}
+
+function issueSeverityClass(severity: string): string {
+  switch (severity) {
+    case "high":
+    case "critical":
+      return "border-[#f0d0c9] bg-[#fff0ed] text-[#93370d]";
+    case "medium":
+      return "border-[#f4e0c4] bg-[#fff6e8] text-[#9a6700]";
+    case "low":
+      return "border-[#d3e5ef] bg-[#eef7fb] text-[#2a6690]";
     default:
       return "border-[#e5e5e3] bg-white text-[#37352f]";
   }
@@ -373,6 +419,27 @@ export default function ControlPlanePage() {
     [loadOverview, loadSessionDetail]
   );
 
+  const runDecisionAction = useCallback(
+    async (actionKey: string, task: () => Promise<string>) => {
+      if (!selectedSessionId) return;
+      setBusyActionKey(actionKey);
+      setNotice("");
+      setErrorMessage("");
+      try {
+        const message = await task();
+        setNotice(message);
+        await refreshAfterMutation(selectedSessionId);
+      } catch (error) {
+        setErrorMessage(
+          error instanceof Error ? error.message : "Failed to apply linked decision action."
+        );
+      } finally {
+        setBusyActionKey("");
+      }
+    },
+    [refreshAfterMutation, selectedSessionId]
+  );
+
   const applyRecommendation = async (recommendation: OrchestratorSessionControlRecommendation) => {
     if (!selectedSessionId) return;
     const actionKey = `recommendation:${recommendation.kind}`;
@@ -397,6 +464,49 @@ export default function ControlPlanePage() {
     } finally {
       setBusyActionKey("");
     }
+  };
+
+  const approveApproval = async (approval: ExecutionApprovalRecord) => {
+    await runDecisionAction(`approval-approve:${approval.id}`, async () => {
+      const payload = await approveExecutionPlaneApproval(approval.id, {
+        actor: DEFAULT_CONTROL_ACTOR,
+        note: `Dashboard approved ${approval.action} for session ${selectedSessionId}`,
+      });
+      return `Approval ${payload.approval.id} marked ${payload.approval.status}.`;
+    });
+  };
+
+  const rejectApproval = async (approval: ExecutionApprovalRecord) => {
+    await runDecisionAction(`approval-reject:${approval.id}`, async () => {
+      const payload = await rejectExecutionPlaneApproval(approval.id, {
+        actor: DEFAULT_CONTROL_ACTOR,
+        note: `Dashboard rejected ${approval.action} for session ${selectedSessionId}`,
+      });
+      return `Approval ${payload.approval.id} marked ${payload.approval.status}.`;
+    });
+  };
+
+  const applyApproval = async (approval: ExecutionApprovalRecord) => {
+    await runDecisionAction(`approval-apply:${approval.id}`, async () => {
+      const payload = await applyExecutionPlaneApproval(approval.id, {
+        actor: DEFAULT_CONTROL_ACTOR,
+        note: `Dashboard applied ${approval.action} for session ${selectedSessionId}`,
+      });
+      return toStringValue(
+        payload.command_result.message,
+        `Approval ${payload.approval.id} applied successfully.`
+      );
+    });
+  };
+
+  const resolveIssue = async (issue: ExecutionIssueRecord) => {
+    await runDecisionAction(`issue-resolve:${issue.id}`, async () => {
+      const payload = await resolveExecutionPlaneIssue(issue.id, {
+        actor: DEFAULT_CONTROL_ACTOR,
+        note: `Dashboard resolved issue ${issue.id} for session ${selectedSessionId}`,
+      });
+      return `Issue ${payload.issue.id} marked ${payload.issue.status}.`;
+    });
   };
 
   const applyControlPlan = async (profile: OrchestratorSessionControlProfile) => {
@@ -447,16 +557,18 @@ export default function ControlPlanePage() {
       selectedSession?.control_passes.find((controlPass) => controlPass.id === selectedPassId) ?? null;
     return fromSession ?? controlPasses.find((controlPass) => controlPass.id === selectedPassId) ?? null;
   }, [controlPasses, selectedPassId, selectedSession]);
-  const pendingApprovals = useMemo(
+  const linkedApprovals = useMemo(
     () =>
-      (selectedSession?.approvals || []).filter(
-        (approval) => toStringValue(approval.status) === "pending"
+      [...(selectedSession?.approvals || [])].sort((left, right) =>
+        right.created_at.localeCompare(left.created_at)
       ),
     [selectedSession]
   );
-  const openIssues = useMemo(
+  const linkedIssues = useMemo(
     () =>
-      (selectedSession?.issues || []).filter((issue) => toStringValue(issue.status) === "open"),
+      [...(selectedSession?.issues || [])].sort((left, right) =>
+        right.created_at.localeCompare(left.created_at)
+      ),
     [selectedSession]
   );
   const selectedControl = selectedSession?.control ?? null;
@@ -1261,7 +1373,7 @@ export default function ControlPlanePage() {
                     Linked Decisions
                   </CardTitle>
                   <CardDescription className="text-[13px] text-[#787774]">
-                    Pending approvals and open issues attached to the selected session.
+                    Approvals and issues attached to the selected session, with direct control actions.
                   </CardDescription>
                 </CardHeader>
                 <CardContent>
@@ -1274,30 +1386,103 @@ export default function ControlPlanePage() {
                       <div className="rounded-2xl border border-[#ecebe8] bg-[#fbfbf9] p-4">
                         <div className="flex items-center justify-between">
                           <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#9b9a97]">
-                            Pending Approvals
+                            Session Approvals
                           </p>
                           <Badge
                             variant="outline"
                             className="rounded-full border-[#e5e5e3] bg-white px-2.5 py-1 text-[11px] font-medium text-[#37352f]"
                           >
-                            {pendingApprovals.length}
+                            {linkedApprovals.length}
                           </Badge>
                         </div>
-                        {pendingApprovals.length === 0 ? (
-                          <p className="mt-3 text-[13px] text-[#9b9a97]">No pending approvals.</p>
+                        {linkedApprovals.length === 0 ? (
+                          <p className="mt-3 text-[13px] text-[#9b9a97]">No linked approvals.</p>
                         ) : (
                           <div className="mt-3 space-y-3">
-                            {pendingApprovals.slice(0, 4).map((approval, index) => (
+                            {linkedApprovals.slice(0, 6).map((approval) => (
                               <div
-                                key={`${selectedSession.id}-approval-${index}`}
+                                key={`${selectedSession.id}-approval-${approval.id}`}
                                 className="rounded-xl border border-[#ecebe8] bg-white p-3"
                               >
-                                <p className="font-mono text-[11px] text-[#37352f]">
-                                  {toStringValue(approval.id, "approval")}
-                                </p>
-                                <p className="mt-2 text-[13px] text-[#6b6b6b]">
-                                  {toStringValue(approval.command, toStringValue(approval.title, "Approval requires review"))}
-                                </p>
+                                <div className="flex flex-wrap items-start justify-between gap-3">
+                                  <div>
+                                    <div className="flex flex-wrap items-center gap-2">
+                                      <p className="font-mono text-[11px] text-[#37352f]">
+                                        {approval.id}
+                                      </p>
+                                      <Badge
+                                        variant="outline"
+                                        className={`rounded-full px-2.5 py-1 text-[11px] font-semibold capitalize ${approvalStatusClass(approval.status)}`}
+                                      >
+                                        {approval.status}
+                                      </Badge>
+                                      <Badge
+                                        variant="outline"
+                                        className="rounded-full border-[#e5e5e3] bg-[#fafaf9] px-2.5 py-1 text-[11px] font-medium text-[#37352f]"
+                                      >
+                                        {approval.action}
+                                      </Badge>
+                                    </div>
+                                    <p className="mt-2 text-[13px] text-[#6b6b6b]">
+                                      {approval.reason || `Approval requested for ${approval.action}.`}
+                                    </p>
+                                    <p className="mt-2 text-[12px] text-[#9b9a97]">
+                                      Requested by {approval.requested_by || "unknown"} · {formatTimestamp(approval.created_at)}
+                                    </p>
+                                    {approval.policy_reasons.length > 0 && (
+                                      <div className="mt-2 flex flex-wrap gap-2">
+                                        {approval.policy_reasons.slice(0, 3).map((reason) => (
+                                          <Badge
+                                            key={`${approval.id}-${reason}`}
+                                            variant="outline"
+                                            className="rounded-full border-[#f4e0c4] bg-[#fff6e8] px-2.5 py-1 text-[11px] font-medium text-[#9a6700]"
+                                          >
+                                            {reason}
+                                          </Badge>
+                                        ))}
+                                      </div>
+                                    )}
+                                  </div>
+                                  <div className="flex flex-wrap gap-2">
+                                    {approval.status === "pending" && (
+                                      <>
+                                        <Button
+                                          size="sm"
+                                          className="h-8 rounded-lg bg-[#1a1a1a] text-[12px] hover:bg-[#333]"
+                                          disabled={Boolean(busyActionKey)}
+                                          onClick={() => {
+                                            void approveApproval(approval);
+                                          }}
+                                        >
+                                          {busyActionKey === `approval-approve:${approval.id}` ? "Approving..." : "Approve"}
+                                        </Button>
+                                        <Button
+                                          size="sm"
+                                          variant="outline"
+                                          className="h-8 rounded-lg border-[#e5e5e3] bg-white text-[12px] text-[#37352f] hover:bg-[#f7f7f5]"
+                                          disabled={Boolean(busyActionKey)}
+                                          onClick={() => {
+                                            void rejectApproval(approval);
+                                          }}
+                                        >
+                                          {busyActionKey === `approval-reject:${approval.id}` ? "Rejecting..." : "Reject"}
+                                        </Button>
+                                      </>
+                                    )}
+                                    {approval.status === "approved" && (
+                                      <Button
+                                        size="sm"
+                                        className="h-8 rounded-lg bg-[#1a1a1a] text-[12px] hover:bg-[#333]"
+                                        disabled={Boolean(busyActionKey)}
+                                        onClick={() => {
+                                          void applyApproval(approval);
+                                        }}
+                                      >
+                                        {busyActionKey === `approval-apply:${approval.id}` ? "Applying..." : "Apply"}
+                                      </Button>
+                                    )}
+                                  </div>
+                                </div>
                               </div>
                             ))}
                           </div>
@@ -1307,33 +1492,76 @@ export default function ControlPlanePage() {
                       <div className="rounded-2xl border border-[#ecebe8] bg-[#fbfbf9] p-4">
                         <div className="flex items-center justify-between">
                           <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#9b9a97]">
-                            Open Issues
+                            Session Issues
                           </p>
                           <Badge
                             variant="outline"
                             className="rounded-full border-[#e5e5e3] bg-white px-2.5 py-1 text-[11px] font-medium text-[#37352f]"
                           >
-                            {openIssues.length}
+                            {linkedIssues.length}
                           </Badge>
                         </div>
-                        {openIssues.length === 0 ? (
-                          <p className="mt-3 text-[13px] text-[#9b9a97]">No open issues.</p>
+                        {linkedIssues.length === 0 ? (
+                          <p className="mt-3 text-[13px] text-[#9b9a97]">No linked issues.</p>
                         ) : (
                           <div className="mt-3 space-y-3">
-                            {openIssues.slice(0, 4).map((issue, index) => (
+                            {linkedIssues.slice(0, 6).map((issue) => (
                               <div
-                                key={`${selectedSession.id}-issue-${index}`}
+                                key={`${selectedSession.id}-issue-${issue.id}`}
                                 className="rounded-xl border border-[#ecebe8] bg-white p-3"
                               >
-                                <p className="font-mono text-[11px] text-[#37352f]">
-                                  {toStringValue(issue.id, "issue")}
-                                </p>
-                                <p className="mt-2 text-[13px] text-[#6b6b6b]">
-                                  {toStringValue(issue.title, toStringValue(issue.message, "Issue requires review"))}
-                                </p>
-                                <p className="mt-2 text-[12px] text-[#9b9a97]">
-                                  {toStringValue(issue.root_cause, toStringValue(issue.severity, "unknown"))}
-                                </p>
+                                <div className="flex flex-wrap items-start justify-between gap-3">
+                                  <div>
+                                    <div className="flex flex-wrap items-center gap-2">
+                                      <p className="font-mono text-[11px] text-[#37352f]">
+                                        {issue.id}
+                                      </p>
+                                      <Badge
+                                        variant="outline"
+                                        className={`rounded-full px-2.5 py-1 text-[11px] font-semibold capitalize ${issueStatusClass(issue.status)}`}
+                                      >
+                                        {issue.status}
+                                      </Badge>
+                                      <Badge
+                                        variant="outline"
+                                        className={`rounded-full px-2.5 py-1 text-[11px] font-semibold capitalize ${issueSeverityClass(issue.severity)}`}
+                                      >
+                                        {issue.severity}
+                                      </Badge>
+                                      <Badge
+                                        variant="outline"
+                                        className="rounded-full border-[#e5e5e3] bg-[#fafaf9] px-2.5 py-1 text-[11px] font-medium text-[#37352f]"
+                                      >
+                                        {issue.category}
+                                      </Badge>
+                                    </div>
+                                    <p className="mt-2 text-[13px] text-[#6b6b6b]">
+                                      {issue.title || "Issue requires review"}
+                                    </p>
+                                    <p className="mt-2 text-[12px] text-[#9b9a97]">
+                                      {issue.root_cause || issue.description || "No root cause recorded"}
+                                    </p>
+                                    <p className="mt-2 text-[12px] text-[#9b9a97]">
+                                      {formatTimestamp(issue.created_at)}
+                                      {issue.related_command ? ` · command ${issue.related_command}` : ""}
+                                    </p>
+                                  </div>
+                                  <div className="flex flex-wrap gap-2">
+                                    {issue.status === "open" && (
+                                      <Button
+                                        size="sm"
+                                        variant="outline"
+                                        className="h-8 rounded-lg border-[#e5e5e3] bg-white text-[12px] text-[#37352f] hover:bg-[#f7f7f5]"
+                                        disabled={Boolean(busyActionKey)}
+                                        onClick={() => {
+                                          void resolveIssue(issue);
+                                        }}
+                                      >
+                                        {busyActionKey === `issue-resolve:${issue.id}` ? "Resolving..." : "Resolve"}
+                                      </Button>
+                                    )}
+                                  </div>
+                                </div>
                               </div>
                             ))}
                           </div>
