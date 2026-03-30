@@ -86,8 +86,21 @@ type PendingAgentTimelineTarget = {
   issueId: string;
 };
 
+type LinkedSelectionContext = {
+  runId?: string;
+  resultIndex?: number;
+  approvalId?: string;
+  issueId?: string;
+  runtimeAgentId?: string;
+  event?: Record<string, unknown> | null;
+};
+
 function agentTimelineEntryKey(entry: AgentTimelineEntry): string {
   return `${entry.kind}:${entry.id}`;
+}
+
+function sessionEventKey(event: Record<string, unknown>, fallback = ""): string {
+  return `${toStringValue(event.event, "event")}:${toStringValue(event.timestamp, fallback || "unknown")}`;
 }
 
 function findRunResultIndexByApprovalId(
@@ -213,6 +226,131 @@ function resolveAgentTimelineEntryFromTarget(
       return eventRunId === target.runId;
     });
     if (runEvent) return runEvent;
+  }
+
+  return null;
+}
+
+function resolveRunLinkFromContext(
+  runs: ExecutionAgentActionRunRecord[],
+  context: LinkedSelectionContext
+): { run: ExecutionAgentActionRunRecord; resultIndex: number } | null {
+  const linkedRunId = toStringValue(context.runId);
+  const linkedApprovalId = toStringValue(context.approvalId);
+  const linkedIssueId = toStringValue(context.issueId);
+
+  if (linkedRunId) {
+    const directRun = runs.find((run) => run.id === linkedRunId);
+    if (directRun) {
+      const approvalIndex = findRunResultIndexByApprovalId(directRun, linkedApprovalId);
+      if (approvalIndex >= 0) {
+        return { run: directRun, resultIndex: approvalIndex };
+      }
+      const issueIndex = findRunResultIndexByIssueId(directRun, linkedIssueId);
+      if (issueIndex >= 0) {
+        return { run: directRun, resultIndex: issueIndex };
+      }
+      if (typeof context.resultIndex === "number" && context.resultIndex >= 0) {
+        return { run: directRun, resultIndex: context.resultIndex };
+      }
+      return { run: directRun, resultIndex: 0 };
+    }
+  }
+
+  if (linkedApprovalId) {
+    for (const run of runs) {
+      const resultIndex = findRunResultIndexByApprovalId(run, linkedApprovalId);
+      if (resultIndex >= 0) {
+        return { run, resultIndex };
+      }
+    }
+  }
+
+  if (linkedIssueId) {
+    for (const run of runs) {
+      const resultIndex = findRunResultIndexByIssueId(run, linkedIssueId);
+      if (resultIndex >= 0) {
+        return { run, resultIndex };
+      }
+    }
+  }
+
+  return null;
+}
+
+function resolveSessionEventFromContext(
+  events: Record<string, unknown>[],
+  context: LinkedSelectionContext
+): { event: Record<string, unknown>; key: string } | null {
+  const linkedRunId = toStringValue(context.runId);
+  const linkedApprovalId = toStringValue(context.approvalId);
+  const linkedIssueId = toStringValue(context.issueId);
+  const linkedRuntimeAgentId =
+    toStringValue(context.runtimeAgentId) ||
+    toStringValue(context.event?.runtime_agent_id) ||
+    toStringArray(context.event?.runtime_agent_ids)[0];
+
+  if (context.event) {
+    const exactEventKey = sessionEventKey(context.event);
+    const exactEvent = events.find((event) => sessionEventKey(event) === exactEventKey);
+    if (exactEvent) {
+      return { event: exactEvent, key: exactEventKey };
+    }
+  }
+
+  const exactMatch = events.find((event) => {
+    const eventRunId =
+      toStringValue(event.agent_action_run_id) || toStringValue(event.run_id);
+    const eventApprovalId = toStringValue(event.approval_id);
+    const eventIssueId = toStringValue(event.issue_id);
+    return (
+      eventRunId === linkedRunId &&
+      ((linkedApprovalId && eventApprovalId === linkedApprovalId) ||
+        (linkedIssueId && eventIssueId === linkedIssueId))
+    );
+  });
+  if (exactMatch) {
+    return { event: exactMatch, key: sessionEventKey(exactMatch) };
+  }
+
+  if (linkedApprovalId) {
+    const approvalEvent = events.find(
+      (event) => toStringValue(event.approval_id) === linkedApprovalId
+    );
+    if (approvalEvent) {
+      return { event: approvalEvent, key: sessionEventKey(approvalEvent) };
+    }
+  }
+
+  if (linkedIssueId) {
+    const issueEvent = events.find((event) => toStringValue(event.issue_id) === linkedIssueId);
+    if (issueEvent) {
+      return { event: issueEvent, key: sessionEventKey(issueEvent) };
+    }
+  }
+
+  if (linkedRunId) {
+    const runEvent = events.find((event) => {
+      const eventRunId =
+        toStringValue(event.agent_action_run_id) || toStringValue(event.run_id);
+      return eventRunId === linkedRunId;
+    });
+    if (runEvent) {
+      return { event: runEvent, key: sessionEventKey(runEvent) };
+    }
+  }
+
+  if (linkedRuntimeAgentId) {
+    const agentEvent = events.find((event) => {
+      const eventRuntimeAgentIds = [
+        toStringValue(event.runtime_agent_id),
+        ...toStringArray(event.runtime_agent_ids),
+      ].filter(Boolean);
+      return eventRuntimeAgentIds.includes(linkedRuntimeAgentId);
+    });
+    if (agentEvent) {
+      return { event: agentEvent, key: sessionEventKey(agentEvent) };
+    }
   }
 
   return null;
@@ -819,6 +957,9 @@ export default function ControlPlanePage() {
   const [selectedAgentTimelineKey, setSelectedAgentTimelineKey] = useState("");
   const [pendingAgentTimelineTarget, setPendingAgentTimelineTarget] =
     useState<PendingAgentTimelineTarget | null>(null);
+  const [selectedSessionApprovalId, setSelectedSessionApprovalId] = useState("");
+  const [selectedSessionIssueId, setSelectedSessionIssueId] = useState("");
+  const [selectedSessionEventKey, setSelectedSessionEventKey] = useState("");
   const [historySearch, setHistorySearch] = useState("");
   const [entitySearch, setEntitySearch] = useState("");
   const [refreshing, setRefreshing] = useState(false);
@@ -931,6 +1072,9 @@ export default function ControlPlanePage() {
       setSelectedAgentId("");
       setSelectedRunId("");
       setSelectedAgent(null);
+      setSelectedSessionApprovalId("");
+      setSelectedSessionIssueId("");
+      setSelectedSessionEventKey("");
       setEntitySearch("");
       setSelectedSession(null);
       return;
@@ -974,6 +1118,9 @@ export default function ControlPlanePage() {
 
   useEffect(() => {
     setEntitySearch("");
+    setSelectedSessionApprovalId("");
+    setSelectedSessionIssueId("");
+    setSelectedSessionEventKey("");
   }, [selectedSessionId]);
 
   useEffect(() => {
@@ -1395,6 +1542,86 @@ export default function ControlPlanePage() {
     if (!selectedRun) return null;
     return selectedRun.results[selectedRunResultIndex] ?? selectedRun.results[0] ?? null;
   }, [selectedRun, selectedRunResultIndex]);
+  const syncLinkedSelection = useCallback(
+    (context: LinkedSelectionContext) => {
+      const approvalId = toStringValue(context.approvalId);
+      const issueId = toStringValue(context.issueId);
+      const resolvedRunLink = resolveRunLinkFromContext(linkedRuns, context);
+      const runId = resolvedRunLink?.run.id || toStringValue(context.runId);
+      const resultIndex =
+        resolvedRunLink?.resultIndex ??
+        (typeof context.resultIndex === "number" ? context.resultIndex : 0);
+      const resolvedRunResult =
+        resolvedRunLink && resolvedRunLink.run.results[resolvedRunLink.resultIndex]
+          ? asRecord(resolvedRunLink.run.results[resolvedRunLink.resultIndex])
+          : null;
+      const runtimeAgentId =
+        toStringValue(context.runtimeAgentId) ||
+        outcomeRuntimeAgentId(resolvedRunResult || {}) ||
+        toStringValue(context.event?.runtime_agent_id) ||
+        toStringArray(context.event?.runtime_agent_ids)[0];
+      const matchedEvent = resolveSessionEventFromContext(selectedSession?.events || [], {
+        ...context,
+        runId,
+        approvalId,
+        issueId,
+        runtimeAgentId,
+      });
+
+      setSelectedSessionApprovalId(approvalId);
+      setSelectedSessionIssueId(issueId);
+      setSelectedSessionEventKey(matchedEvent?.key || "");
+
+      if (runId) {
+        setSelectedRunId(runId);
+        setSelectedRunResultIndex(resultIndex);
+      }
+
+      if (runtimeAgentId) {
+        setSelectedAgentId(runtimeAgentId);
+        setAgentTimelineFilter("all");
+        setAgentTimelineSearch("");
+        setSelectedAgentTimelineKey("");
+        setPendingAgentTimelineTarget({
+          runtimeAgentId,
+          runId,
+          approvalId,
+          issueId,
+        });
+      }
+    },
+    [linkedRuns, selectedSession]
+  );
+  useEffect(() => {
+    if (!selectedRun || !selectedRunResult) {
+      setSelectedSessionApprovalId("");
+      setSelectedSessionIssueId("");
+      setSelectedSessionEventKey("");
+      return;
+    }
+    const approvalId = toStringValue(asRecord(selectedRunResult.approval)?.id);
+    const issueId = toStringValue(asRecord(selectedRunResult.issue)?.id);
+    const runtimeAgentId = outcomeRuntimeAgentId(selectedRunResult);
+    const matchedEvent = resolveSessionEventFromContext(selectedSession?.events || [], {
+      runId: selectedRun.id,
+      approvalId,
+      issueId,
+      runtimeAgentId,
+    });
+
+    setSelectedSessionApprovalId(approvalId);
+    setSelectedSessionIssueId(issueId);
+    setSelectedSessionEventKey(matchedEvent?.key || "");
+
+    if (runtimeAgentId) {
+      setPendingAgentTimelineTarget({
+        runtimeAgentId,
+        runId: selectedRun.id,
+        approvalId,
+        issueId,
+      });
+    }
+  }, [selectedRun, selectedRunResult, selectedSession]);
   const openSelectedRunResultInTimeline = useCallback(() => {
     if (!selectedRun || !selectedRunResult) return;
     const runtimeAgentId = outcomeRuntimeAgentId(selectedRunResult);
@@ -2932,8 +3159,24 @@ export default function ControlPlanePage() {
                                             ? "bg-[#1a1a1a] text-white hover:bg-[#333]"
                                             : "border-[#e5e5e3] bg-white text-[#37352f] hover:bg-[#f7f7f5]"
                                         }`}
-                                        onClick={() => {
+                                  onClick={() => {
+                                          const relatedRunLink = resolveAgentTimelineRunLink(entry, linkedRuns);
                                           setSelectedAgentTimelineKey(agentTimelineEntryKey(entry));
+                                          syncLinkedSelection({
+                                            runId:
+                                              relatedRunLink?.run.id ||
+                                              toStringValue(entry.event?.agent_action_run_id) ||
+                                              toStringValue(entry.event?.run_id),
+                                            resultIndex: relatedRunLink?.resultIndex,
+                                            approvalId:
+                                              entry.approval?.id ||
+                                              entry.issue?.approval_id ||
+                                              toStringValue(entry.event?.approval_id),
+                                            issueId:
+                                              entry.issue?.id || toStringValue(entry.event?.issue_id),
+                                            runtimeAgentId: selectedAgent.runtime_agent_id,
+                                            event: entry.event || null,
+                                          });
                                         }}
                                       >
                                         {selected ? "Selected" : "Inspect"}
@@ -4219,7 +4462,7 @@ export default function ControlPlanePage() {
                           </p>
                         ) : (
                           <div className="mt-3 space-y-3">
-                            {filteredEvents.slice(-6).reverse().map((event) => (
+                            {filteredEvents.slice(-6).reverse().map((event, index) => (
                               (() => {
                                 const eventApprovalId = toStringValue(event.approval_id);
                                 const eventIssueId = toStringValue(event.issue_id);
@@ -4228,10 +4471,14 @@ export default function ControlPlanePage() {
                                   toStringValue(event.runtime_agent_id),
                                   ...toStringArray(event.runtime_agent_ids),
                                 ].filter(Boolean);
+                                const eventKey = sessionEventKey(event, String(index));
+                                const selected = selectedSessionEventKey === eventKey;
                                 return (
                                   <div
-                                    key={`${toStringValue(event.event)}-${toStringValue(event.timestamp)}`}
-                                    className="rounded-xl border border-[#ecebe8] bg-white p-3"
+                                    key={eventKey}
+                                    className={`rounded-xl border p-3 ${
+                                      selected ? "border-[#d3e5ef] bg-[#f7fbfd]" : "border-[#ecebe8] bg-white"
+                                    }`}
                                   >
                                     <div className="flex flex-wrap items-center justify-between gap-2">
                                       <div className="flex flex-wrap items-center gap-2">
@@ -4251,6 +4498,28 @@ export default function ControlPlanePage() {
                                       >
                                         {toStringValue(event.status, "unknown")}
                                       </Badge>
+                                      <Button
+                                        size="sm"
+                                        variant={selected ? "default" : "outline"}
+                                        className={`h-7 rounded-lg px-2 text-[11px] ${
+                                          selected
+                                            ? "bg-[#1a1a1a] text-white hover:bg-[#333]"
+                                            : "border-[#e5e5e3] bg-white text-[#37352f] hover:bg-[#f7f7f5]"
+                                        }`}
+                                        onClick={() => {
+                                          syncLinkedSelection({
+                                            event,
+                                            runId:
+                                              toStringValue(event.agent_action_run_id) ||
+                                              toStringValue(event.run_id),
+                                            approvalId: eventApprovalId,
+                                            issueId: eventIssueId,
+                                            runtimeAgentId: eventRuntimeAgentIds[0],
+                                          });
+                                        }}
+                                      >
+                                        {selected ? "Selected" : "Inspect"}
+                                      </Button>
                                     </div>
                                     <p className="mt-2 text-[13px] text-[#6b6b6b]">
                                       {toStringValue(event.message, "No event message")}
@@ -4520,10 +4789,14 @@ export default function ControlPlanePage() {
                           </p>
                         ) : (
                           <div className="mt-3 space-y-3">
-                            {filteredApprovals.slice(0, 6).map((approval) => (
+                            {filteredApprovals.slice(0, 6).map((approval) => {
+                              const selected = selectedSessionApprovalId === approval.id;
+                              return (
                               <div
                                 key={`${selectedSession.id}-approval-${approval.id}`}
-                                className="rounded-xl border border-[#ecebe8] bg-white p-3"
+                                className={`rounded-xl border p-3 ${
+                                  selected ? "border-[#d3e5ef] bg-[#f7fbfd]" : "border-[#ecebe8] bg-white"
+                                }`}
                               >
                                 <div className="flex flex-wrap items-start justify-between gap-3">
                                   <div>
@@ -4543,6 +4816,24 @@ export default function ControlPlanePage() {
                                       >
                                         {approval.action}
                                       </Badge>
+                                      <Button
+                                        size="sm"
+                                        variant={selected ? "default" : "outline"}
+                                        className={`h-7 rounded-lg px-2 text-[11px] ${
+                                          selected
+                                            ? "bg-[#1a1a1a] text-white hover:bg-[#333]"
+                                            : "border-[#e5e5e3] bg-white text-[#37352f] hover:bg-[#f7f7f5]"
+                                        }`}
+                                        onClick={() => {
+                                          syncLinkedSelection({
+                                            approvalId: approval.id,
+                                            issueId: approval.issue_id,
+                                            runtimeAgentId: approval.runtime_agent_ids[0],
+                                          });
+                                        }}
+                                      >
+                                        {selected ? "Selected" : "Inspect"}
+                                      </Button>
                                     </div>
                                     <p className="mt-2 text-[13px] text-[#6b6b6b]">
                                       {approval.reason || `Approval requested for ${approval.action}.`}
@@ -4630,7 +4921,7 @@ export default function ControlPlanePage() {
                                   </div>
                                 </div>
                               </div>
-                            ))}
+                            )})}
                           </div>
                         )}
                       </div>
@@ -4655,10 +4946,14 @@ export default function ControlPlanePage() {
                           </p>
                         ) : (
                           <div className="mt-3 space-y-3">
-                            {filteredIssues.slice(0, 6).map((issue) => (
+                            {filteredIssues.slice(0, 6).map((issue) => {
+                              const selected = selectedSessionIssueId === issue.id;
+                              return (
                               <div
                                 key={`${selectedSession.id}-issue-${issue.id}`}
-                                className="rounded-xl border border-[#ecebe8] bg-white p-3"
+                                className={`rounded-xl border p-3 ${
+                                  selected ? "border-[#d3e5ef] bg-[#f7fbfd]" : "border-[#ecebe8] bg-white"
+                                }`}
                               >
                                 <div className="flex flex-wrap items-start justify-between gap-3">
                                   <div>
@@ -4684,6 +4979,25 @@ export default function ControlPlanePage() {
                                       >
                                         {issue.category}
                                       </Badge>
+                                      <Button
+                                        size="sm"
+                                        variant={selected ? "default" : "outline"}
+                                        className={`h-7 rounded-lg px-2 text-[11px] ${
+                                          selected
+                                            ? "bg-[#1a1a1a] text-white hover:bg-[#333]"
+                                            : "border-[#e5e5e3] bg-white text-[#37352f] hover:bg-[#f7f7f5]"
+                                        }`}
+                                        onClick={() => {
+                                          syncLinkedSelection({
+                                            issueId: issue.id,
+                                            approvalId: issue.approval_id,
+                                            runtimeAgentId:
+                                              issue.runtime_agent_ids[0] || issue.runtime_agent_id,
+                                          });
+                                        }}
+                                      >
+                                        {selected ? "Selected" : "Inspect"}
+                                      </Button>
                                     </div>
                                     <p className="mt-2 text-[13px] text-[#6b6b6b]">
                                       {issue.title || "Issue requires review"}
@@ -4747,7 +5061,7 @@ export default function ControlPlanePage() {
                                   </div>
                                 </div>
                               </div>
-                            ))}
+                            )})}
                           </div>
                         )}
                       </div>
