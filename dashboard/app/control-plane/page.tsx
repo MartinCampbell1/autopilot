@@ -58,6 +58,7 @@ const DATE_FORMATTER = new Intl.DateTimeFormat(undefined, {
 
 const DEFAULT_CONTROL_ACTOR = "dashboard-control-plane";
 const LINEAGE_QUEUE_STORAGE_PREFIX = "control-plane:lineage-queue:";
+const AGENT_TIMELINE_STORAGE_PREFIX = "control-plane:agent-timeline:";
 
 type AgentScopedOutcome = {
   run: ExecutionAgentActionRunRecord;
@@ -101,6 +102,10 @@ type LineageQueueKind = "attention" | "decisions";
 type PersistedLineageQueueState = {
   dismissed?: Partial<Record<LineageQueueKind, string[]>>;
   snoozedUntil?: Partial<Record<LineageQueueKind, Record<string, number>>>;
+};
+type PersistedAgentTimelineState = {
+  dismissed?: string[];
+  snoozedUntil?: Record<string, number>;
 };
 type RelationshipTone = "run" | "outcome" | "approval" | "issue" | "event" | "agent";
 type RelationshipStripItem = {
@@ -767,6 +772,43 @@ function lineageQueueStorageKey(sessionId: string): string {
   return `${LINEAGE_QUEUE_STORAGE_PREFIX}${sessionId}`;
 }
 
+function sanitizePersistedAgentTimelineState(
+  value: PersistedAgentTimelineState | null | undefined,
+  now: number
+): {
+  dismissed: string[];
+  snoozedUntil: Record<string, number>;
+} {
+  const dismissed = Array.isArray(value?.dismissed)
+    ? [...new Set(value.dismissed.filter((entry): entry is string => typeof entry === "string"))]
+    : [];
+  const snoozedUntil: Record<string, number> = {};
+  const rawSnoozed = asRecord(value?.snoozedUntil);
+  if (rawSnoozed) {
+    Object.entries(rawSnoozed).forEach(([entryKey, until]) => {
+      if (!entryKey) return;
+      if (typeof until !== "number" || !Number.isFinite(until)) return;
+      if (until <= now) return;
+      snoozedUntil[entryKey] = until;
+    });
+  }
+  return {
+    dismissed,
+    snoozedUntil,
+  };
+}
+
+function isPersistedAgentTimelineStateEmpty(state: {
+  dismissed: string[];
+  snoozedUntil: Record<string, number>;
+}): boolean {
+  return state.dismissed.length === 0 && Object.keys(state.snoozedUntil).length === 0;
+}
+
+function agentTimelineStorageKey(runtimeAgentId: string): string {
+  return `${AGENT_TIMELINE_STORAGE_PREFIX}${runtimeAgentId}`;
+}
+
 function visibleSessionLineageQueueEntries(
   entries: SessionLineageEntry[],
   dismissedKeys: string[],
@@ -1238,6 +1280,10 @@ export default function ControlPlanePage() {
   const [selectedAgentTimelineKey, setSelectedAgentTimelineKey] = useState("");
   const [pendingAgentTimelineTarget, setPendingAgentTimelineTarget] =
     useState<PendingAgentTimelineTarget | null>(null);
+  const [dismissedAgentTimelineKeys, setDismissedAgentTimelineKeys] = useState<string[]>([]);
+  const [snoozedAgentTimelineUntil, setSnoozedAgentTimelineUntil] = useState<Record<string, number>>(
+    {}
+  );
   const [pendingLineageAutoAdvance, setPendingLineageAutoAdvance] = useState<{
     filter: "attention" | "decisions";
     previousKey: string;
@@ -1269,6 +1315,7 @@ export default function ControlPlanePage() {
   const [busyActionKey, setBusyActionKey] = useState("");
   const [notice, setNotice] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
+  const [hydratedAgentTimelineStorageKey, setHydratedAgentTimelineStorageKey] = useState("");
   const [hydratedLineageQueueSessionId, setHydratedLineageQueueSessionId] = useState("");
   const selectedSessionLineageEntryRef = useRef<SessionLineageEntry | null>(null);
   const sessionLineageFilterRef = useRef("all");
@@ -1585,6 +1632,77 @@ export default function ControlPlanePage() {
     setAgentTimelineSearch("");
     setSelectedAgentTimelineKey("");
   }, [selectedAgentId]);
+
+  useEffect(() => {
+    if (!selectedAgentId) {
+      setDismissedAgentTimelineKeys([]);
+      setSnoozedAgentTimelineUntil({});
+      setHydratedAgentTimelineStorageKey("");
+      return;
+    }
+
+    const now = Date.now();
+    setLineageQueueNow(now);
+    setHydratedAgentTimelineStorageKey("");
+
+    if (typeof window === "undefined") {
+      setDismissedAgentTimelineKeys([]);
+      setSnoozedAgentTimelineUntil({});
+      setHydratedAgentTimelineStorageKey(agentTimelineStorageKey(selectedAgentId));
+      return;
+    }
+
+    const storageKey = agentTimelineStorageKey(selectedAgentId);
+    const raw = window.localStorage.getItem(storageKey);
+    let parsed: PersistedAgentTimelineState | null = null;
+    if (raw) {
+      try {
+        parsed = JSON.parse(raw) as PersistedAgentTimelineState;
+      } catch {
+        parsed = null;
+      }
+    }
+
+    const sanitized = sanitizePersistedAgentTimelineState(parsed, now);
+    setDismissedAgentTimelineKeys(sanitized.dismissed);
+    setSnoozedAgentTimelineUntil(sanitized.snoozedUntil);
+    setHydratedAgentTimelineStorageKey(storageKey);
+
+    if (isPersistedAgentTimelineStateEmpty(sanitized)) {
+      window.localStorage.removeItem(storageKey);
+      return;
+    }
+    window.localStorage.setItem(storageKey, JSON.stringify(sanitized));
+  }, [selectedAgentId]);
+
+  useEffect(() => {
+    if (!selectedAgentId) return;
+    const storageKey = agentTimelineStorageKey(selectedAgentId);
+    if (hydratedAgentTimelineStorageKey !== storageKey) {
+      return;
+    }
+    if (typeof window === "undefined") return;
+
+    const sanitized = sanitizePersistedAgentTimelineState(
+      {
+        dismissed: dismissedAgentTimelineKeys,
+        snoozedUntil: snoozedAgentTimelineUntil,
+      },
+      lineageQueueNow
+    );
+
+    if (isPersistedAgentTimelineStateEmpty(sanitized)) {
+      window.localStorage.removeItem(storageKey);
+      return;
+    }
+    window.localStorage.setItem(storageKey, JSON.stringify(sanitized));
+  }, [
+    dismissedAgentTimelineKeys,
+    hydratedAgentTimelineStorageKey,
+    lineageQueueNow,
+    selectedAgentId,
+    snoozedAgentTimelineUntil,
+  ]);
 
   useEffect(() => {
     const visibleRuns = ((selectedSession?.runs || []) as ExecutionAgentActionRunRecord[]).filter(
@@ -2403,6 +2521,66 @@ export default function ControlPlanePage() {
       );
     }
   }, [persistedLineageQueueState, selectedSessionId]);
+  const dismissAgentTimelineEntry = useCallback((entry: AgentTimelineEntry) => {
+    const entryKey = agentTimelineEntryKey(entry);
+    setDismissedAgentTimelineKeys((current) =>
+      current.includes(entryKey) ? current : [...current, entryKey]
+    );
+    setLineageQueueNow(Date.now());
+  }, []);
+  const snoozeAgentTimelineEntry = useCallback((entry: AgentTimelineEntry, minutes = 15) => {
+    const entryKey = agentTimelineEntryKey(entry);
+    const snoozedUntil = Date.now() + minutes * 60 * 1000;
+    setSnoozedAgentTimelineUntil((current) => ({
+      ...current,
+      [entryKey]: snoozedUntil,
+    }));
+    setLineageQueueNow(Date.now());
+  }, []);
+  const restoreAgentTimelineHidden = useCallback(() => {
+    setDismissedAgentTimelineKeys([]);
+    setSnoozedAgentTimelineUntil({});
+    setLineageQueueNow(Date.now());
+  }, []);
+  const resetAgentTimelinePreferences = useCallback(() => {
+    setDismissedAgentTimelineKeys([]);
+    setSnoozedAgentTimelineUntil({});
+    setLineageQueueNow(Date.now());
+    setNotice("Agent timeline state reset.");
+    setErrorMessage("");
+    if (selectedAgentId && typeof window !== "undefined") {
+      window.localStorage.removeItem(agentTimelineStorageKey(selectedAgentId));
+    }
+  }, [selectedAgentId]);
+  const exportAgentTimelinePreferences = useCallback(async () => {
+    if (!selectedAgentId) return;
+    const timelineState = sanitizePersistedAgentTimelineState(
+      {
+        dismissed: dismissedAgentTimelineKeys,
+        snoozedUntil: snoozedAgentTimelineUntil,
+      },
+      lineageQueueNow
+    );
+    const payload = {
+      runtimeAgentId: selectedAgentId,
+      exportedAt: new Date().toISOString(),
+      timelineState,
+    };
+    const serialized = JSON.stringify(payload, null, 2);
+    try {
+      if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(serialized);
+        setNotice("Copied agent timeline state.");
+        setErrorMessage("");
+        return;
+      }
+      setErrorMessage("Clipboard is unavailable in this environment.");
+    } catch (error) {
+      setErrorMessage(
+        error instanceof Error ? error.message : "Failed to copy agent timeline state."
+      );
+    }
+  }, [dismissedAgentTimelineKeys, lineageQueueNow, selectedAgentId, snoozedAgentTimelineUntil]);
   useEffect(() => {
     if (!pendingLineageAutoAdvance) return;
     const entries =
@@ -2607,9 +2785,19 @@ export default function ControlPlanePage() {
         left.id.localeCompare(right.id)
     );
   }, [selectedAgent]);
+  const activeAgentTimelineEntries = useMemo(
+    () =>
+      agentTimelineEntries.filter((entry) => {
+        const entryKey = agentTimelineEntryKey(entry);
+        if (dismissedAgentTimelineKeys.includes(entryKey)) return false;
+        const snoozedUntil = snoozedAgentTimelineUntil[entryKey] ?? 0;
+        return snoozedUntil <= lineageQueueNow;
+      }),
+    [agentTimelineEntries, dismissedAgentTimelineKeys, lineageQueueNow, snoozedAgentTimelineUntil]
+  );
   const filteredAgentTimelineEntries = useMemo(
     () =>
-      agentTimelineEntries.filter(
+      activeAgentTimelineEntries.filter(
         (entry) =>
           matchesAgentTimelineFilter(entry, agentTimelineFilter) &&
           matchesSearch(
@@ -2627,7 +2815,7 @@ export default function ControlPlanePage() {
             agentTimelineSearch
           )
       ),
-    [agentTimelineEntries, agentTimelineFilter, agentTimelineSearch]
+    [activeAgentTimelineEntries, agentTimelineFilter, agentTimelineSearch]
   );
   useEffect(() => {
     if (!filteredAgentTimelineEntries.length) {
@@ -2658,16 +2846,43 @@ export default function ControlPlanePage() {
     [filteredAgentTimelineEntries, selectedAgentTimelineEntry]
   );
   const latestAgentApprovalEntry = useMemo(
-    () => agentTimelineEntries.find((entry) => entry.kind === "approval") ?? null,
-    [agentTimelineEntries]
+    () => activeAgentTimelineEntries.find((entry) => entry.kind === "approval") ?? null,
+    [activeAgentTimelineEntries]
   );
   const latestAgentIssueEntry = useMemo(
-    () => agentTimelineEntries.find((entry) => entry.kind === "issue") ?? null,
-    [agentTimelineEntries]
+    () => activeAgentTimelineEntries.find((entry) => entry.kind === "issue") ?? null,
+    [activeAgentTimelineEntries]
   );
   const latestAgentEventEntry = useMemo(
-    () => agentTimelineEntries.find((entry) => entry.kind === "event") ?? null,
-    [agentTimelineEntries]
+    () => activeAgentTimelineEntries.find((entry) => entry.kind === "event") ?? null,
+    [activeAgentTimelineEntries]
+  );
+  const hiddenAgentTimelineEntryCount = useMemo(
+    () => Math.max(agentTimelineEntries.length - activeAgentTimelineEntries.length, 0),
+    [activeAgentTimelineEntries.length, agentTimelineEntries.length]
+  );
+  const persistedAgentTimelineState = useMemo(
+    () =>
+      sanitizePersistedAgentTimelineState(
+        {
+          dismissed: dismissedAgentTimelineKeys,
+          snoozedUntil: snoozedAgentTimelineUntil,
+        },
+        lineageQueueNow
+      ),
+    [dismissedAgentTimelineKeys, lineageQueueNow, snoozedAgentTimelineUntil]
+  );
+  const persistedDismissedAgentTimelineCount = useMemo(
+    () => persistedAgentTimelineState.dismissed.length,
+    [persistedAgentTimelineState]
+  );
+  const persistedSnoozedAgentTimelineCount = useMemo(
+    () => Object.keys(persistedAgentTimelineState.snoozedUntil).length,
+    [persistedAgentTimelineState]
+  );
+  const hasPersistedAgentTimelinePreferences = useMemo(
+    () => !isPersistedAgentTimelineStateEmpty(persistedAgentTimelineState),
+    [persistedAgentTimelineState]
   );
   const selectedAgentTimelineRunLink = useMemo(
     () =>
@@ -4772,7 +4987,8 @@ export default function ControlPlanePage() {
                             variant="outline"
                             className="rounded-full border-[#e5e5e3] bg-white px-2.5 py-1 text-[11px] font-medium text-[#37352f]"
                           >
-                            {agentTimelineEntries.length} item{agentTimelineEntries.length === 1 ? "" : "s"}
+                            {activeAgentTimelineEntries.length} active
+                            {hiddenAgentTimelineEntryCount ? ` · ${hiddenAgentTimelineEntryCount} hidden` : ""}
                           </Badge>
                         </div>
 
@@ -4810,6 +5026,55 @@ export default function ControlPlanePage() {
                                 </Button>
                               );
                             })}
+                          </div>
+                          <div className="rounded-xl border border-[#ecebe8] bg-white p-3">
+                            <div className="flex flex-wrap items-center justify-between gap-3">
+                              <div>
+                                <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#9b9a97]">
+                                  Operator State
+                                </p>
+                                <p className="mt-1 text-[12px] text-[#787774]">
+                                  {persistedDismissedAgentTimelineCount} dismissed ·{" "}
+                                  {persistedSnoozedAgentTimelineCount} snoozed persisted for this agent
+                                </p>
+                              </div>
+                              <div className="flex flex-wrap gap-2">
+                                {hiddenAgentTimelineEntryCount ? (
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    className="h-7 rounded-lg border-[#e5e5e3] bg-white px-2 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
+                                    onClick={() => {
+                                      restoreAgentTimelineHidden();
+                                    }}
+                                  >
+                                    Restore hidden
+                                  </Button>
+                                ) : null}
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  className="h-7 rounded-lg border-[#e5e5e3] bg-white px-2 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
+                                  onClick={() => {
+                                    void exportAgentTimelinePreferences();
+                                  }}
+                                  disabled={!hasPersistedAgentTimelinePreferences}
+                                >
+                                  Copy timeline state
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  className="h-7 rounded-lg border-[#e5e5e3] bg-white px-2 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
+                                  onClick={() => {
+                                    resetAgentTimelinePreferences();
+                                  }}
+                                  disabled={!hasPersistedAgentTimelinePreferences}
+                                >
+                                  Reset timeline state
+                                </Button>
+                              </div>
+                            </div>
                           </div>
                         </div>
 
@@ -5007,6 +5272,26 @@ export default function ControlPlanePage() {
                                         Filter session
                                       </Button>
                                     )}
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      className="h-7 rounded-full border-[#e5e5e3] bg-white px-2.5 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
+                                      onClick={() => {
+                                        snoozeAgentTimelineEntry(entry);
+                                      }}
+                                    >
+                                      Snooze 15m
+                                    </Button>
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      className="h-7 rounded-full border-[#e5e5e3] bg-white px-2.5 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
+                                      onClick={() => {
+                                        dismissAgentTimelineEntry(entry);
+                                      }}
+                                    >
+                                      Dismiss
+                                    </Button>
                                   </div>
                                 </div>
                               );
