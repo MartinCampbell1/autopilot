@@ -13,9 +13,13 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import {
+  applyExecutionPlaneOrchestratorSessionControlPlan,
+  applyExecutionPlaneOrchestratorSessionRecommendation,
   fetchAccountsHealth,
-  fetchExecutionPlaneControlPasses,
   fetchExecutionPlaneControlPassSummary,
+  fetchExecutionPlaneControlPasses,
+  fetchExecutionPlaneOrchestratorSession,
+  fetchExecutionPlaneOrchestratorSessionControlProfiles,
   fetchExecutionPlaneOrchestratorSessions,
   fetchExecutionPlaneOrchestratorSessionSummary,
   fetchProjects,
@@ -26,6 +30,9 @@ import type {
   ExecutionPlaneCountMap,
   OrchestratorControlPassRecord,
   OrchestratorControlPassSummary,
+  OrchestratorSessionControlProfile,
+  OrchestratorSessionControlRecommendation,
+  OrchestratorSessionDetail,
   OrchestratorSessionRecord,
   OrchestratorSessionSummary,
   ProjectSummary,
@@ -37,6 +44,8 @@ const DATE_FORMATTER = new Intl.DateTimeFormat(undefined, {
   hour: "2-digit",
   minute: "2-digit",
 });
+
+const DEFAULT_CONTROL_ACTOR = "dashboard-control-plane";
 
 function formatTimestamp(value?: string | null): string {
   if (!value) return "No activity yet";
@@ -89,6 +98,46 @@ function sessionStatusClass(status: string): string {
     default:
       return "border-[#e5e5e3] bg-white text-[#37352f]";
   }
+}
+
+function controlStateClass(state: string): string {
+  switch (state) {
+    case "healthy":
+      return "border-[#d6e9dc] bg-[#eef8f1] text-[#2b6e3f]";
+    case "actionable":
+      return "border-[#d3e5ef] bg-[#eef7fb] text-[#2a6690]";
+    case "needs_approval":
+      return "border-[#f4e0c4] bg-[#fff6e8] text-[#9a6700]";
+    case "attention_required":
+      return "border-[#f0d0c9] bg-[#fff0ed] text-[#93370d]";
+    case "closed":
+      return "border-[#e5e5e3] bg-[#f7f7f5] text-[#787774]";
+    default:
+      return "border-[#e5e5e3] bg-white text-[#37352f]";
+  }
+}
+
+function priorityClass(priority: string): string {
+  switch (priority) {
+    case "high":
+      return "border-[#f0d0c9] bg-[#fff0ed] text-[#93370d]";
+    case "medium":
+      return "border-[#d3e5ef] bg-[#eef7fb] text-[#2a6690]";
+    case "low":
+      return "border-[#e5e5e3] bg-[#f7f7f5] text-[#787774]";
+    default:
+      return "border-[#e5e5e3] bg-white text-[#37352f]";
+  }
+}
+
+function recommendationActionLabel(recommendation: OrchestratorSessionControlRecommendation): string {
+  const operationType = toStringValue(recommendation.operation.type);
+  const operationMode = toStringValue(recommendation.operation.mode);
+  if (operationType === "session_action_batch" && operationMode === "preview") return "Preview";
+  if (operationType === "inspect_session_approvals") return "Inspect approvals";
+  if (operationType === "inspect_session_issues") return "Inspect issues";
+  if (operationType === "session_status_update") return "Complete session";
+  return "Apply";
 }
 
 function BreakdownChips({
@@ -147,6 +196,24 @@ function SummaryStat({
   );
 }
 
+function SessionMetric({
+  label,
+  value,
+  detail,
+}: {
+  label: string;
+  value: string;
+  detail: string;
+}) {
+  return (
+    <div className="rounded-xl border border-[#ecebe8] bg-white px-3 py-2">
+      <p className="text-[11px] uppercase tracking-[0.08em] text-[#9b9a97]">{label}</p>
+      <p className="mt-1 text-[16px] font-semibold text-[#37352f]">{value}</p>
+      <p className="mt-1 text-[12px] text-[#787774]">{detail}</p>
+    </div>
+  );
+}
+
 export default function ControlPlanePage() {
   const [health, setHealth] = useState<AccountHealth | null>(null);
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
@@ -154,10 +221,17 @@ export default function ControlPlanePage() {
   const [controlSummary, setControlSummary] = useState<OrchestratorControlPassSummary | null>(null);
   const [sessions, setSessions] = useState<OrchestratorSessionRecord[]>([]);
   const [sessionSummary, setSessionSummary] = useState<OrchestratorSessionSummary | null>(null);
-  const [message, setMessage] = useState("");
+  const [controlProfiles, setControlProfiles] = useState<OrchestratorSessionControlProfile[]>([]);
+  const [selectedSessionId, setSelectedSessionId] = useState("");
+  const [selectedPassId, setSelectedPassId] = useState("");
+  const [selectedSession, setSelectedSession] = useState<OrchestratorSessionDetail | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [sessionLoading, setSessionLoading] = useState(false);
+  const [busyActionKey, setBusyActionKey] = useState("");
+  const [notice, setNotice] = useState("");
+  const [errorMessage, setErrorMessage] = useState("");
 
-  const load = useCallback(async () => {
+  const loadOverview = useCallback(async () => {
     try {
       const [
         healthData,
@@ -166,6 +240,7 @@ export default function ControlPlanePage() {
         controlPassSummaryData,
         sessionData,
         sessionSummaryData,
+        profileData,
       ] = await Promise.all([
         fetchAccountsHealth(),
         fetchProjects(false),
@@ -173,6 +248,7 @@ export default function ControlPlanePage() {
         fetchExecutionPlaneControlPassSummary(),
         fetchExecutionPlaneOrchestratorSessions(),
         fetchExecutionPlaneOrchestratorSessionSummary(),
+        fetchExecutionPlaneOrchestratorSessionControlProfiles(),
       ]);
       setHealth(healthData);
       setProjects((projectData.projects || []) as ProjectSummary[]);
@@ -180,32 +256,173 @@ export default function ControlPlanePage() {
       setControlSummary(controlPassSummaryData);
       setSessions((sessionData.sessions || []) as OrchestratorSessionRecord[]);
       setSessionSummary(sessionSummaryData);
-      setMessage("");
+      setControlProfiles((profileData.profiles || []) as OrchestratorSessionControlProfile[]);
+      setErrorMessage("");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Failed to load control plane.");
+      setErrorMessage(error instanceof Error ? error.message : "Failed to load control plane.");
     }
   }, []);
 
+  const loadSessionDetail = useCallback(async (sessionId: string) => {
+    const detail = await fetchExecutionPlaneOrchestratorSession(sessionId, { eventLimit: 12 });
+    setSelectedSession(detail);
+    setSelectedPassId((current) => {
+      if (current && detail.control_passes.some((controlPass) => controlPass.id === current)) {
+        return current;
+      }
+      return detail.control_passes[0]?.id ?? current;
+    });
+    return detail;
+  }, []);
+
   useEffect(() => {
-    void load();
+    void loadOverview();
     const interval = setInterval(() => {
-      void load();
+      void loadOverview();
     }, 15000);
     return () => clearInterval(interval);
-  }, [load]);
+  }, [loadOverview]);
 
   useSSE(
     useCallback(() => {
-      void load();
-    }, [load])
+      void loadOverview();
+      if (selectedSessionId) {
+        void loadSessionDetail(selectedSessionId).catch(() => {
+          // Keep current detail state on transient SSE fetch failures.
+        });
+      }
+    }, [loadOverview, loadSessionDetail, selectedSessionId])
   );
+
+  useEffect(() => {
+    if (sessions.length === 0) {
+      setSelectedSessionId("");
+      setSelectedSession(null);
+      return;
+    }
+    setSelectedSessionId((current) =>
+      sessions.some((session) => session.id === current) ? current : sessions[0].id
+    );
+  }, [sessions]);
+
+  useEffect(() => {
+    if (controlPasses.length === 0) {
+      setSelectedPassId("");
+      return;
+    }
+    setSelectedPassId((current) =>
+      controlPasses.some((controlPass) => controlPass.id === current)
+        ? current
+        : controlPasses[0].id
+    );
+  }, [controlPasses]);
+
+  useEffect(() => {
+    if (!selectedSessionId) {
+      setSelectedSession(null);
+      return;
+    }
+
+    let cancelled = false;
+    setSessionLoading(true);
+    fetchExecutionPlaneOrchestratorSession(selectedSessionId, { eventLimit: 12 })
+      .then((detail) => {
+        if (cancelled) return;
+        setSelectedSession(detail);
+        setSelectedPassId((current) => {
+          if (current && detail.control_passes.some((controlPass) => controlPass.id === current)) {
+            return current;
+          }
+          return detail.control_passes[0]?.id ?? current;
+        });
+        setErrorMessage("");
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        setSelectedSession(null);
+        setErrorMessage(
+          error instanceof Error ? error.message : "Failed to load orchestrator session detail."
+        );
+      })
+      .finally(() => {
+        if (!cancelled) setSessionLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedSessionId]);
 
   const refresh = async () => {
     setRefreshing(true);
     try {
-      await load();
+      await loadOverview();
+      if (selectedSessionId) {
+        await loadSessionDetail(selectedSessionId);
+      }
     } finally {
       setRefreshing(false);
+    }
+  };
+
+  const refreshAfterMutation = useCallback(
+    async (sessionId: string) => {
+      await loadOverview();
+      await loadSessionDetail(sessionId);
+    },
+    [loadOverview, loadSessionDetail]
+  );
+
+  const applyRecommendation = async (recommendation: OrchestratorSessionControlRecommendation) => {
+    if (!selectedSessionId) return;
+    const actionKey = `recommendation:${recommendation.kind}`;
+    setBusyActionKey(actionKey);
+    setNotice("");
+    setErrorMessage("");
+
+    try {
+      const payload = await applyExecutionPlaneOrchestratorSessionRecommendation(selectedSessionId, {
+        recommendationKind: recommendation.kind,
+        actor: DEFAULT_CONTROL_ACTOR,
+        reason: `Dashboard applied session recommendation ${recommendation.kind}`,
+      });
+      setNotice(
+        `${payload.recommendation.title || recommendation.kind} finished with status ${payload.status}.`
+      );
+      await refreshAfterMutation(selectedSessionId);
+    } catch (error) {
+      setErrorMessage(
+        error instanceof Error ? error.message : "Failed to apply session recommendation."
+      );
+    } finally {
+      setBusyActionKey("");
+    }
+  };
+
+  const applyControlPlan = async (profile: OrchestratorSessionControlProfile) => {
+    if (!selectedSessionId) return;
+    const actionKey = `profile:${profile.name}`;
+    setBusyActionKey(actionKey);
+    setNotice("");
+    setErrorMessage("");
+
+    try {
+      const payload = await applyExecutionPlaneOrchestratorSessionControlPlan(selectedSessionId, {
+        profile: profile.name,
+        actor: DEFAULT_CONTROL_ACTOR,
+        reason: `Dashboard executed ${profile.name} control pass`,
+      });
+      setNotice(
+        `Control profile ${payload.profile.name} recorded pass ${payload.control_pass.id} with status ${payload.status}.`
+      );
+      setSelectedPassId(payload.control_pass.id);
+      await refreshAfterMutation(selectedSessionId);
+    } catch (error) {
+      setErrorMessage(
+        error instanceof Error ? error.message : "Failed to apply session control profile."
+      );
+    } finally {
+      setBusyActionKey("");
     }
   };
 
@@ -215,6 +432,34 @@ export default function ControlPlanePage() {
   );
   const recentControlPasses = useMemo(() => controlPasses.slice(0, 8), [controlPasses]);
   const recentSessions = useMemo(() => sessions.slice(0, 6), [sessions]);
+  const sortedProfiles = useMemo(
+    () =>
+      [...controlProfiles].sort((left, right) => {
+        if (left.default) return -1;
+        if (right.default) return 1;
+        return left.name.localeCompare(right.name);
+      }),
+    [controlProfiles]
+  );
+  const selectedPass = useMemo(() => {
+    if (!selectedPassId) return null;
+    const fromSession =
+      selectedSession?.control_passes.find((controlPass) => controlPass.id === selectedPassId) ?? null;
+    return fromSession ?? controlPasses.find((controlPass) => controlPass.id === selectedPassId) ?? null;
+  }, [controlPasses, selectedPassId, selectedSession]);
+  const pendingApprovals = useMemo(
+    () =>
+      (selectedSession?.approvals || []).filter(
+        (approval) => toStringValue(approval.status) === "pending"
+      ),
+    [selectedSession]
+  );
+  const openIssues = useMemo(
+    () =>
+      (selectedSession?.issues || []).filter((issue) => toStringValue(issue.status) === "open"),
+    [selectedSession]
+  );
+  const selectedControl = selectedSession?.control ?? null;
   const loading = !controlSummary || !sessionSummary;
 
   if (loading) {
@@ -241,11 +486,11 @@ export default function ControlPlanePage() {
                 Control Plane
               </h1>
               <p className="mt-2 max-w-3xl text-[14px] leading-relaxed text-[#6b6b6b]">
-                Observe session-level orchestration passes, execution-plane coverage, and current
-                FounderOS control traffic without leaving Autopilot.
+                Observe session-level orchestration passes, inspect current execution state, and
+                apply FounderOS control recommendations directly from Autopilot.
               </p>
             </div>
-            <div className="min-w-[240px] rounded-2xl border border-[#ecebe8] bg-[#fbfbf9] p-4">
+            <div className="min-w-[280px] rounded-2xl border border-[#ecebe8] bg-[#fbfbf9] p-4">
               <div className="flex items-center justify-between text-[13px]">
                 <span className="text-[#9b9a97]">Latest control pass</span>
                 <span className="font-semibold text-[#37352f]">
@@ -257,6 +502,25 @@ export default function ControlPlanePage() {
                 <span className="font-semibold text-[#37352f]">
                   {formatTimestamp(sessionSummary.latest_session_at)}
                 </span>
+              </div>
+              <div className="mt-3 flex items-center justify-between text-[13px]">
+                <span className="text-[#9b9a97]">Selected session</span>
+                <span className="font-mono text-[12px] font-semibold text-[#37352f]">
+                  {selectedSessionId || "none"}
+                </span>
+              </div>
+              <div className="mt-3 flex items-center justify-between text-[13px]">
+                <span className="text-[#9b9a97]">Control state</span>
+                {selectedControl ? (
+                  <Badge
+                    variant="outline"
+                    className={`rounded-full px-2.5 py-1 text-[11px] font-semibold capitalize ${controlStateClass(selectedControl.state)}`}
+                  >
+                    {selectedControl.state}
+                  </Badge>
+                ) : (
+                  <span className="text-[#9b9a97]">No session selected</span>
+                )}
               </div>
               <Button
                 size="sm"
@@ -273,9 +537,14 @@ export default function ControlPlanePage() {
         </header>
 
         <div className="space-y-6 px-6 py-6">
-          {message && (
+          {notice && (
+            <div className="rounded-xl border border-[#d6e9dc] bg-[#eef8f1] px-4 py-3 text-[13px] text-[#2b6e3f]">
+              {notice}
+            </div>
+          )}
+          {errorMessage && (
             <div className="rounded-xl border border-[#f0d0c9] bg-[#fff6f4] px-4 py-3 text-[13px] text-[#93370d]">
-              {message}
+              {errorMessage}
             </div>
           )}
 
@@ -309,8 +578,7 @@ export default function ControlPlanePage() {
                   Recent Control Passes
                 </CardTitle>
                 <CardDescription className="text-[13px] text-[#787774]">
-                  Latest session-level FounderOS control passes, including execution profile,
-                  final state, and project coverage.
+                  Latest session-level FounderOS control passes, now selectable for drill-down.
                 </CardDescription>
               </CardHeader>
               <CardContent>
@@ -325,11 +593,16 @@ export default function ControlPlanePage() {
                       const stoppedReason = toStringValue(controlPass.summary.stopped_reason);
                       const appliedSteps = toNumber(controlPass.summary.applied, controlPass.applied.length);
                       const errorSteps = toNumber(controlPass.summary.errors, controlPass.errors.length);
+                      const selected = selectedPassId === controlPass.id;
 
                       return (
                         <div
                           key={controlPass.id}
-                          className="rounded-2xl border border-[#ecebe8] bg-[#fbfbf9] p-4"
+                          className={`rounded-2xl border p-4 ${
+                            selected
+                              ? "border-[#d3e5ef] bg-[#f7fbfd] shadow-[0_1px_2px_rgba(42,102,144,0.08)]"
+                              : "border-[#ecebe8] bg-[#fbfbf9]"
+                          }`}
                         >
                           <div className="flex flex-wrap items-start justify-between gap-3">
                             <div>
@@ -349,14 +622,6 @@ export default function ControlPlanePage() {
                                 >
                                   {controlPass.profile}
                                 </Badge>
-                                {controlPass.customized && (
-                                  <Badge
-                                    variant="outline"
-                                    className="rounded-full border-[#d3e5ef] bg-[#eef7fb] px-2.5 py-1 text-[11px] font-medium text-[#2a6690]"
-                                  >
-                                    customized
-                                  </Badge>
-                                )}
                               </div>
                               <p className="mt-2 text-[13px] text-[#6b6b6b]">
                                 Session{" "}
@@ -364,59 +629,49 @@ export default function ControlPlanePage() {
                                   {controlPass.orchestrator_session_id}
                                 </span>
                                 {" · "}
-                                {controlPass.orchestrator || "unknown orchestrator"}
-                                {" · "}
                                 {controlPass.actor || "unknown actor"}
                               </p>
                             </div>
-                            <p className="text-[12px] text-[#9b9a97]">
-                              {formatTimestamp(controlPass.created_at)}
-                            </p>
+                            <div className="text-right">
+                              <p className="text-[12px] text-[#9b9a97]">
+                                {formatTimestamp(controlPass.created_at)}
+                              </p>
+                              <Button
+                                size="sm"
+                                variant={selected ? "default" : "outline"}
+                                className={`mt-2 h-8 rounded-lg text-[12px] ${
+                                  selected
+                                    ? "bg-[#1a1a1a] text-white hover:bg-[#333]"
+                                    : "border-[#e5e5e3] bg-white text-[#37352f] hover:bg-[#f7f7f5]"
+                                }`}
+                                onClick={() => {
+                                  setSelectedPassId(controlPass.id);
+                                  if (controlPass.orchestrator_session_id) {
+                                    setSelectedSessionId(controlPass.orchestrator_session_id);
+                                  }
+                                }}
+                              >
+                                {selected ? "Selected" : "Inspect"}
+                              </Button>
+                            </div>
                           </div>
 
                           <div className="mt-4 grid gap-3 md:grid-cols-3">
-                            <div className="rounded-xl border border-[#ecebe8] bg-white px-3 py-2">
-                              <p className="text-[11px] uppercase tracking-[0.08em] text-[#9b9a97]">Outcome</p>
-                              <p className="mt-1 text-[14px] font-semibold text-[#37352f]">{finalState}</p>
-                              <p className="mt-1 text-[12px] text-[#787774]">
-                                {appliedSteps} applied · {errorSteps} errors
-                              </p>
-                            </div>
-                            <div className="rounded-xl border border-[#ecebe8] bg-white px-3 py-2">
-                              <p className="text-[11px] uppercase tracking-[0.08em] text-[#9b9a97]">Coverage</p>
-                              <p className="mt-1 text-[14px] font-semibold text-[#37352f]">
-                                {controlPass.project_ids.length} project{controlPass.project_ids.length === 1 ? "" : "s"}
-                              </p>
-                              <p className="mt-1 text-[12px] text-[#787774]">
-                                {controlPass.initiative_id || "No initiative mapping"}
-                              </p>
-                            </div>
-                            <div className="rounded-xl border border-[#ecebe8] bg-white px-3 py-2">
-                              <p className="text-[11px] uppercase tracking-[0.08em] text-[#9b9a97]">Reason</p>
-                              <p className="mt-1 text-[14px] font-semibold text-[#37352f]">
-                                {stoppedReason || controlPass.reason || "No stop reason"}
-                              </p>
-                              <p className="mt-1 text-[12px] text-[#787774]">
-                                {controlPass.recommendation_kinds.length} recommendation kind(s)
-                              </p>
-                            </div>
-                          </div>
-
-                          <div className="mt-4 flex flex-wrap gap-2">
-                            {controlPass.project_ids.slice(0, 3).map((projectId) => (
-                              <Link
-                                key={`${controlPass.id}-${projectId}`}
-                                href={`/projects/${projectId}`}
-                                className="inline-flex h-7 items-center rounded-full border border-[#e5e5e3] bg-white px-3 text-[12px] font-medium text-[#37352f] transition-colors hover:bg-[#f7f7f5]"
-                              >
-                                {projectId}
-                              </Link>
-                            ))}
-                            {controlPass.project_ids.length > 3 && (
-                              <span className="inline-flex h-7 items-center rounded-full border border-[#ecebe8] bg-[#fafaf9] px-3 text-[12px] text-[#787774]">
-                                +{controlPass.project_ids.length - 3} more
-                              </span>
-                            )}
+                            <SessionMetric
+                              label="Outcome"
+                              value={finalState}
+                              detail={`${appliedSteps} applied · ${errorSteps} errors`}
+                            />
+                            <SessionMetric
+                              label="Coverage"
+                              value={`${controlPass.project_ids.length} project${controlPass.project_ids.length === 1 ? "" : "s"}`}
+                              detail={controlPass.initiative_id || "No initiative mapping"}
+                            />
+                            <SessionMetric
+                              label="Reason"
+                              value={stoppedReason || controlPass.reason || "No stop reason"}
+                              detail={`${controlPass.recommendation_kinds.length} recommendation kind(s)`}
+                            />
                           </div>
                         </div>
                       );
@@ -461,7 +716,7 @@ export default function ControlPlanePage() {
                     Recent Sessions
                   </CardTitle>
                   <CardDescription className="text-[13px] text-[#787774]">
-                    External FounderOS orchestration sessions and their current execution-plane scope.
+                    External FounderOS orchestration sessions, now selectable for direct control.
                   </CardDescription>
                 </CardHeader>
                 <CardContent>
@@ -471,71 +726,71 @@ export default function ControlPlanePage() {
                     </div>
                   ) : (
                     <div className="space-y-3">
-                      {recentSessions.map((session) => (
-                        <div
-                          key={session.id}
-                          className="rounded-2xl border border-[#ecebe8] bg-[#fbfbf9] p-4"
-                        >
-                          <div className="flex items-start justify-between gap-3">
-                            <div>
-                              <div className="flex flex-wrap items-center gap-2">
-                                <p className="text-[14px] font-semibold text-[#37352f]">
-                                  {session.title || session.id}
+                      {recentSessions.map((session) => {
+                        const selected = selectedSessionId === session.id;
+
+                        return (
+                          <div
+                            key={session.id}
+                            className={`rounded-2xl border p-4 ${
+                              selected
+                                ? "border-[#d3e5ef] bg-[#f7fbfd] shadow-[0_1px_2px_rgba(42,102,144,0.08)]"
+                                : "border-[#ecebe8] bg-[#fbfbf9]"
+                            }`}
+                          >
+                            <div className="flex items-start justify-between gap-3">
+                              <div>
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <p className="text-[14px] font-semibold text-[#37352f]">
+                                    {session.title || session.id}
+                                  </p>
+                                  <Badge
+                                    variant="outline"
+                                    className={`rounded-full px-2.5 py-1 text-[11px] font-semibold capitalize ${sessionStatusClass(session.status)}`}
+                                  >
+                                    {session.status}
+                                  </Badge>
+                                </div>
+                                <p className="mt-2 text-[12px] text-[#787774]">
+                                  {session.orchestrator || "unknown orchestrator"}
+                                  {" · "}
+                                  {session.actor || "unknown actor"}
                                 </p>
-                                <Badge
-                                  variant="outline"
-                                  className={`rounded-full px-2.5 py-1 text-[11px] font-semibold capitalize ${sessionStatusClass(session.status)}`}
-                                >
-                                  {session.status}
-                                </Badge>
                               </div>
-                              <p className="mt-2 text-[12px] text-[#787774]">
-                                {session.orchestrator || "unknown orchestrator"}
-                                {" · "}
-                                {session.actor || "unknown actor"}
-                              </p>
+                              <div className="text-right">
+                                <p className="font-mono text-[11px] text-[#9b9a97]">{session.id}</p>
+                                <Button
+                                  size="sm"
+                                  variant={selected ? "default" : "outline"}
+                                  className={`mt-2 h-8 rounded-lg text-[12px] ${
+                                    selected
+                                      ? "bg-[#1a1a1a] text-white hover:bg-[#333]"
+                                      : "border-[#e5e5e3] bg-white text-[#37352f] hover:bg-[#f7f7f5]"
+                                  }`}
+                                  onClick={() => {
+                                    setSelectedSessionId(session.id);
+                                  }}
+                                >
+                                  {selected ? "Selected" : "Open control"}
+                                </Button>
+                              </div>
                             </div>
-                            <p className="font-mono text-[11px] text-[#9b9a97]">{session.id}</p>
-                          </div>
 
-                          <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                            <div>
-                              <p className="text-[11px] uppercase tracking-[0.08em] text-[#9b9a97]">Scope</p>
-                              <p className="mt-1 text-[13px] text-[#37352f]">
-                                {session.project_ids.length} project{session.project_ids.length === 1 ? "" : "s"}
-                                {session.initiative_id ? ` · ${session.initiative_id}` : ""}
-                              </p>
-                            </div>
-                            <div>
-                              <p className="text-[11px] uppercase tracking-[0.08em] text-[#9b9a97]">Linked Objects</p>
-                              <p className="mt-1 text-[13px] text-[#37352f]">
-                                {session.linked_control_pass_ids.length} passes · {session.linked_run_ids.length} runs
-                              </p>
+                            <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                              <SessionMetric
+                                label="Scope"
+                                value={`${session.project_ids.length} project${session.project_ids.length === 1 ? "" : "s"}`}
+                                detail={session.initiative_id || "No initiative mapping"}
+                              />
+                              <SessionMetric
+                                label="Linked Objects"
+                                value={`${session.linked_control_pass_ids.length} passes`}
+                                detail={`${session.linked_run_ids.length} runs · ${session.linked_issue_ids.length} issues`}
+                              />
                             </div>
                           </div>
-
-                          <div className="mt-3 flex flex-wrap gap-2">
-                            {session.project_ids.slice(0, 2).map((projectId) => (
-                              <Link
-                                key={`${session.id}-${projectId}`}
-                                href={`/projects/${projectId}`}
-                                className="inline-flex h-7 items-center rounded-full border border-[#e5e5e3] bg-white px-3 text-[12px] font-medium text-[#37352f] transition-colors hover:bg-[#f7f7f5]"
-                              >
-                                {projectId}
-                              </Link>
-                            ))}
-                            {session.project_ids.length > 2 && (
-                              <span className="inline-flex h-7 items-center rounded-full border border-[#ecebe8] bg-[#fafaf9] px-3 text-[12px] text-[#787774]">
-                                +{session.project_ids.length - 2} more
-                              </span>
-                            )}
-                          </div>
-
-                          <p className="mt-3 text-[12px] text-[#9b9a97]">
-                            Updated {formatTimestamp(session.updated_at)}
-                          </p>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   )}
                 </CardContent>
@@ -566,6 +821,526 @@ export default function ControlPlanePage() {
                     values={sessionSummary.by_orchestrator}
                     emptyText="No orchestrators recorded."
                   />
+                </CardContent>
+              </Card>
+            </div>
+          </section>
+
+          <section className="grid gap-6 xl:grid-cols-[minmax(0,1.35fr)_minmax(320px,0.95fr)]">
+            <Card className="border border-[#e5e5e3] bg-white shadow-[0_1px_3px_rgba(15,15,15,0.08),0_0_1px_rgba(15,15,15,0.04)]">
+              <CardHeader>
+                <CardTitle className="text-[18px] font-semibold tracking-[-0.02em] text-[#37352f]">
+                  Session Drill-Down
+                </CardTitle>
+                <CardDescription className="text-[13px] text-[#787774]">
+                  Inspect the selected session, apply direct recommendations, or run a session-level
+                  control pass profile from this panel.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                {!selectedSessionId ? (
+                  <div className="rounded-xl border border-dashed border-[#e5e5e3] bg-[#fafaf9] px-5 py-8 text-[13px] text-[#9b9a97]">
+                    Select a recent session or control pass to inspect live control state.
+                  </div>
+                ) : sessionLoading || !selectedSession ? (
+                  <div className="rounded-xl border border-dashed border-[#e5e5e3] bg-[#fafaf9] px-5 py-8 text-[13px] text-[#9b9a97]">
+                    Loading session detail...
+                  </div>
+                ) : (
+                  <div className="space-y-5">
+                    <div className="flex flex-wrap items-start justify-between gap-4">
+                      <div>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <h2 className="text-[20px] font-semibold tracking-[-0.02em] text-[#37352f]">
+                            {selectedSession.title || selectedSession.id}
+                          </h2>
+                          <Badge
+                            variant="outline"
+                            className={`rounded-full px-2.5 py-1 text-[11px] font-semibold capitalize ${sessionStatusClass(selectedSession.status)}`}
+                          >
+                            {selectedSession.status}
+                          </Badge>
+                          <Badge
+                            variant="outline"
+                            className={`rounded-full px-2.5 py-1 text-[11px] font-semibold capitalize ${controlStateClass(selectedControl?.state || "unknown")}`}
+                          >
+                            {selectedControl?.state || "unknown"}
+                          </Badge>
+                        </div>
+                        <p className="mt-2 font-mono text-[12px] text-[#9b9a97]">{selectedSession.id}</p>
+                        <p className="mt-2 text-[14px] text-[#6b6b6b]">
+                          {selectedSession.orchestrator || "unknown orchestrator"}
+                          {" · "}
+                          {selectedSession.actor || "unknown actor"}
+                          {selectedSession.reason ? ` · ${selectedSession.reason}` : ""}
+                        </p>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        {selectedSession.project_ids.map((projectId) => (
+                          <Link
+                            key={`${selectedSession.id}-${projectId}`}
+                            href={`/projects/${projectId}`}
+                            className="inline-flex h-8 items-center rounded-full border border-[#e5e5e3] bg-white px-3 text-[12px] font-medium text-[#37352f] transition-colors hover:bg-[#f7f7f5]"
+                          >
+                            {projectId}
+                          </Link>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="grid gap-3 md:grid-cols-4">
+                      <SessionMetric
+                        label="Pending Approvals"
+                        value={String(selectedSession.summary.pending_approval_count)}
+                        detail={`${selectedSession.summary.approval_count} linked approvals`}
+                      />
+                      <SessionMetric
+                        label="Open Issues"
+                        value={String(selectedSession.summary.open_issue_count)}
+                        detail={`${selectedSession.summary.issue_count} linked issues`}
+                      />
+                      <SessionMetric
+                        label="Safe Actions"
+                        value={String(selectedControl?.counts.safe_actions || 0)}
+                        detail={`${selectedControl?.counts.approval_required_actions || 0} approval-gated`}
+                      />
+                      <SessionMetric
+                        label="Control Passes"
+                        value={String(selectedSession.summary.control_pass_count)}
+                        detail={`${selectedSession.summary.run_count} linked runs`}
+                      />
+                    </div>
+
+                    <div className="rounded-2xl border border-[#ecebe8] bg-[#fbfbf9] p-4">
+                      <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#9b9a97]">
+                        Control Pass Profiles
+                      </p>
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        {sortedProfiles.map((profile) => {
+                          const busy = busyActionKey === `profile:${profile.name}`;
+                          return (
+                            <Button
+                              key={profile.name}
+                              size="sm"
+                              variant={profile.default ? "default" : "outline"}
+                              className={`h-9 rounded-lg text-[12px] ${
+                                profile.default
+                                  ? "bg-[#1a1a1a] text-white hover:bg-[#333]"
+                                  : "border-[#e5e5e3] bg-white text-[#37352f] hover:bg-[#f7f7f5]"
+                              }`}
+                              disabled={Boolean(busyActionKey)}
+                              onClick={() => {
+                                void applyControlPlan(profile);
+                              }}
+                            >
+                              {busy ? "Running..." : profile.name}
+                            </Button>
+                          );
+                        })}
+                      </div>
+                      <div className="mt-3 space-y-2">
+                        {sortedProfiles.map((profile) => (
+                          <div
+                            key={`${profile.name}-description`}
+                            className="flex flex-wrap items-start justify-between gap-2 text-[12px] text-[#787774]"
+                          >
+                            <span className="font-medium text-[#37352f]">{profile.name}</span>
+                            <span className="max-w-[75%] text-right">{profile.description}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="rounded-2xl border border-[#ecebe8] bg-[#fbfbf9] p-4">
+                      <div className="flex items-center justify-between gap-3">
+                        <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#9b9a97]">
+                          Current Recommendations
+                        </p>
+                        <p className="text-[12px] text-[#787774]">
+                          {selectedControl?.recommendations.length || 0} recommendation(s)
+                        </p>
+                      </div>
+                      {!selectedControl?.recommendations.length ? (
+                        <p className="mt-3 text-[13px] text-[#9b9a97]">
+                          No current recommendations for this session.
+                        </p>
+                      ) : (
+                        <div className="mt-3 space-y-3">
+                          {selectedControl.recommendations.map((recommendation) => {
+                            const busy = busyActionKey === `recommendation:${recommendation.kind}`;
+
+                            return (
+                              <div
+                                key={recommendation.kind}
+                                className="rounded-xl border border-[#ecebe8] bg-white p-4"
+                              >
+                                <div className="flex flex-wrap items-start justify-between gap-3">
+                                  <div>
+                                    <div className="flex flex-wrap items-center gap-2">
+                                      <p className="text-[14px] font-semibold text-[#37352f]">
+                                        {recommendation.title}
+                                      </p>
+                                      <Badge
+                                        variant="outline"
+                                        className={`rounded-full px-2.5 py-1 text-[11px] font-semibold capitalize ${priorityClass(recommendation.priority)}`}
+                                      >
+                                        {recommendation.priority}
+                                      </Badge>
+                                      <Badge
+                                        variant="outline"
+                                        className="rounded-full border-[#e5e5e3] bg-[#fafaf9] px-2.5 py-1 text-[11px] font-medium text-[#37352f]"
+                                      >
+                                        {recommendation.kind}
+                                      </Badge>
+                                    </div>
+                                    <p className="mt-2 text-[13px] leading-relaxed text-[#6b6b6b]">
+                                      {recommendation.reason}
+                                    </p>
+                                    <div className="mt-3 flex flex-wrap gap-2">
+                                      {Object.entries(recommendation.counts || {}).map(([key, value]) => (
+                                        <Badge
+                                          key={`${recommendation.kind}-${key}`}
+                                          variant="outline"
+                                          className="rounded-full border-[#e5e5e3] bg-[#fafaf9] px-2.5 py-1 text-[11px] font-medium text-[#37352f]"
+                                        >
+                                          {key}: {value}
+                                        </Badge>
+                                      ))}
+                                    </div>
+                                  </div>
+                                  <Button
+                                    size="sm"
+                                    className="h-9 rounded-lg bg-[#1a1a1a] text-[12px] hover:bg-[#333]"
+                                    disabled={Boolean(busyActionKey)}
+                                    onClick={() => {
+                                      void applyRecommendation(recommendation);
+                                    }}
+                                  >
+                                    {busy ? "Running..." : recommendationActionLabel(recommendation)}
+                                  </Button>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="grid gap-4 lg:grid-cols-2">
+                      <div className="rounded-2xl border border-[#ecebe8] bg-[#fbfbf9] p-4">
+                        <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#9b9a97]">
+                          Action Summary
+                        </p>
+                        <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                          <SessionMetric
+                            label="Actions"
+                            value={String(selectedControl?.action_summary.totals.actions || 0)}
+                            detail={`${selectedControl?.action_summary.totals.suggested_commands || 0} commands · ${selectedControl?.action_summary.totals.recommendations || 0} recommendations`}
+                          />
+                          <SessionMetric
+                            label="Projects"
+                            value={String(selectedControl?.action_summary.totals.projects || 0)}
+                            detail={`${selectedControl?.action_summary.totals.approval_required || 0} approval-required actions`}
+                          />
+                        </div>
+                        <div className="mt-4 space-y-4">
+                          <BreakdownChips
+                            label="Action Types"
+                            values={selectedControl?.action_summary.by_action_type}
+                            emptyText="No action types recorded."
+                          />
+                          <BreakdownChips
+                            label="Priorities"
+                            values={selectedControl?.action_summary.by_priority}
+                            emptyText="No priorities recorded."
+                          />
+                          <BreakdownChips
+                            label="Commands"
+                            values={selectedControl?.action_summary.by_command}
+                            emptyText="No commands recorded."
+                          />
+                        </div>
+                      </div>
+
+                      <div className="rounded-2xl border border-[#ecebe8] bg-[#fbfbf9] p-4">
+                        <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#9b9a97]">
+                          Latest Session Events
+                        </p>
+                        {!selectedSession.events.length ? (
+                          <p className="mt-3 text-[13px] text-[#9b9a97]">No session events recorded yet.</p>
+                        ) : (
+                          <div className="mt-3 space-y-3">
+                            {selectedSession.events.slice(-6).reverse().map((event) => (
+                              <div
+                                key={`${toStringValue(event.event)}-${toStringValue(event.timestamp)}`}
+                                className="rounded-xl border border-[#ecebe8] bg-white p-3"
+                              >
+                                <div className="flex flex-wrap items-center justify-between gap-2">
+                                  <p className="font-mono text-[11px] text-[#37352f]">
+                                    {toStringValue(event.event, "unknown_event")}
+                                  </p>
+                                  <Badge
+                                    variant="outline"
+                                    className="rounded-full border-[#e5e5e3] bg-[#fafaf9] px-2.5 py-1 text-[11px] font-medium text-[#37352f]"
+                                  >
+                                    {toStringValue(event.status, "unknown")}
+                                  </Badge>
+                                </div>
+                                <p className="mt-2 text-[13px] text-[#6b6b6b]">
+                                  {toStringValue(event.message, "No event message")}
+                                </p>
+                                <p className="mt-2 text-[12px] text-[#9b9a97]">
+                                  {formatTimestamp(toStringValue(event.timestamp))}
+                                </p>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            <div className="space-y-6">
+              <Card className="border border-[#e5e5e3] bg-white shadow-[0_1px_3px_rgba(15,15,15,0.08),0_0_1px_rgba(15,15,15,0.04)]">
+                <CardHeader>
+                  <CardTitle className="text-[18px] font-semibold tracking-[-0.02em] text-[#37352f]">
+                    Selected Control Pass
+                  </CardTitle>
+                  <CardDescription className="text-[13px] text-[#787774]">
+                    Inspect the pass currently selected from recent history or session-linked passes.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  {!selectedPass ? (
+                    <div className="rounded-xl border border-dashed border-[#e5e5e3] bg-[#fafaf9] px-5 py-8 text-[13px] text-[#9b9a97]">
+                      Select a control pass to inspect applied steps and final state.
+                    </div>
+                  ) : (
+                    <div className="space-y-4">
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <p className="font-mono text-[12px] font-semibold text-[#37352f]">
+                              {selectedPass.id}
+                            </p>
+                            <Badge
+                              variant="outline"
+                              className={`rounded-full px-2.5 py-1 text-[11px] font-semibold capitalize ${passStatusClass(selectedPass.status)}`}
+                            >
+                              {selectedPass.status}
+                            </Badge>
+                            <Badge
+                              variant="outline"
+                              className="rounded-full border-[#e5e5e3] bg-[#fafaf9] px-2.5 py-1 text-[11px] font-medium text-[#37352f]"
+                            >
+                              {selectedPass.profile}
+                            </Badge>
+                          </div>
+                          <p className="mt-2 text-[13px] text-[#6b6b6b]">
+                            Session {selectedPass.orchestrator_session_id} · {selectedPass.actor || "unknown actor"}
+                          </p>
+                        </div>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-8 rounded-lg border-[#e5e5e3] bg-white text-[12px] text-[#37352f] hover:bg-[#f7f7f5]"
+                          onClick={() => {
+                            setSelectedSessionId(selectedPass.orchestrator_session_id);
+                          }}
+                        >
+                          Open session
+                        </Button>
+                      </div>
+
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        <SessionMetric
+                          label="Final State"
+                          value={toStringValue(selectedPass.summary.final_state, "unknown")}
+                          detail={toStringValue(selectedPass.summary.stopped_reason, "No stop reason")}
+                        />
+                        <SessionMetric
+                          label="Applied"
+                          value={String(toNumber(selectedPass.summary.applied, selectedPass.applied.length))}
+                          detail={`${toNumber(selectedPass.summary.errors, selectedPass.errors.length)} error step(s)`}
+                        />
+                        <SessionMetric
+                          label="Control Transition"
+                          value={`${toStringValue(selectedPass.control_before.state, "unknown")} -> ${toStringValue(selectedPass.control_after.state, "unknown")}`}
+                          detail={`${selectedPass.session_status_before || "unknown"} -> ${selectedPass.session_status_after || "unknown"} session status`}
+                        />
+                        <SessionMetric
+                          label="Coverage"
+                          value={`${selectedPass.project_ids.length} project${selectedPass.project_ids.length === 1 ? "" : "s"}`}
+                          detail={selectedPass.initiative_id || "No initiative mapping"}
+                        />
+                      </div>
+
+                      <BreakdownChips
+                        label="Recommendation Kinds"
+                        values={selectedPass.recommendation_kinds.reduce<ExecutionPlaneCountMap>((acc, kind) => {
+                          acc[kind] = (acc[kind] || 0) + 1;
+                          return acc;
+                        }, {})}
+                        emptyText="No recommendation kinds recorded."
+                      />
+
+                      <div className="rounded-2xl border border-[#ecebe8] bg-[#fbfbf9] p-4">
+                        <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#9b9a97]">
+                          Applied Steps
+                        </p>
+                        {selectedPass.applied.length === 0 ? (
+                          <p className="mt-3 text-[13px] text-[#9b9a97]">No applied steps recorded.</p>
+                        ) : (
+                          <div className="mt-3 space-y-3">
+                            {selectedPass.applied.map((step, index) => (
+                              <div
+                                key={`${selectedPass.id}-applied-${index}`}
+                                className="rounded-xl border border-[#ecebe8] bg-white p-3"
+                              >
+                                <div className="flex flex-wrap items-center justify-between gap-2">
+                                  <p className="text-[13px] font-semibold text-[#37352f]">
+                                    {toStringValue(step.title, toStringValue(step.recommendation_kind, "step"))}
+                                  </p>
+                                  <Badge
+                                    variant="outline"
+                                    className={`rounded-full px-2.5 py-1 text-[11px] font-semibold capitalize ${passStatusClass(toStringValue(step.status, "ok"))}`}
+                                  >
+                                    {toStringValue(step.status, "ok")}
+                                  </Badge>
+                                </div>
+                                <p className="mt-2 text-[12px] text-[#787774]">
+                                  {toStringValue(step.operation_type, "operation")}
+                                  {toStringValue(step.operation_mode) ? ` · ${toStringValue(step.operation_mode)}` : ""}
+                                </p>
+                                <p className="mt-2 text-[12px] text-[#9b9a97]">
+                                  {toStringValue(step.control_state_before, "unknown")}
+                                  {" -> "}
+                                  {toStringValue(step.control_state_after, "unknown")}
+                                </p>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="rounded-2xl border border-[#ecebe8] bg-[#fbfbf9] p-4">
+                        <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#9b9a97]">
+                          Errors
+                        </p>
+                        {selectedPass.errors.length === 0 ? (
+                          <p className="mt-3 text-[13px] text-[#9b9a97]">No errors recorded for this pass.</p>
+                        ) : (
+                          <div className="mt-3 space-y-3">
+                            {selectedPass.errors.map((error, index) => (
+                              <div
+                                key={`${selectedPass.id}-error-${index}`}
+                                className="rounded-xl border border-[#f0d0c9] bg-[#fff6f4] p-3"
+                              >
+                                <p className="text-[13px] font-semibold text-[#93370d]">
+                                  {toStringValue(error.title, toStringValue(error.recommendation_kind, "error"))}
+                                </p>
+                                <p className="mt-2 text-[12px] text-[#93370d]">
+                                  {toStringValue(error.error, "Unknown control-pass error")}
+                                </p>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+
+              <Card className="border border-[#e5e5e3] bg-white shadow-[0_1px_3px_rgba(15,15,15,0.08),0_0_1px_rgba(15,15,15,0.04)]">
+                <CardHeader>
+                  <CardTitle className="text-[18px] font-semibold tracking-[-0.02em] text-[#37352f]">
+                    Linked Decisions
+                  </CardTitle>
+                  <CardDescription className="text-[13px] text-[#787774]">
+                    Pending approvals and open issues attached to the selected session.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  {!selectedSession ? (
+                    <div className="rounded-xl border border-dashed border-[#e5e5e3] bg-[#fafaf9] px-5 py-8 text-[13px] text-[#9b9a97]">
+                      Select a session to inspect pending approvals and issues.
+                    </div>
+                  ) : (
+                    <div className="space-y-4">
+                      <div className="rounded-2xl border border-[#ecebe8] bg-[#fbfbf9] p-4">
+                        <div className="flex items-center justify-between">
+                          <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#9b9a97]">
+                            Pending Approvals
+                          </p>
+                          <Badge
+                            variant="outline"
+                            className="rounded-full border-[#e5e5e3] bg-white px-2.5 py-1 text-[11px] font-medium text-[#37352f]"
+                          >
+                            {pendingApprovals.length}
+                          </Badge>
+                        </div>
+                        {pendingApprovals.length === 0 ? (
+                          <p className="mt-3 text-[13px] text-[#9b9a97]">No pending approvals.</p>
+                        ) : (
+                          <div className="mt-3 space-y-3">
+                            {pendingApprovals.slice(0, 4).map((approval, index) => (
+                              <div
+                                key={`${selectedSession.id}-approval-${index}`}
+                                className="rounded-xl border border-[#ecebe8] bg-white p-3"
+                              >
+                                <p className="font-mono text-[11px] text-[#37352f]">
+                                  {toStringValue(approval.id, "approval")}
+                                </p>
+                                <p className="mt-2 text-[13px] text-[#6b6b6b]">
+                                  {toStringValue(approval.command, toStringValue(approval.title, "Approval requires review"))}
+                                </p>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="rounded-2xl border border-[#ecebe8] bg-[#fbfbf9] p-4">
+                        <div className="flex items-center justify-between">
+                          <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#9b9a97]">
+                            Open Issues
+                          </p>
+                          <Badge
+                            variant="outline"
+                            className="rounded-full border-[#e5e5e3] bg-white px-2.5 py-1 text-[11px] font-medium text-[#37352f]"
+                          >
+                            {openIssues.length}
+                          </Badge>
+                        </div>
+                        {openIssues.length === 0 ? (
+                          <p className="mt-3 text-[13px] text-[#9b9a97]">No open issues.</p>
+                        ) : (
+                          <div className="mt-3 space-y-3">
+                            {openIssues.slice(0, 4).map((issue, index) => (
+                              <div
+                                key={`${selectedSession.id}-issue-${index}`}
+                                className="rounded-xl border border-[#ecebe8] bg-white p-3"
+                              >
+                                <p className="font-mono text-[11px] text-[#37352f]">
+                                  {toStringValue(issue.id, "issue")}
+                                </p>
+                                <p className="mt-2 text-[13px] text-[#6b6b6b]">
+                                  {toStringValue(issue.title, toStringValue(issue.message, "Issue requires review"))}
+                                </p>
+                                <p className="mt-2 text-[12px] text-[#9b9a97]">
+                                  {toStringValue(issue.root_cause, toStringValue(issue.severity, "unknown"))}
+                                </p>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
                 </CardContent>
               </Card>
             </div>

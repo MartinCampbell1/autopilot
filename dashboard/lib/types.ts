@@ -301,6 +301,113 @@ export interface OrchestratorControlPassRecord {
   completed_at?: string | null;
 }
 
+export interface ExecutionPlaneEvent {
+  event: string;
+  status: string;
+  message: string;
+  timestamp: string;
+  project_id?: string | null;
+  story_id?: number | null;
+  orchestrator_session_id?: string | null;
+  [key: string]: unknown;
+}
+
+export interface OrchestratorSessionActionSummary {
+  totals: {
+    actions: number;
+    suggested_commands: number;
+    recommendations: number;
+    approval_required: number;
+    projects: number;
+  };
+  by_action_type: ExecutionPlaneCountMap;
+  by_priority: ExecutionPlaneCountMap;
+  by_project: ExecutionPlaneCountMap;
+  by_command: ExecutionPlaneCountMap;
+  by_recommendation_kind: ExecutionPlaneCountMap;
+}
+
+export interface OrchestratorSessionControlRecommendation {
+  kind: string;
+  priority: string;
+  title: string;
+  reason: string;
+  counts: Record<string, number>;
+  operation: Record<string, unknown>;
+}
+
+export interface OrchestratorSessionControl {
+  state: string;
+  counts: {
+    pending_approvals: number;
+    open_issues: number;
+    safe_actions: number;
+    approval_required_actions: number;
+    recommendation_actions: number;
+  };
+  action_summary: OrchestratorSessionActionSummary;
+  recommendations: OrchestratorSessionControlRecommendation[];
+}
+
+export interface OrchestratorSessionDetail extends OrchestratorSessionRecord {
+  runs: Array<Record<string, unknown>>;
+  control_passes: OrchestratorControlPassRecord[];
+  approvals: Array<Record<string, unknown>>;
+  issues: Array<Record<string, unknown>>;
+  events: ExecutionPlaneEvent[];
+  control: OrchestratorSessionControl;
+  summary: {
+    run_count: number;
+    control_pass_count: number;
+    approval_count: number;
+    pending_approval_count: number;
+    issue_count: number;
+    open_issue_count: number;
+    event_count: number;
+    event_limit: number;
+    latest_event_at?: string | null;
+    by_event: ExecutionPlaneCountMap;
+    by_event_status: ExecutionPlaneCountMap;
+  };
+}
+
+export interface OrchestratorSessionControlProfile {
+  name: string;
+  description: string;
+  recommendation_kinds: string[];
+  repeatable_kinds: string[];
+  default: boolean;
+}
+
+export interface OrchestratorSessionRecommendationApplyResult {
+  status: string;
+  session_id: string;
+  recommendation: OrchestratorSessionControlRecommendation;
+  operation: Record<string, unknown>;
+  result: Record<string, unknown>;
+  control_before: OrchestratorSessionControl;
+  control: OrchestratorSessionControl;
+}
+
+export interface OrchestratorSessionControlPlanApplyResult {
+  status: string;
+  session_id: string;
+  profile: {
+    name: string;
+    description: string;
+    recommendation_kinds: string[];
+    repeatable_kinds: string[];
+    customized: boolean;
+  };
+  control_pass: OrchestratorControlPassRecord;
+  control_before: OrchestratorSessionControl;
+  control: OrchestratorSessionControl;
+  applied: Array<Record<string, unknown>>;
+  errors: Array<Record<string, unknown>>;
+  summary: Record<string, unknown>;
+  skipped_recommendation_kinds: string[];
+}
+
 export interface AccountHealth {
   total: number;
   available: number;

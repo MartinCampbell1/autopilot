@@ -10,6 +10,10 @@ import type {
   LaunchPreset,
   OrchestratorControlPassRecord,
   OrchestratorControlPassSummary,
+  OrchestratorSessionControlPlanApplyResult,
+  OrchestratorSessionControlProfile,
+  OrchestratorSessionDetail,
+  OrchestratorSessionRecommendationApplyResult,
   OrchestratorSessionRecord,
   OrchestratorSessionSummary,
   PRD,
@@ -126,6 +130,22 @@ export async function fetchExecutionPlaneOrchestratorSessionSummary(
   );
 }
 
+export async function fetchExecutionPlaneOrchestratorSession(
+  sessionId: string,
+  options?: { eventLimit?: number }
+): Promise<OrchestratorSessionDetail> {
+  const query = buildQuery({
+    event_limit: options?.eventLimit ?? 25,
+  });
+  const res = await fetch(
+    `${API_BASE}/execution-plane/orchestrator-sessions/${encodeURIComponent(sessionId)}${query}`
+  );
+  return jsonOrThrow<OrchestratorSessionDetail>(
+    res,
+    `Failed to fetch orchestrator session detail: ${res.status}`
+  );
+}
+
 export async function fetchExecutionPlaneControlPasses(
   filters?: {
     orchestratorSessionId?: string;
@@ -177,6 +197,76 @@ export async function fetchExecutionPlaneControlPassSummary(
   return jsonOrThrow<OrchestratorControlPassSummary>(
     res,
     `Failed to fetch control pass summary: ${res.status}`
+  );
+}
+
+export async function fetchExecutionPlaneOrchestratorSessionControlProfiles(): Promise<{
+  profiles: OrchestratorSessionControlProfile[];
+}> {
+  const res = await fetch(`${API_BASE}/execution-plane/orchestrator-sessions/control/profiles`);
+  return jsonOrThrow<{ profiles: OrchestratorSessionControlProfile[] }>(
+    res,
+    `Failed to fetch orchestrator session control profiles: ${res.status}`
+  );
+}
+
+export async function applyExecutionPlaneOrchestratorSessionRecommendation(
+  sessionId: string,
+  payload: {
+    recommendationKind: string;
+    actor?: string;
+    reason?: string;
+    idempotencyKey?: string;
+  }
+): Promise<OrchestratorSessionRecommendationApplyResult> {
+  const res = await fetch(
+    `${API_BASE}/execution-plane/orchestrator-sessions/${encodeURIComponent(sessionId)}/control/apply`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        recommendation_kind: payload.recommendationKind,
+        actor: payload.actor ?? "dashboard-control-plane",
+        reason: payload.reason ?? "",
+        idempotency_key: payload.idempotencyKey ?? "",
+      }),
+    }
+  );
+  return jsonOrThrow<OrchestratorSessionRecommendationApplyResult>(
+    res,
+    `Failed to apply session recommendation: ${res.status}`
+  );
+}
+
+export async function applyExecutionPlaneOrchestratorSessionControlPlan(
+  sessionId: string,
+  payload: {
+    profile: string;
+    actor?: string;
+    reason?: string;
+    recommendationKinds?: string[];
+    maxOperations?: number;
+    continueOnError?: boolean;
+  }
+): Promise<OrchestratorSessionControlPlanApplyResult> {
+  const res = await fetch(
+    `${API_BASE}/execution-plane/orchestrator-sessions/${encodeURIComponent(sessionId)}/control/apply-plan`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        profile: payload.profile,
+        actor: payload.actor ?? "dashboard-control-plane",
+        reason: payload.reason ?? "",
+        recommendation_kinds: payload.recommendationKinds ?? [],
+        max_operations: payload.maxOperations ?? 10,
+        continue_on_error: payload.continueOnError ?? true,
+      }),
+    }
+  );
+  return jsonOrThrow<OrchestratorSessionControlPlanApplyResult>(
+    res,
+    `Failed to apply session control plan: ${res.status}`
   );
 }
 
