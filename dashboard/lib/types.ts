@@ -503,6 +503,18 @@ export interface ExecutionRuntimeAgentDetail {
   events: ExecutionPlaneEvent[];
 }
 
+export interface ExecutionAgentActionExecuteResult {
+  status: string;
+  message?: string;
+  action?: Record<string, unknown>;
+  command_result?: Record<string, unknown>;
+  approval?: ExecutionApprovalRecord;
+  issue?: ExecutionIssueRecord;
+  project?: Record<string, unknown>;
+  run?: ExecutionAgentActionRunRecord;
+  idempotent_replay?: boolean;
+}
+
 export interface OrchestratorSessionDetail extends OrchestratorSessionRecord {
   runs: ExecutionAgentActionRunRecord[];
   control_passes: OrchestratorControlPassRecord[];

@@ -18,6 +18,7 @@ import {
   applyExecutionPlaneOrchestratorSessionRecommendation,
   applyExecutionPlaneApproval,
   approveExecutionPlaneApproval,
+  executeExecutionPlaneAgentAction,
   fetchAccountsHealth,
   fetchExecutionPlaneAgentDetail,
   fetchExecutionPlaneControlPassSummary,
@@ -895,6 +896,19 @@ export default function ControlPlanePage() {
     }
   }, []);
 
+  const refreshAfterAgentMutation = useCallback(
+    async (runtimeAgentId: string) => {
+      await loadOverview();
+      if (selectedSessionId) {
+        await loadSessionDetail(selectedSessionId);
+      }
+      await loadAgentDetail(runtimeAgentId).then((detail) => {
+        setSelectedAgent(detail);
+      });
+    },
+    [loadAgentDetail, loadOverview, loadSessionDetail, selectedSessionId]
+  );
+
   const runDecisionAction = useCallback(
     async (actionKey: string, task: () => Promise<string>) => {
       if (!selectedSessionId) return;
@@ -905,6 +919,10 @@ export default function ControlPlanePage() {
         const message = await task();
         setNotice(message);
         await refreshAfterMutation(selectedSessionId);
+        if (selectedAgentId) {
+          const detail = await loadAgentDetail(selectedAgentId);
+          setSelectedAgent(detail);
+        }
       } catch (error) {
         setErrorMessage(
           error instanceof Error ? error.message : "Failed to apply linked decision action."
@@ -913,7 +931,7 @@ export default function ControlPlanePage() {
         setBusyActionKey("");
       }
     },
-    [refreshAfterMutation, selectedSessionId]
+    [loadAgentDetail, refreshAfterMutation, selectedAgentId, selectedSessionId]
   );
 
   const applyRecommendation = async (recommendation: OrchestratorSessionControlRecommendation) => {
@@ -985,6 +1003,47 @@ export default function ControlPlanePage() {
       });
       return `Issue ${payload.issue.id} marked ${payload.issue.status}.`;
     });
+  };
+
+  const runAgentSuggestedCommand = async (
+    command: Record<string, unknown>,
+    mode: "execute_now" | "request_approval"
+  ) => {
+    if (!selectedAgent) return;
+    const commandName = toStringValue(command.command);
+    if (!commandName) return;
+    const actionKey = `${selectedAgent.runtime_agent_id}:command:${commandName}`;
+    const busyKey = `agent-command:${selectedAgent.runtime_agent_id}:${commandName}:${mode}`;
+    setBusyActionKey(busyKey);
+    setNotice("");
+    setErrorMessage("");
+
+    try {
+      const payload = await executeExecutionPlaneAgentAction({
+        actionKey,
+        orchestratorSessionId: selectedSessionId,
+        actor: DEFAULT_CONTROL_ACTOR,
+        mode,
+        reason: `Dashboard ${mode === "execute_now" ? "executed" : "requested approval for"} agent command ${commandName}`,
+      });
+      const runId = extractRunId(payload);
+      if (runId) setSelectedRunId(runId);
+      if (payload.approval?.id) {
+        setEntitySearch(payload.approval.id);
+      }
+      setNotice(
+        payload.message ||
+          toStringValue(payload.command_result?.message) ||
+          `Agent command ${commandName} finished with status ${payload.status}.`
+      );
+      await refreshAfterAgentMutation(selectedAgent.runtime_agent_id);
+    } catch (error) {
+      setErrorMessage(
+        error instanceof Error ? error.message : "Failed to execute runtime agent command."
+      );
+    } finally {
+      setBusyActionKey("");
+    }
   };
 
   const applyControlPlan = async (profile: OrchestratorSessionControlProfile) => {
@@ -2006,23 +2065,62 @@ export default function ControlPlanePage() {
                                   <p className="text-[13px] font-semibold text-[#37352f]">
                                     {toStringValue(command.title, toStringValue(command.command, "command"))}
                                   </p>
-                                  <Badge
-                                    variant="outline"
-                                    className={`rounded-full px-2.5 py-1 text-[11px] font-semibold capitalize ${priorityClass(toStringValue(command.priority, "medium"))}`}
-                                  >
-                                    {toStringValue(command.priority, "medium")}
-                                  </Badge>
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <Badge
+                                      variant="outline"
+                                      className={`rounded-full px-2.5 py-1 text-[11px] font-semibold capitalize ${priorityClass(toStringValue(command.priority, "medium"))}`}
+                                    >
+                                      {toStringValue(command.priority, "medium")}
+                                    </Badge>
+                                    {Boolean(command.approval_required) && (
+                                      <Badge
+                                        variant="outline"
+                                        className="rounded-full border-[#f4e0c4] bg-[#fff6e8] px-2.5 py-1 text-[11px] font-medium text-[#9a6700]"
+                                      >
+                                        approval required
+                                      </Badge>
+                                    )}
+                                  </div>
                                 </div>
                                 <p className="mt-2 text-[12px] text-[#6b6b6b]">
                                   {toStringValue(command.reason, "No reason provided")}
                                 </p>
+                                <div className="mt-3 flex flex-wrap gap-2">
+                                  {!Boolean(command.approval_required) && (
+                                    <Button
+                                      size="sm"
+                                      className="h-8 rounded-lg bg-[#1a1a1a] text-[12px] hover:bg-[#333]"
+                                      disabled={Boolean(busyActionKey)}
+                                      onClick={() => {
+                                        void runAgentSuggestedCommand(command, "execute_now");
+                                      }}
+                                    >
+                                      {busyActionKey === `agent-command:${selectedAgent.runtime_agent_id}:${toStringValue(command.command)}:execute_now`
+                                        ? "Executing..."
+                                        : "Execute"}
+                                    </Button>
+                                  )}
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    className="h-8 rounded-lg border-[#e5e5e3] bg-white text-[12px] text-[#37352f] hover:bg-[#f7f7f5]"
+                                    disabled={Boolean(busyActionKey)}
+                                    onClick={() => {
+                                      void runAgentSuggestedCommand(command, "request_approval");
+                                    }}
+                                  >
+                                    {busyActionKey === `agent-command:${selectedAgent.runtime_agent_id}:${toStringValue(command.command)}:request_approval`
+                                      ? "Requesting..."
+                                      : "Request approval"}
+                                  </Button>
+                                </div>
                               </div>
                             ))}
                           </div>
                         )}
                       </div>
 
-                      <div className="grid gap-4 sm:grid-cols-2">
+                      <div className="grid gap-4 lg:grid-cols-3">
                         <div className="rounded-2xl border border-[#ecebe8] bg-[#fbfbf9] p-4">
                           <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#9b9a97]">
                             Agent Issues
@@ -2038,20 +2136,115 @@ export default function ControlPlanePage() {
                                 >
                                   <div className="flex flex-wrap items-center justify-between gap-2">
                                     <p className="font-mono text-[11px] text-[#37352f]">{issue.id}</p>
+                                    <div className="flex flex-wrap gap-2">
+                                      {issue.status === "open" && (
+                                        <Button
+                                          size="sm"
+                                          variant="outline"
+                                          className="h-7 rounded-full border-[#e5e5e3] bg-white px-2.5 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
+                                          disabled={Boolean(busyActionKey)}
+                                          onClick={() => {
+                                            void resolveIssue(issue);
+                                          }}
+                                        >
+                                          {busyActionKey === `issue-resolve:${issue.id}` ? "Resolving..." : "Resolve"}
+                                        </Button>
+                                      )}
+                                      <Button
+                                        size="sm"
+                                        variant="outline"
+                                        className="h-7 rounded-full border-[#f4e0c4] bg-[#fff6e8] px-2.5 text-[11px] text-[#9a6700] hover:bg-[#fff0d9]"
+                                        onClick={() => {
+                                          setEntitySearch(issue.id);
+                                        }}
+                                      >
+                                        Find in session
+                                      </Button>
+                                    </div>
+                                  </div>
+                                  <p className="mt-2 text-[12px] text-[#6b6b6b]">
+                                    {issue.title || issue.root_cause || issue.category}
+                                  </p>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+
+                        <div className="rounded-2xl border border-[#ecebe8] bg-[#fbfbf9] p-4">
+                          <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#9b9a97]">
+                            Agent Approvals
+                          </p>
+                          {selectedAgent.approvals.length === 0 ? (
+                            <p className="mt-3 text-[13px] text-[#9b9a97]">No agent-linked approvals.</p>
+                          ) : (
+                            <div className="mt-3 space-y-3">
+                              {selectedAgent.approvals.slice(0, 3).map((approval) => (
+                                <div
+                                  key={`${selectedAgent.runtime_agent_id}-approval-${approval.id}`}
+                                  className="rounded-xl border border-[#ecebe8] bg-white p-3"
+                                >
+                                  <div className="flex flex-wrap items-center justify-between gap-2">
+                                    <p className="font-mono text-[11px] text-[#37352f]">{approval.id}</p>
+                                    <Badge
+                                      variant="outline"
+                                      className={`rounded-full px-2.5 py-1 text-[11px] font-semibold capitalize ${approvalStatusClass(approval.status)}`}
+                                    >
+                                      {approval.status}
+                                    </Badge>
+                                  </div>
+                                  <p className="mt-2 text-[12px] text-[#6b6b6b]">
+                                    {approval.action} · {approval.reason || "No reason provided"}
+                                  </p>
+                                  <div className="mt-3 flex flex-wrap gap-2">
+                                    {approval.status === "pending" && (
+                                      <>
+                                        <Button
+                                          size="sm"
+                                          className="h-7 rounded-full bg-[#1a1a1a] px-2.5 text-[11px] text-white hover:bg-[#333]"
+                                          disabled={Boolean(busyActionKey)}
+                                          onClick={() => {
+                                            void approveApproval(approval);
+                                          }}
+                                        >
+                                          {busyActionKey === `approval-approve:${approval.id}` ? "Approving..." : "Approve"}
+                                        </Button>
+                                        <Button
+                                          size="sm"
+                                          variant="outline"
+                                          className="h-7 rounded-full border-[#e5e5e3] bg-white px-2.5 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
+                                          disabled={Boolean(busyActionKey)}
+                                          onClick={() => {
+                                            void rejectApproval(approval);
+                                          }}
+                                        >
+                                          {busyActionKey === `approval-reject:${approval.id}` ? "Rejecting..." : "Reject"}
+                                        </Button>
+                                      </>
+                                    )}
+                                    {approval.status === "approved" && (
+                                      <Button
+                                        size="sm"
+                                        className="h-7 rounded-full bg-[#1a1a1a] px-2.5 text-[11px] text-white hover:bg-[#333]"
+                                        disabled={Boolean(busyActionKey)}
+                                        onClick={() => {
+                                          void applyApproval(approval);
+                                        }}
+                                      >
+                                        {busyActionKey === `approval-apply:${approval.id}` ? "Applying..." : "Apply"}
+                                      </Button>
+                                    )}
                                     <Button
                                       size="sm"
                                       variant="outline"
-                                      className="h-7 rounded-full border-[#f4e0c4] bg-[#fff6e8] px-2.5 text-[11px] text-[#9a6700] hover:bg-[#fff0d9]"
+                                      className="h-7 rounded-full border-[#d3e5ef] bg-[#eef7fb] px-2.5 text-[11px] text-[#2a6690] hover:bg-[#e3f2f8]"
                                       onClick={() => {
-                                        setEntitySearch(issue.id);
+                                        setEntitySearch(approval.id);
                                       }}
                                     >
                                       Find in session
                                     </Button>
                                   </div>
-                                  <p className="mt-2 text-[12px] text-[#6b6b6b]">
-                                    {issue.title || issue.root_cause || issue.category}
-                                  </p>
                                 </div>
                               ))}
                             </div>

@@ -6,6 +6,7 @@ import type {
   AccountsByProvider,
   ConnectorValidationResult,
   CreateProjectResult,
+  ExecutionAgentActionExecuteResult,
   IssueResolutionResult,
   IntakeSession,
   LaunchResult,
@@ -163,6 +164,32 @@ export async function fetchExecutionPlaneAgentDetail(
   return jsonOrThrow<ExecutionRuntimeAgentDetail>(
     res,
     `Failed to fetch runtime agent detail: ${res.status}`
+  );
+}
+
+export async function executeExecutionPlaneAgentAction(payload: {
+  actionKey: string;
+  orchestratorSessionId?: string;
+  actor?: string;
+  mode?: string;
+  reason?: string;
+  idempotencyKey?: string;
+}): Promise<ExecutionAgentActionExecuteResult> {
+  const res = await fetch(`${API_BASE}/execution-plane/agents/actions/execute`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      action_key: payload.actionKey,
+      orchestrator_session_id: payload.orchestratorSessionId ?? "",
+      actor: payload.actor ?? "dashboard-control-plane",
+      mode: payload.mode ?? "auto",
+      reason: payload.reason ?? "",
+      idempotency_key: payload.idempotencyKey ?? "",
+    }),
+  });
+  return jsonOrThrow<ExecutionAgentActionExecuteResult>(
+    res,
+    `Failed to execute runtime agent action: ${res.status}`
   );
 }
 
