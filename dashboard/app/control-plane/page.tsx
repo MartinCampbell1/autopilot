@@ -59,6 +59,7 @@ const DATE_FORMATTER = new Intl.DateTimeFormat(undefined, {
 const DEFAULT_CONTROL_ACTOR = "dashboard-control-plane";
 const LINEAGE_QUEUE_STORAGE_PREFIX = "control-plane:lineage-queue:";
 const AGENT_TIMELINE_STORAGE_PREFIX = "control-plane:agent-timeline:";
+const TRIAGE_INBOX_FEEDBACK_LIMIT = 5;
 
 type AgentScopedOutcome = {
   run: ExecutionAgentActionRunRecord;
@@ -1491,7 +1492,9 @@ export default function ControlPlanePage() {
   const [selectedSessionContextKind, setSelectedSessionContextKind] =
     useState<SessionContextKind>("");
   const [selectedTriageInboxKey, setSelectedTriageInboxKey] = useState("");
-  const [triageInboxFeedback, setTriageInboxFeedback] = useState<TriageInboxFeedback | null>(null);
+  const [triageInboxFeedbackHistory, setTriageInboxFeedbackHistory] = useState<
+    TriageInboxFeedback[]
+  >([]);
   const [historySearch, setHistorySearch] = useState("");
   const [entitySearch, setEntitySearch] = useState("");
   const [refreshing, setRefreshing] = useState(false);
@@ -1978,12 +1981,24 @@ export default function ControlPlanePage() {
       tone: "info" | "success" = "success"
     ) => {
       if (!itemKey || !itemLabel || !message) return;
-      setTriageInboxFeedback({
+      const feedback: TriageInboxFeedback = {
         itemKey,
         itemLabel,
         message,
         tone,
         timestamp: new Date().toISOString(),
+      };
+      setTriageInboxFeedbackHistory((current) => {
+        const deduped = current.filter(
+          (entry) =>
+            !(
+              entry.itemKey === feedback.itemKey &&
+              entry.itemLabel === feedback.itemLabel &&
+              entry.message === feedback.message &&
+              entry.tone === feedback.tone
+            )
+        );
+        return [feedback, ...deduped].slice(0, TRIAGE_INBOX_FEEDBACK_LIMIT);
       });
     },
     []
@@ -3440,11 +3455,19 @@ export default function ControlPlanePage() {
       null,
     [triageInboxItems, selectedTriageInboxKey]
   );
+  const triageInboxFeedback = useMemo(
+    () => triageInboxFeedbackHistory[0] ?? null,
+    [triageInboxFeedbackHistory]
+  );
+  const recentTriageInboxFeedback = useMemo(
+    () => triageInboxFeedbackHistory.slice(1, TRIAGE_INBOX_FEEDBACK_LIMIT),
+    [triageInboxFeedbackHistory]
+  );
   useEffect(() => {
     selectedTriageInboxKeyRef.current = selectedTriageInboxKey;
   }, [selectedTriageInboxKey]);
   useEffect(() => {
-    setTriageInboxFeedback(null);
+    setTriageInboxFeedbackHistory([]);
   }, [selectedAgentId, selectedSessionId]);
   const syncedTriageInboxItem = useMemo(
     () => triageInboxItems.find((item) => item.syncedWithSelection) ?? null,
@@ -5322,43 +5345,80 @@ export default function ControlPlanePage() {
                             {selectedTriageInboxItem.subtitle}
                           </p>
                           {triageInboxFeedback ? (
-                            <div
-                              className={`mt-3 rounded-lg border p-3 ${
-                                triageInboxFeedback.tone === "success"
-                                  ? "border-[#d6e9dc] bg-[#eef8f1]"
-                                  : "border-[#e5e5e3] bg-white"
-                              }`}
-                            >
-                              <div className="flex flex-wrap items-center justify-between gap-2">
-                                <p
-                                  className={`text-[11px] font-semibold uppercase tracking-[0.08em] ${
-                                    triageInboxFeedback.tone === "success"
-                                      ? "text-[#2b6e3f]"
-                                      : "text-[#9b9a97]"
-                                  }`}
-                                >
-                                  Latest Result
-                                  {triageInboxFeedback.itemLabel
-                                    ? ` · ${triageInboxFeedback.itemLabel}`
-                                    : ""}
-                                </p>
-                                <p className="text-[11px] text-[#9b9a97]">
-                                  {formatTimestamp(triageInboxFeedback.timestamp)}
-                                </p>
-                              </div>
-                              <p
-                                className={`mt-2 text-[12px] ${
+                            <div className="mt-3 space-y-3">
+                              <div
+                                className={`rounded-lg border p-3 ${
                                   triageInboxFeedback.tone === "success"
-                                    ? "text-[#2b6e3f]"
-                                    : "text-[#6b6b6b]"
+                                    ? "border-[#d6e9dc] bg-[#eef8f1]"
+                                    : "border-[#e5e5e3] bg-white"
                                 }`}
                               >
-                                {triageInboxFeedback.message}
-                              </p>
-                              {triageInboxFeedback.itemKey !== selectedTriageInboxItem.key ? (
-                                <p className="mt-2 text-[11px] text-[#9b9a97]">
-                                  Cursor moved after that action.
+                                <div className="flex flex-wrap items-center justify-between gap-2">
+                                  <p
+                                    className={`text-[11px] font-semibold uppercase tracking-[0.08em] ${
+                                      triageInboxFeedback.tone === "success"
+                                        ? "text-[#2b6e3f]"
+                                        : "text-[#9b9a97]"
+                                    }`}
+                                  >
+                                    Latest Result
+                                    {triageInboxFeedback.itemLabel
+                                      ? ` · ${triageInboxFeedback.itemLabel}`
+                                      : ""}
+                                  </p>
+                                  <p className="text-[11px] text-[#9b9a97]">
+                                    {formatTimestamp(triageInboxFeedback.timestamp)}
+                                  </p>
+                                </div>
+                                <p
+                                  className={`mt-2 text-[12px] ${
+                                    triageInboxFeedback.tone === "success"
+                                      ? "text-[#2b6e3f]"
+                                      : "text-[#6b6b6b]"
+                                  }`}
+                                >
+                                  {triageInboxFeedback.message}
                                 </p>
+                                {triageInboxFeedback.itemKey !== selectedTriageInboxItem.key ? (
+                                  <p className="mt-2 text-[11px] text-[#9b9a97]">
+                                    Cursor moved after that action.
+                                  </p>
+                                ) : null}
+                              </div>
+                              {recentTriageInboxFeedback.length ? (
+                                <div className="rounded-lg border border-[#ecebe8] bg-white p-3">
+                                  <div className="flex flex-wrap items-center justify-between gap-2">
+                                    <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#9b9a97]">
+                                      Recent Results
+                                    </p>
+                                    <Badge
+                                      variant="outline"
+                                      className="rounded-full border-[#e5e5e3] bg-[#fafaf9] px-2.5 py-1 text-[11px] font-medium text-[#37352f]"
+                                    >
+                                      {recentTriageInboxFeedback.length}
+                                    </Badge>
+                                  </div>
+                                  <div className="mt-3 space-y-2">
+                                    {recentTriageInboxFeedback.map((feedback) => (
+                                      <div
+                                        key={`${feedback.itemKey}:${feedback.timestamp}`}
+                                        className="rounded-lg border border-[#ecebe8] bg-[#fbfbf9] p-2.5"
+                                      >
+                                        <div className="flex flex-wrap items-center justify-between gap-2">
+                                          <p className="text-[11px] font-semibold text-[#37352f]">
+                                            {feedback.itemLabel}
+                                          </p>
+                                          <p className="text-[11px] text-[#9b9a97]">
+                                            {formatTimestamp(feedback.timestamp)}
+                                          </p>
+                                        </div>
+                                        <p className="mt-1 text-[12px] text-[#6b6b6b]">
+                                          {feedback.message}
+                                        </p>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
                               ) : null}
                             </div>
                           ) : null}
