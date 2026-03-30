@@ -66,6 +66,19 @@ type AgentScopedOutcome = {
   runtimeAgentIds: string[];
 };
 
+type AgentTimelineEntry = {
+  kind: "approval" | "issue" | "event";
+  id: string;
+  timestamp: string;
+  status: string;
+  title: string;
+  subtitle: string;
+  message: string;
+  approval?: ExecutionApprovalRecord;
+  issue?: ExecutionIssueRecord;
+  event?: Record<string, unknown>;
+};
+
 function formatTimestamp(value?: string | null): string {
   if (!value) return "No activity yet";
   const date = new Date(value);
@@ -258,6 +271,23 @@ function matchesAgentOutcomeFilter(outcome: AgentScopedOutcome, filter: string):
   if (filter === "attention") {
     const status = toStringValue(outcome.result.status);
     return ["error", "partial", "pending_approval", "not_executable", "failed"].includes(status);
+  }
+  return true;
+}
+
+function matchesAgentTimelineFilter(entry: AgentTimelineEntry, filter: string): boolean {
+  if (filter === "all") return true;
+  if (filter === "approvals") return entry.kind === "approval";
+  if (filter === "issues") return entry.kind === "issue";
+  if (filter === "events") return entry.kind === "event";
+  if (filter === "attention") {
+    if (entry.kind === "approval") {
+      return ["pending", "approved"].includes(entry.status);
+    }
+    if (entry.kind === "issue") {
+      return entry.status === "open";
+    }
+    return ["error", "partial", "pending_approval", "failed"].includes(entry.status);
   }
   return true;
 }
@@ -645,6 +675,8 @@ export default function ControlPlanePage() {
   const [eventFilter, setEventFilter] = useState("all");
   const [agentActivityFilter, setAgentActivityFilter] = useState("all");
   const [agentActivitySearch, setAgentActivitySearch] = useState("");
+  const [agentTimelineFilter, setAgentTimelineFilter] = useState("all");
+  const [agentTimelineSearch, setAgentTimelineSearch] = useState("");
   const [historySearch, setHistorySearch] = useState("");
   const [entitySearch, setEntitySearch] = useState("");
   const [refreshing, setRefreshing] = useState(false);
@@ -875,6 +907,8 @@ export default function ControlPlanePage() {
   useEffect(() => {
     setAgentActivityFilter("all");
     setAgentActivitySearch("");
+    setAgentTimelineFilter("all");
+    setAgentTimelineSearch("");
   }, [selectedAgentId]);
 
   useEffect(() => {
@@ -1270,6 +1304,82 @@ export default function ControlPlanePage() {
           )
       ),
     [agentActivityFilter, agentActivitySearch, agentScopedOutcomes]
+  );
+  const agentTimelineEntries = useMemo(() => {
+    if (!selectedAgent) return [] as AgentTimelineEntry[];
+    const entries: AgentTimelineEntry[] = [];
+
+    selectedAgent.approvals.forEach((approval) => {
+      entries.push({
+        kind: "approval",
+        id: approval.id,
+        timestamp:
+          approval.applied_at ||
+          approval.decided_at ||
+          approval.updated_at ||
+          approval.created_at,
+        status: approval.status,
+        title: approval.action || approval.id,
+        subtitle: approval.project_name || approval.project_id,
+        message: approval.reason || "No approval reason provided.",
+        approval,
+      });
+    });
+
+    selectedAgent.issues.forEach((issue) => {
+      entries.push({
+        kind: "issue",
+        id: issue.id,
+        timestamp: issue.resolved_at || issue.updated_at || issue.created_at,
+        status: issue.status,
+        title: issue.title || issue.root_cause || issue.category || issue.id,
+        subtitle: issue.category || issue.severity || issue.project_name || issue.project_id,
+        message: issue.description || issue.root_cause || "No issue detail provided.",
+        issue,
+      });
+    });
+
+    selectedAgent.events.forEach((event, index) => {
+      entries.push({
+        kind: "event",
+        id: `${toStringValue(event.event, "event")}:${toStringValue(event.timestamp, String(index))}`,
+        timestamp: toStringValue(event.timestamp),
+        status: toStringValue(event.status, "unknown"),
+        title: toStringValue(event.event, "unknown_event"),
+        subtitle: eventFamily(toStringValue(event.event)),
+        message: toStringValue(event.message, "No event message"),
+        event,
+      });
+    });
+
+    return entries.sort(
+      (left, right) =>
+        right.timestamp.localeCompare(left.timestamp) ||
+        left.kind.localeCompare(right.kind) ||
+        left.id.localeCompare(right.id)
+    );
+  }, [selectedAgent]);
+  const filteredAgentTimelineEntries = useMemo(
+    () =>
+      agentTimelineEntries.filter(
+        (entry) =>
+          matchesAgentTimelineFilter(entry, agentTimelineFilter) &&
+          matchesSearch(
+            [
+              entry.kind,
+              entry.id,
+              entry.status,
+              entry.title,
+              entry.subtitle,
+              entry.message,
+              entry.approval,
+              entry.issue,
+              entry.event,
+            ],
+            agentTimelineSearch
+          )
+      ),
+    [agentTimelineEntries, agentTimelineFilter, agentTimelineSearch]
   );
   const selectedControl = selectedSession?.control ?? null;
   const loading = !controlSummary || !sessionSummary;
@@ -2459,6 +2569,220 @@ export default function ControlPlanePage() {
                             </div>
                           )}
                         </div>
+                      </div>
+
+                      <div className="rounded-2xl border border-[#ecebe8] bg-[#fbfbf9] p-4">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div>
+                            <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#9b9a97]">
+                              Agent Timeline
+                            </p>
+                            <p className="mt-1 text-[13px] text-[#787774]">
+                              Unified approvals, issues, and runtime events for this agent.
+                            </p>
+                          </div>
+                          <Badge
+                            variant="outline"
+                            className="rounded-full border-[#e5e5e3] bg-white px-2.5 py-1 text-[11px] font-medium text-[#37352f]"
+                          >
+                            {agentTimelineEntries.length} item{agentTimelineEntries.length === 1 ? "" : "s"}
+                          </Badge>
+                        </div>
+
+                        <div className="mt-3 space-y-3">
+                          <Input
+                            value={agentTimelineSearch}
+                            onChange={(event) => setAgentTimelineSearch(event.target.value)}
+                            placeholder="Search approvals, issues, and agent events..."
+                            className="h-9 rounded-xl border-[#e5e5e3] bg-white text-[13px] text-[#37352f] placeholder:text-[#9b9a97]"
+                          />
+                          <div className="flex flex-wrap gap-2">
+                            {[
+                              { value: "all", label: "All" },
+                              { value: "approvals", label: "Approvals" },
+                              { value: "issues", label: "Issues" },
+                              { value: "events", label: "Events" },
+                              { value: "attention", label: "Attention" },
+                            ].map((option) => {
+                              const selected = agentTimelineFilter === option.value;
+                              return (
+                                <Button
+                                  key={`agent-timeline-filter-${option.value}`}
+                                  size="sm"
+                                  variant={selected ? "default" : "outline"}
+                                  className={`h-7 rounded-full px-3 text-[11px] ${
+                                    selected
+                                      ? "bg-[#1a1a1a] text-white hover:bg-[#333]"
+                                      : "border-[#e5e5e3] bg-white text-[#37352f] hover:bg-[#f7f7f5]"
+                                  }`}
+                                  onClick={() => {
+                                    setAgentTimelineFilter(option.value);
+                                  }}
+                                >
+                                  {option.label}
+                                </Button>
+                              );
+                            })}
+                          </div>
+                        </div>
+
+                        {filteredAgentTimelineEntries.length === 0 ? (
+                          <p className="mt-3 text-[13px] text-[#9b9a97]">
+                            No timeline entries match the current filters.
+                          </p>
+                        ) : (
+                          <div className="mt-4 space-y-3">
+                            {filteredAgentTimelineEntries.slice(0, 6).map((entry) => {
+                              const eventApprovalId = toStringValue(entry.event?.approval_id);
+                              const eventIssueId = toStringValue(entry.event?.issue_id);
+                              const eventToken =
+                                toStringValue(entry.event?.event) ||
+                                toStringValue(entry.event?.message) ||
+                                entry.id;
+
+                              return (
+                                <div
+                                  key={`${selectedAgent.runtime_agent_id}-timeline-${entry.kind}-${entry.id}`}
+                                  className="rounded-xl border border-[#ecebe8] bg-white p-3"
+                                >
+                                  <div className="flex flex-wrap items-center justify-between gap-2">
+                                    <div className="flex flex-wrap items-center gap-2">
+                                      <Badge
+                                        variant="outline"
+                                        className="rounded-full border-[#e5e5e3] bg-[#fafaf9] px-2.5 py-1 text-[11px] font-medium capitalize text-[#37352f]"
+                                      >
+                                        {entry.kind}
+                                      </Badge>
+                                      <p className="text-[13px] font-semibold text-[#37352f]">
+                                        {entry.title}
+                                      </p>
+                                    </div>
+                                    <div className="flex flex-wrap items-center gap-2">
+                                      <Badge
+                                        variant="outline"
+                                        className={`rounded-full px-2.5 py-1 text-[11px] font-semibold capitalize ${
+                                          entry.kind === "approval"
+                                            ? approvalStatusClass(entry.status)
+                                            : entry.kind === "issue"
+                                              ? passStatusClass(entry.status === "open" ? "partial" : "ok")
+                                              : passStatusClass(entry.status)
+                                        }`}
+                                      >
+                                        {entry.status}
+                                      </Badge>
+                                      <p className="text-[11px] text-[#9b9a97]">{formatTimestamp(entry.timestamp)}</p>
+                                    </div>
+                                  </div>
+
+                                  <p className="mt-2 text-[12px] text-[#787774]">{entry.subtitle}</p>
+                                  <p className="mt-2 text-[12px] text-[#6b6b6b]">{entry.message}</p>
+
+                                  <div className="mt-3 flex flex-wrap gap-2">
+                                    {entry.approval?.status === "pending" && (
+                                      <>
+                                        <Button
+                                          size="sm"
+                                          className="h-7 rounded-full bg-[#1a1a1a] px-2.5 text-[11px] text-white hover:bg-[#333]"
+                                          disabled={Boolean(busyActionKey)}
+                                          onClick={() => {
+                                            void approveApproval(entry.approval!);
+                                          }}
+                                        >
+                                          {busyActionKey === `approval-approve:${entry.approval.id}` ? "Approving..." : "Approve"}
+                                        </Button>
+                                        <Button
+                                          size="sm"
+                                          variant="outline"
+                                          className="h-7 rounded-full border-[#e5e5e3] bg-white px-2.5 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
+                                          disabled={Boolean(busyActionKey)}
+                                          onClick={() => {
+                                            void rejectApproval(entry.approval!);
+                                          }}
+                                        >
+                                          {busyActionKey === `approval-reject:${entry.approval.id}` ? "Rejecting..." : "Reject"}
+                                        </Button>
+                                      </>
+                                    )}
+                                    {entry.approval?.status === "approved" && (
+                                      <Button
+                                        size="sm"
+                                        className="h-7 rounded-full bg-[#1a1a1a] px-2.5 text-[11px] text-white hover:bg-[#333]"
+                                        disabled={Boolean(busyActionKey)}
+                                        onClick={() => {
+                                          void applyApproval(entry.approval!);
+                                        }}
+                                      >
+                                        {busyActionKey === `approval-apply:${entry.approval.id}` ? "Applying..." : "Apply"}
+                                      </Button>
+                                    )}
+                                    {entry.issue?.status === "open" && (
+                                      <Button
+                                        size="sm"
+                                        variant="outline"
+                                        className="h-7 rounded-full border-[#e5e5e3] bg-white px-2.5 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
+                                        disabled={Boolean(busyActionKey)}
+                                        onClick={() => {
+                                          void resolveIssue(entry.issue!);
+                                        }}
+                                      >
+                                        {busyActionKey === `issue-resolve:${entry.issue.id}` ? "Resolving..." : "Resolve"}
+                                      </Button>
+                                    )}
+                                    {(entry.approval?.id || entry.issue?.id) && (
+                                      <Button
+                                        size="sm"
+                                        variant="outline"
+                                        className="h-7 rounded-full border-[#d3e5ef] bg-[#eef7fb] px-2.5 text-[11px] text-[#2a6690] hover:bg-[#e3f2f8]"
+                                        onClick={() => {
+                                          setEntitySearch(entry.approval?.id || entry.issue?.id || "");
+                                        }}
+                                      >
+                                        Find in session
+                                      </Button>
+                                    )}
+                                    {eventApprovalId && (
+                                      <Button
+                                        size="sm"
+                                        variant="outline"
+                                        className="h-7 rounded-full border-[#d3e5ef] bg-[#eef7fb] px-2.5 text-[11px] text-[#2a6690] hover:bg-[#e3f2f8]"
+                                        onClick={() => {
+                                          setEntitySearch(eventApprovalId);
+                                        }}
+                                      >
+                                        Find approval
+                                      </Button>
+                                    )}
+                                    {eventIssueId && (
+                                      <Button
+                                        size="sm"
+                                        variant="outline"
+                                        className="h-7 rounded-full border-[#f4e0c4] bg-[#fff6e8] px-2.5 text-[11px] text-[#9a6700] hover:bg-[#fff0d9]"
+                                        onClick={() => {
+                                          setEntitySearch(eventIssueId);
+                                        }}
+                                      >
+                                        Find issue
+                                      </Button>
+                                    )}
+                                    {entry.kind === "event" && (
+                                      <Button
+                                        size="sm"
+                                        variant="outline"
+                                        className="h-7 rounded-full border-[#e5e5e3] bg-white px-2.5 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
+                                        onClick={() => {
+                                          setEventFilter("all");
+                                          setEntitySearch(eventToken);
+                                        }}
+                                      >
+                                        Filter session
+                                      </Button>
+                                    )}
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
                       </div>
 
                       <div className="grid gap-4 lg:grid-cols-3">
