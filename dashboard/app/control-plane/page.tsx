@@ -195,6 +195,11 @@ type QueueAdvanceSignal = {
   className: string;
   focusFilter?: string;
 };
+type QueueAdvanceReasonDetails = {
+  priority: TriagePriority;
+  reason: string;
+  signals: QueueAdvanceSignal[];
+};
 type QueueAdvanceFeedback = {
   title: string;
   detail: string;
@@ -911,6 +916,47 @@ function queueAdvanceSignal(
   return { key, label, className, focusFilter };
 }
 
+function buildQueueAdvanceFeedback(args: {
+  title: string;
+  detail: string;
+  nextTarget?: QueueAdvanceTarget | null;
+  previousTarget?: QueueAdvanceTarget | null;
+  reasonDetails?: QueueAdvanceReasonDetails | null;
+}): QueueAdvanceFeedback {
+  return {
+    title: args.title,
+    detail: args.detail,
+    timestamp: new Date().toISOString(),
+    nextTarget: args.nextTarget,
+    previousTarget: args.previousTarget,
+    reason: args.reasonDetails?.reason,
+    reasonPriority: args.reasonDetails?.priority,
+    signals: args.reasonDetails?.signals,
+  };
+}
+
+function buildQueueAdvanceFocusSummary(args: {
+  activeFilter: string;
+  total: number;
+  visible: number;
+  labelForFilter: (filter: string) => string;
+  classForFilter: (filter: string) => string;
+  noun: string;
+  scopeLabel: string;
+}): QueueAdvanceFocusSummary {
+  const { activeFilter, total, visible, labelForFilter, classForFilter, noun, scopeLabel } = args;
+  const label = labelForFilter(activeFilter);
+  return {
+    label,
+    detail:
+      activeFilter === "all"
+        ? `Showing ${visible} of ${total} ${noun} in the full ${scopeLabel} slice.`
+        : `Showing ${visible} of ${total} ${noun} in the ${label.toLowerCase()} slice.`,
+    activeFilter,
+    badgeClassName: classForFilter(activeFilter),
+  };
+}
+
 function sessionLineagePriority(entry: SessionLineageEntry): TriagePriority {
   const status = entry.status.toLowerCase();
   const eventStatus = toStringValue(asRecord(entry.event)?.status).toLowerCase();
@@ -954,11 +1000,7 @@ function agentTimelineEntryStatusClass(entry: AgentTimelineEntry): string {
   return passStatusClass(entry.status);
 }
 
-function describeSessionQueueAdvanceReason(entry: SessionLineageEntry): {
-  priority: TriagePriority;
-  reason: string;
-  signals: QueueAdvanceSignal[];
-} {
+function describeSessionQueueAdvanceReason(entry: SessionLineageEntry): QueueAdvanceReasonDetails {
   const priority = sessionLineagePriority(entry);
   const status = entry.status.toLowerCase();
   const eventStatus = toStringValue(asRecord(entry.event)?.status).toLowerCase();
@@ -1066,11 +1108,7 @@ function describeSessionQueueAdvanceReason(entry: SessionLineageEntry): {
   };
 }
 
-function describeAgentQueueAdvanceReason(entry: AgentTimelineEntry): {
-  priority: TriagePriority;
-  reason: string;
-  signals: QueueAdvanceSignal[];
-} {
+function describeAgentQueueAdvanceReason(entry: AgentTimelineEntry): QueueAdvanceReasonDetails {
   const priority = agentTimelinePriority(entry);
   const status = entry.status.toLowerCase();
   if (entry.kind === "issue" && status === "open") {
@@ -3666,18 +3704,15 @@ export default function ControlPlanePage() {
       const nextEntry = nextSessionLineageQueueEntry(entries, selectedSessionLineageEntry);
       if (!nextEntry) return;
       const nextReason = describeSessionQueueAdvanceReason(nextEntry);
-      setSessionQueueAdvanceFeedback({
+      setSessionQueueAdvanceFeedback(buildQueueAdvanceFeedback({
         title: `${filter === "attention" ? "Attention" : "Decision"} queue advanced`,
         detail: `Selected "${nextEntry.title}" as the next ${filter} item.`,
-        timestamp: new Date().toISOString(),
         nextTarget: sessionQueueAdvanceTarget(filter, nextEntry),
         previousTarget: previousEntry
           ? sessionQueueAdvanceTarget(sessionLineageFilter, previousEntry)
           : null,
-        reason: nextReason.reason,
-        reasonPriority: nextReason.priority,
-        signals: nextReason.signals,
-      });
+        reasonDetails: nextReason,
+      }));
       focusSessionLineageEntry(nextEntry, filter);
     },
     [
@@ -3695,16 +3730,13 @@ export default function ControlPlanePage() {
       const nextEntry = nextSessionLineageQueueEntry(entries, entry);
       if (!nextEntry) return;
       const nextReason = describeSessionQueueAdvanceReason(nextEntry);
-      setSessionQueueAdvanceFeedback({
+      setSessionQueueAdvanceFeedback(buildQueueAdvanceFeedback({
         title: `${filter === "attention" ? "Attention" : "Decision"} queue advanced`,
         detail: `Selected "${nextEntry.title}" as the next ${filter} item.`,
-        timestamp: new Date().toISOString(),
         nextTarget: sessionQueueAdvanceTarget(filter, nextEntry),
         previousTarget: entry ? sessionQueueAdvanceTarget(filter, entry) : null,
-        reason: nextReason.reason,
-        reasonPriority: nextReason.priority,
-        signals: nextReason.signals,
-      });
+        reasonDetails: nextReason,
+      }));
       focusSessionLineageEntry(nextEntry, filter);
     },
     [attentionSessionLineageEntries, decisionSessionLineageEntries, focusSessionLineageEntry]
@@ -3911,10 +3943,9 @@ export default function ControlPlanePage() {
     setPendingLineageAutoAdvance(null);
     if (nextEntry) {
       const nextReason = describeSessionQueueAdvanceReason(nextEntry);
-      setSessionQueueAdvanceFeedback({
+      setSessionQueueAdvanceFeedback(buildQueueAdvanceFeedback({
         title: `${pendingLineageAutoAdvance.filter === "attention" ? "Attention" : "Decision"} queue auto-advanced`,
         detail: `Moved to "${nextEntry.title}" after the previous queue action completed.`,
-        timestamp: new Date().toISOString(),
         nextTarget: sessionQueueAdvanceTarget(pendingLineageAutoAdvance.filter, nextEntry),
         previousTarget: pendingLineageAutoAdvance.previousEntry
           ? sessionQueueAdvanceTarget(
@@ -3922,23 +3953,20 @@ export default function ControlPlanePage() {
               pendingLineageAutoAdvance.previousEntry
             )
           : null,
-        reason: nextReason.reason,
-        reasonPriority: nextReason.priority,
-        signals: nextReason.signals,
-      });
+        reasonDetails: nextReason,
+      }));
       focusSessionLineageEntry(nextEntry, pendingLineageAutoAdvance.filter);
     } else {
-      setSessionQueueAdvanceFeedback({
+      setSessionQueueAdvanceFeedback(buildQueueAdvanceFeedback({
         title: `${pendingLineageAutoAdvance.filter === "attention" ? "Attention" : "Decision"} queue cleared`,
         detail: `No remaining ${pendingLineageAutoAdvance.filter} items were available after the previous queue action.`,
-        timestamp: new Date().toISOString(),
         previousTarget: pendingLineageAutoAdvance.previousEntry
           ? sessionQueueAdvanceTarget(
               pendingLineageAutoAdvance.previousFilter,
               pendingLineageAutoAdvance.previousEntry
             )
           : null,
-      });
+      }));
       setSessionLineageFilter(pendingLineageAutoAdvance.filter);
     }
   }, [
@@ -4185,17 +4213,15 @@ export default function ControlPlanePage() {
   );
   const sessionQueueAdvanceFocusSummary = useMemo<QueueAdvanceFocusSummary | null>(() => {
     if (!sessionQueueAdvanceFeedback) return null;
-    const total = sessionLineageEntries.length;
-    const visible = filteredSessionLineageEntries.length;
-    return {
-      label: sessionLineageFilterLabel(sessionLineageFilter),
-      detail:
-        sessionLineageFilter === "all"
-          ? `Showing ${visible} of ${total} lineage chains in the full session slice.`
-          : `Showing ${visible} of ${total} lineage chains in the ${sessionLineageFilterLabel(sessionLineageFilter).toLowerCase()} slice.`,
+    return buildQueueAdvanceFocusSummary({
       activeFilter: sessionLineageFilter,
-      badgeClassName: sessionLineageFilterClass(sessionLineageFilter),
-    };
+      total: sessionLineageEntries.length,
+      visible: filteredSessionLineageEntries.length,
+      labelForFilter: sessionLineageFilterLabel,
+      classForFilter: sessionLineageFilterClass,
+      noun: "lineage chains",
+      scopeLabel: "session",
+    });
   }, [
     filteredSessionLineageEntries.length,
     sessionLineageEntries.length,
@@ -4204,17 +4230,15 @@ export default function ControlPlanePage() {
   ]);
   const agentQueueAdvanceFocusSummary = useMemo<QueueAdvanceFocusSummary | null>(() => {
     if (!agentQueueAdvanceFeedback) return null;
-    const total = activeAgentTimelineEntries.length;
-    const visible = filteredAgentTimelineEntries.length;
-    return {
-      label: agentTimelineFilterLabel(agentTimelineFilter),
-      detail:
-        agentTimelineFilter === "all"
-          ? `Showing ${visible} of ${total} active timeline items in the full agent slice.`
-          : `Showing ${visible} of ${total} active timeline items in the ${agentTimelineFilterLabel(agentTimelineFilter).toLowerCase()} slice.`,
+    return buildQueueAdvanceFocusSummary({
       activeFilter: agentTimelineFilter,
-      badgeClassName: agentTimelineFilterClass(agentTimelineFilter),
-    };
+      total: activeAgentTimelineEntries.length,
+      visible: filteredAgentTimelineEntries.length,
+      labelForFilter: agentTimelineFilterLabel,
+      classForFilter: agentTimelineFilterClass,
+      noun: "active timeline items",
+      scopeLabel: "agent",
+    });
   }, [
     activeAgentTimelineEntries.length,
     agentQueueAdvanceFeedback,
@@ -4448,16 +4472,13 @@ export default function ControlPlanePage() {
       );
       if (!nextEntry) return;
       const nextReason = describeAgentQueueAdvanceReason(nextEntry);
-      setAgentQueueAdvanceFeedback({
+      setAgentQueueAdvanceFeedback(buildQueueAdvanceFeedback({
         title: `${priority === "critical" ? "Critical" : "High"} queue advanced`,
         detail: `Selected "${nextEntry.title}" as the next ${priority} item.`,
-        timestamp: new Date().toISOString(),
         nextTarget: agentQueueAdvanceTarget(priority, nextEntry),
         previousTarget: entry ? agentQueueAdvanceTarget(priority, entry) : null,
-        reason: nextReason.reason,
-        reasonPriority: nextReason.priority,
-        signals: nextReason.signals,
-      });
+        reasonDetails: nextReason,
+      }));
       inspectAgentTimelineEntry(nextEntry);
     },
     [filteredAgentTimelineEntries, inspectAgentTimelineEntry]
@@ -4979,10 +5000,9 @@ export default function ControlPlanePage() {
     setPendingAgentPriorityAutoAdvance(null);
     if (nextEntry) {
       const nextReason = describeAgentQueueAdvanceReason(nextEntry);
-      setAgentQueueAdvanceFeedback({
+      setAgentQueueAdvanceFeedback(buildQueueAdvanceFeedback({
         title: `${pendingAgentPriorityAutoAdvance.priority === "critical" ? "Critical" : "High"} queue auto-advanced`,
         detail: `Moved to "${nextEntry.title}" after the previous queue action completed.`,
-        timestamp: new Date().toISOString(),
         nextTarget: agentQueueAdvanceTarget(pendingAgentPriorityAutoAdvance.priority, nextEntry),
         previousTarget: pendingAgentPriorityAutoAdvance.previousEntry
           ? agentQueueAdvanceTarget(
@@ -4990,23 +5010,20 @@ export default function ControlPlanePage() {
               pendingAgentPriorityAutoAdvance.previousEntry
             )
           : null,
-        reason: nextReason.reason,
-        reasonPriority: nextReason.priority,
-        signals: nextReason.signals,
-      });
+        reasonDetails: nextReason,
+      }));
       inspectAgentTimelineEntry(nextEntry);
     } else {
-      setAgentQueueAdvanceFeedback({
+      setAgentQueueAdvanceFeedback(buildQueueAdvanceFeedback({
         title: `${pendingAgentPriorityAutoAdvance.priority === "critical" ? "Critical" : "High"} queue cleared`,
         detail: `No remaining ${pendingAgentPriorityAutoAdvance.priority} items were available after the previous queue action.`,
-        timestamp: new Date().toISOString(),
         previousTarget: pendingAgentPriorityAutoAdvance.previousEntry
           ? agentQueueAdvanceTarget(
               pendingAgentPriorityAutoAdvance.priority,
               pendingAgentPriorityAutoAdvance.previousEntry
             )
           : null,
-      });
+      }));
     }
   }, [
     criticalAgentTimelineEntries,
