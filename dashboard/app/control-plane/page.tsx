@@ -187,6 +187,11 @@ type AgentQueueAdvanceTarget = {
   entry: AgentTimelineEntry;
 };
 type QueueAdvanceTarget = SessionQueueAdvanceTarget | AgentQueueAdvanceTarget;
+type QueueAdvanceSignal = {
+  key: string;
+  label: string;
+  className: string;
+};
 type QueueAdvanceFeedback = {
   title: string;
   detail: string;
@@ -195,6 +200,7 @@ type QueueAdvanceFeedback = {
   previousTarget?: QueueAdvanceTarget | null;
   reason?: string;
   reasonPriority?: TriagePriority;
+  signals?: QueueAdvanceSignal[];
 };
 
 function agentTimelineEntryKey(entry: AgentTimelineEntry): string {
@@ -803,6 +809,14 @@ function triagePriorityLabel(priority: TriagePriority): string {
   }
 }
 
+function queueAdvanceSignal(
+  key: string,
+  label: string,
+  className: string
+): QueueAdvanceSignal {
+  return { key, label, className };
+}
+
 function sessionLineagePriority(entry: SessionLineageEntry): TriagePriority {
   const status = entry.status.toLowerCase();
   const eventStatus = toStringValue(asRecord(entry.event)?.status).toLowerCase();
@@ -849,6 +863,7 @@ function agentTimelineEntryStatusClass(entry: AgentTimelineEntry): string {
 function describeSessionQueueAdvanceReason(entry: SessionLineageEntry): {
   priority: TriagePriority;
   reason: string;
+  signals: QueueAdvanceSignal[];
 } {
   const priority = sessionLineagePriority(entry);
   const status = entry.status.toLowerCase();
@@ -857,47 +872,102 @@ function describeSessionQueueAdvanceReason(entry: SessionLineageEntry): {
     return {
       priority,
       reason: "Issue-linked chain stays at the front because it still represents an unresolved execution problem.",
+      signals: [
+        queueAdvanceSignal(
+          "issue",
+          "Issue-linked",
+          "border-[#f0d0c9] bg-[#fff0ed] text-[#93370d]"
+        ),
+      ],
     };
   }
   if (["error", "failed", "blocked", "rejected", "not_executable"].includes(status)) {
     return {
       priority,
       reason: `Run status "${status}" keeps this chain at ${triagePriorityLabel(priority).toLowerCase()} priority.`,
+      signals: [
+        queueAdvanceSignal(
+          "run-status",
+          `Run ${status}`,
+          "border-[#f0d0c9] bg-[#fff0ed] text-[#93370d]"
+        ),
+      ],
     };
   }
   if (["error", "failed"].includes(eventStatus)) {
     return {
       priority,
       reason: `Linked event status "${eventStatus}" keeps this chain elevated for operator attention.`,
+      signals: [
+        queueAdvanceSignal(
+          "event-status",
+          `Event ${eventStatus}`,
+          "border-[#f0d0c9] bg-[#fff0ed] text-[#93370d]"
+        ),
+        queueAdvanceSignal(
+          "event-linked",
+          "Event-linked",
+          "border-[#d6e9dc] bg-[#eef8f1] text-[#2b6e3f]"
+        ),
+      ],
     };
   }
   if (entry.approvalId) {
     return {
       priority,
       reason: "Approval-linked chain remains next because it still needs an operator decision or apply step.",
+      signals: [
+        queueAdvanceSignal(
+          "approval",
+          "Approval-linked",
+          "border-[#d3e5ef] bg-[#eef7fb] text-[#2a6690]"
+        ),
+      ],
     };
   }
   if (isAttentionLineageEntry(entry)) {
     return {
       priority,
       reason: "Attention signals on this chain still outweigh normal queue items after the previous transition.",
+      signals: [
+        queueAdvanceSignal(
+          "attention",
+          "Attention",
+          "border-[#f4e0c4] bg-[#fff6e8] text-[#9a6700]"
+        ),
+      ],
     };
   }
   if (entry.runtimeAgentId) {
     return {
       priority,
       reason: "Agent-linked context keeps this chain visible as the next operational handoff point.",
+      signals: [
+        queueAdvanceSignal(
+          "agent",
+          "Agent-linked",
+          "border-[#e5e5e3] bg-white text-[#37352f]"
+        ),
+      ],
     };
   }
   return {
     priority,
     reason: "This is the next visible queue item after the previous action completed.",
+    signals: [
+      queueAdvanceSignal(
+        "queue-order",
+        "Queue order",
+        "border-[#e5e5e3] bg-[#fafaf9] text-[#37352f]"
+      ),
+    ],
   };
 }
 
 function describeAgentQueueAdvanceReason(entry: AgentTimelineEntry): {
   priority: TriagePriority;
   reason: string;
+  signals: QueueAdvanceSignal[];
 } {
   const priority = agentTimelinePriority(entry);
   const status = entry.status.toLowerCase();
@@ -905,29 +975,74 @@ function describeAgentQueueAdvanceReason(entry: AgentTimelineEntry): {
     return {
       priority,
       reason: "Open issue keeps this agent item at the front because it still blocks or degrades execution.",
+      signals: [
+        queueAdvanceSignal(
+          "issue",
+          "Open issue",
+          "border-[#f0d0c9] bg-[#fff0ed] text-[#93370d]"
+        ),
+      ],
     };
   }
   if (entry.kind === "event" && ["error", "failed"].includes(status)) {
     return {
       priority,
       reason: `Failed runtime event "${status}" keeps this agent item at ${triagePriorityLabel(priority).toLowerCase()} priority.`,
+      signals: [
+        queueAdvanceSignal(
+          "event-status",
+          `Event ${status}`,
+          "border-[#f0d0c9] bg-[#fff0ed] text-[#93370d]"
+        ),
+        queueAdvanceSignal(
+          "runtime-event",
+          "Runtime event",
+          "border-[#d6e9dc] bg-[#eef8f1] text-[#2b6e3f]"
+        ),
+      ],
     };
   }
   if (entry.kind === "approval" && ["pending", "approved"].includes(status)) {
     return {
       priority,
       reason: `Approval status "${status}" keeps this agent item active until it is reviewed or applied.`,
+      signals: [
+        queueAdvanceSignal(
+          "approval-status",
+          `Approval ${status}`,
+          "border-[#d3e5ef] bg-[#eef7fb] text-[#2a6690]"
+        ),
+      ],
     };
   }
   if (entry.kind === "event" && ["partial", "pending_approval", "blocked", "rejected"].includes(status)) {
     return {
       priority,
       reason: `Runtime event status "${status}" still needs operator attention before the agent can move cleanly.`,
+      signals: [
+        queueAdvanceSignal(
+          "event-status",
+          `Event ${status}`,
+          "border-[#f4e0c4] bg-[#fff6e8] text-[#9a6700]"
+        ),
+        queueAdvanceSignal(
+          "runtime-event",
+          "Runtime event",
+          "border-[#d6e9dc] bg-[#eef8f1] text-[#2b6e3f]"
+        ),
+      ],
     };
   }
   return {
     priority,
     reason: "This is the next visible agent timeline item after the previous queue transition.",
+    signals: [
+      queueAdvanceSignal(
+        "queue-order",
+        "Queue order",
+        "border-[#e5e5e3] bg-[#fafaf9] text-[#37352f]"
+      ),
+    ],
   };
 }
 
@@ -1785,6 +1900,19 @@ function QueueAdvanceNotice({
               </Badge>
             ) : null}
           </div>
+          {feedback.signals?.length ? (
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {feedback.signals.map((signal) => (
+                <Badge
+                  key={signal.key}
+                  variant="outline"
+                  className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${signal.className}`}
+                >
+                  {signal.label}
+                </Badge>
+              ))}
+            </div>
+          ) : null}
           <p className="mt-1.5 text-[12px] text-[#46667d]">{feedback.reason}</p>
         </div>
       ) : null}
@@ -3178,6 +3306,7 @@ export default function ControlPlanePage() {
           : null,
         reason: nextReason.reason,
         reasonPriority: nextReason.priority,
+        signals: nextReason.signals,
       });
       focusSessionLineageEntry(nextEntry, filter);
     },
@@ -3204,6 +3333,7 @@ export default function ControlPlanePage() {
         previousTarget: entry ? sessionQueueAdvanceTarget(filter, entry) : null,
         reason: nextReason.reason,
         reasonPriority: nextReason.priority,
+        signals: nextReason.signals,
       });
       focusSessionLineageEntry(nextEntry, filter);
     },
@@ -3424,6 +3554,7 @@ export default function ControlPlanePage() {
           : null,
         reason: nextReason.reason,
         reasonPriority: nextReason.priority,
+        signals: nextReason.signals,
       });
       focusSessionLineageEntry(nextEntry, pendingLineageAutoAdvance.filter);
     } else {
@@ -3905,6 +4036,7 @@ export default function ControlPlanePage() {
         previousTarget: entry ? agentQueueAdvanceTarget(priority, entry) : null,
         reason: nextReason.reason,
         reasonPriority: nextReason.priority,
+        signals: nextReason.signals,
       });
       inspectAgentTimelineEntry(nextEntry);
     },
@@ -4320,6 +4452,7 @@ export default function ControlPlanePage() {
           : null,
         reason: nextReason.reason,
         reasonPriority: nextReason.priority,
+        signals: nextReason.signals,
       });
       inspectAgentTimelineEntry(nextEntry);
     } else {
