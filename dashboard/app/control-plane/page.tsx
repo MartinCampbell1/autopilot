@@ -101,8 +101,45 @@ function agentTimelineEntryKey(entry: AgentTimelineEntry): string {
   return `${entry.kind}:${entry.id}`;
 }
 
+function domSafeToken(value: string): string {
+  return encodeURIComponent(value);
+}
+
 function sessionEventKey(event: Record<string, unknown>, fallback = ""): string {
   return `${toStringValue(event.event, "event")}:${toStringValue(event.timestamp, fallback || "unknown")}`;
+}
+
+function sessionContextRowDomId(kind: "approval" | "issue" | "event", key: string): string {
+  return key ? `session-context-row-${kind}-${domSafeToken(key)}` : "";
+}
+
+function agentTimelineRowDomId(runtimeAgentId: string, key: string): string {
+  return runtimeAgentId && key
+    ? `agent-timeline-row-${domSafeToken(runtimeAgentId)}-${domSafeToken(key)}`
+    : "";
+}
+
+function scrollToDomId(id: string): boolean {
+  if (!id || typeof document === "undefined") return false;
+  const node = document.getElementById(id);
+  if (!node) return false;
+  node.scrollIntoView({ behavior: "smooth", block: "center" });
+  return true;
+}
+
+function withSelectedItem<T>(
+  items: T[],
+  selected: T | null,
+  limit: number,
+  getKey: (item: T) => string
+): T[] {
+  const limited = items.slice(0, limit);
+  if (!selected) return limited;
+  const selectedKey = getKey(selected);
+  if (!selectedKey || limited.some((item) => getKey(item) === selectedKey)) {
+    return limited;
+  }
+  return [selected, ...limited.slice(0, Math.max(limit - 1, 0))];
 }
 
 function findRunResultIndexByApprovalId(
@@ -959,6 +996,8 @@ export default function ControlPlanePage() {
   const [selectedAgentTimelineKey, setSelectedAgentTimelineKey] = useState("");
   const [pendingAgentTimelineTarget, setPendingAgentTimelineTarget] =
     useState<PendingAgentTimelineTarget | null>(null);
+  const [pendingSessionRowDomId, setPendingSessionRowDomId] = useState("");
+  const [pendingAgentTimelineRowDomId, setPendingAgentTimelineRowDomId] = useState("");
   const [selectedSessionApprovalId, setSelectedSessionApprovalId] = useState("");
   const [selectedSessionIssueId, setSelectedSessionIssueId] = useState("");
   const [selectedSessionEventKey, setSelectedSessionEventKey] = useState("");
@@ -1548,6 +1587,14 @@ export default function ControlPlanePage() {
       ) ?? null,
     [selectedSession, selectedSessionEventKey]
   );
+  const visibleSessionApprovals = useMemo(
+    () => withSelectedItem(filteredApprovals, selectedSessionApproval, 6, (approval) => approval.id),
+    [filteredApprovals, selectedSessionApproval]
+  );
+  const visibleSessionIssues = useMemo(
+    () => withSelectedItem(filteredIssues, selectedSessionIssue, 6, (issue) => issue.id),
+    [filteredIssues, selectedSessionIssue]
+  );
   const selectedRun = useMemo(() => {
     if (!selectedRunId) return null;
     return linkedRuns.find((run) => run.id === selectedRunId) ?? null;
@@ -1555,10 +1602,19 @@ export default function ControlPlanePage() {
   const filteredEvents = useMemo(
     () =>
       (selectedSession?.events || []).filter(
-        (event) => matchesEventFilter(event, eventFilter) && eventMatchesSearch(event, entitySearch)
+      (event) => matchesEventFilter(event, eventFilter) && eventMatchesSearch(event, entitySearch)
       ),
     [entitySearch, eventFilter, selectedSession]
   );
+  const visibleSessionEvents = useMemo(() => {
+    const recentEvents = filteredEvents.slice(-6).reverse();
+    if (!selectedSessionEvent) return recentEvents;
+    const selectedKey = sessionEventKey(selectedSessionEvent);
+    if (!selectedKey || recentEvents.some((event) => sessionEventKey(event) === selectedKey)) {
+      return recentEvents;
+    }
+    return [selectedSessionEvent, ...recentEvents.slice(0, 5)];
+  }, [filteredEvents, selectedSessionEvent]);
   const selectedRunResult = useMemo(() => {
     if (!selectedRun) return null;
     return selectedRun.results[selectedRunResultIndex] ?? selectedRun.results[0] ?? null;
@@ -1837,6 +1893,16 @@ export default function ControlPlanePage() {
       ) ?? filteredAgentTimelineEntries[0] ?? null,
     [filteredAgentTimelineEntries, selectedAgentTimelineKey]
   );
+  const visibleAgentTimelineEntries = useMemo(
+    () =>
+      withSelectedItem(
+        filteredAgentTimelineEntries,
+        selectedAgentTimelineEntry,
+        6,
+        agentTimelineEntryKey
+      ),
+    [filteredAgentTimelineEntries, selectedAgentTimelineEntry]
+  );
   const latestAgentApprovalEntry = useMemo(
     () => agentTimelineEntries.find((entry) => entry.kind === "approval") ?? null,
     [agentTimelineEntries]
@@ -1882,6 +1948,65 @@ export default function ControlPlanePage() {
     selectedSessionEvent,
     selectedSessionIssue,
   ]);
+  const revealSelectedSessionContextRow = useCallback(() => {
+    if (!selectedSessionContext) return;
+    setEntitySearch("");
+    if (selectedSessionContext.kind === "event") {
+      setEventFilter("all");
+      setPendingSessionRowDomId(
+        sessionContextRowDomId("event", selectedSessionEventKey || sessionEventKey(selectedSessionContext.event))
+      );
+      return;
+    }
+    if (selectedSessionContext.kind === "approval") {
+      setPendingSessionRowDomId(
+        sessionContextRowDomId("approval", selectedSessionContext.approval.id)
+      );
+      return;
+    }
+    setPendingSessionRowDomId(sessionContextRowDomId("issue", selectedSessionContext.issue.id));
+  }, [selectedSessionContext, selectedSessionEventKey]);
+  const revealSelectedSessionContextInAgentTimeline = useCallback(() => {
+    if (!selectedSessionContext) return;
+    const approvalId =
+      selectedSessionContext.kind === "approval"
+        ? selectedSessionContext.approval.id
+        : selectedSessionContext.kind === "issue"
+          ? selectedSessionContext.issue.approval_id
+          : toStringValue(selectedSessionContext.event.approval_id);
+    const issueId =
+      selectedSessionContext.kind === "issue"
+        ? selectedSessionContext.issue.id
+        : selectedSessionContext.kind === "approval"
+          ? selectedSessionContext.approval.issue_id
+          : toStringValue(selectedSessionContext.event.issue_id);
+    const runtimeAgentId =
+      selectedSessionContext.kind === "approval"
+        ? selectedSessionContext.approval.runtime_agent_ids[0]
+        : selectedSessionContext.kind === "issue"
+          ? selectedSessionContext.issue.runtime_agent_ids[0] ||
+            selectedSessionContext.issue.runtime_agent_id
+          : toStringValue(selectedSessionContext.event.runtime_agent_id) ||
+            toStringArray(selectedSessionContext.event.runtime_agent_ids)[0];
+
+    if (!runtimeAgentId) {
+      setErrorMessage("Selected session context is not linked to a runtime agent.");
+      return;
+    }
+
+    setErrorMessage("");
+    syncLinkedSelection({
+      approvalId,
+      issueId,
+      runtimeAgentId,
+      runId:
+        selectedSessionContext.kind === "event"
+          ? toStringValue(selectedSessionContext.event.agent_action_run_id) ||
+            toStringValue(selectedSessionContext.event.run_id)
+          : "",
+      event: selectedSessionContext.kind === "event" ? selectedSessionContext.event : null,
+    });
+  }, [selectedSessionContext, syncLinkedSelection]);
   useEffect(() => {
     if (!pendingAgentTimelineTarget) return;
     if (!selectedAgentId || pendingAgentTimelineTarget.runtimeAgentId !== selectedAgentId) return;
@@ -1892,13 +2017,34 @@ export default function ControlPlanePage() {
       pendingAgentTimelineTarget
     );
     if (matchedEntry) {
-      setSelectedAgentTimelineKey(agentTimelineEntryKey(matchedEntry));
+      const matchedKey = agentTimelineEntryKey(matchedEntry);
+      setSelectedAgentTimelineKey(matchedKey);
+      setPendingAgentTimelineRowDomId(agentTimelineRowDomId(selectedAgentId, matchedKey));
       setNotice("");
     } else {
       setNotice("Found runtime agent, but no linked timeline item was available for this outcome.");
     }
     setPendingAgentTimelineTarget(null);
   }, [agentTimelineEntries, pendingAgentTimelineTarget, selectedAgent, selectedAgentId]);
+  useEffect(() => {
+    if (!pendingSessionRowDomId) return;
+    if (scrollToDomId(pendingSessionRowDomId)) {
+      setPendingSessionRowDomId("");
+    }
+  }, [
+    entitySearch,
+    eventFilter,
+    pendingSessionRowDomId,
+    visibleSessionApprovals,
+    visibleSessionEvents,
+    visibleSessionIssues,
+  ]);
+  useEffect(() => {
+    if (!pendingAgentTimelineRowDomId) return;
+    if (scrollToDomId(pendingAgentTimelineRowDomId)) {
+      setPendingAgentTimelineRowDomId("");
+    }
+  }, [pendingAgentTimelineRowDomId, selectedAgentId, visibleAgentTimelineEntries]);
   const selectedControl = selectedSession?.control ?? null;
   const loading = !controlSummary || !sessionSummary;
 
@@ -3163,7 +3309,7 @@ export default function ControlPlanePage() {
                         ) : (
                           <div className="mt-4 grid gap-4 lg:grid-cols-2">
                             <div className="space-y-3">
-                              {filteredAgentTimelineEntries.slice(0, 6).map((entry) => {
+                            {visibleAgentTimelineEntries.map((entry) => {
                               const selected =
                                 selectedAgentTimelineEntry &&
                                 agentTimelineEntryKey(selectedAgentTimelineEntry) ===
@@ -3178,6 +3324,10 @@ export default function ControlPlanePage() {
                               return (
                                 <div
                                   key={`${selectedAgent.runtime_agent_id}-timeline-${entry.kind}-${entry.id}`}
+                                  id={agentTimelineRowDomId(
+                                    selectedAgent.runtime_agent_id,
+                                    agentTimelineEntryKey(entry)
+                                  )}
                                   className={`rounded-xl border p-3 ${
                                     selected
                                       ? "border-[#d3e5ef] bg-[#f7fbfd]"
@@ -4521,7 +4671,7 @@ export default function ControlPlanePage() {
                           </p>
                         ) : (
                           <div className="mt-3 space-y-3">
-                            {filteredEvents.slice(-6).reverse().map((event, index) => (
+                            {visibleSessionEvents.map((event, index) => (
                               (() => {
                                 const eventApprovalId = toStringValue(event.approval_id);
                                 const eventIssueId = toStringValue(event.issue_id);
@@ -4535,6 +4685,7 @@ export default function ControlPlanePage() {
                                 return (
                                   <div
                                     key={eventKey}
+                                    id={sessionContextRowDomId("event", eventKey)}
                                     className={`rounded-xl border p-3 ${
                                       selected ? "border-[#d3e5ef] bg-[#f7fbfd]" : "border-[#ecebe8] bg-white"
                                     }`}
@@ -4848,11 +4999,12 @@ export default function ControlPlanePage() {
                           </p>
                         ) : (
                           <div className="mt-3 space-y-3">
-                            {filteredApprovals.slice(0, 6).map((approval) => {
+                            {visibleSessionApprovals.map((approval) => {
                               const selected = selectedSessionApprovalId === approval.id;
                               return (
                               <div
                                 key={`${selectedSession.id}-approval-${approval.id}`}
+                                id={sessionContextRowDomId("approval", approval.id)}
                                 className={`rounded-xl border p-3 ${
                                   selected ? "border-[#d3e5ef] bg-[#f7fbfd]" : "border-[#ecebe8] bg-white"
                                 }`}
@@ -5005,11 +5157,12 @@ export default function ControlPlanePage() {
                           </p>
                         ) : (
                           <div className="mt-3 space-y-3">
-                            {filteredIssues.slice(0, 6).map((issue) => {
+                            {visibleSessionIssues.map((issue) => {
                               const selected = selectedSessionIssueId === issue.id;
                               return (
                               <div
                                 key={`${selectedSession.id}-issue-${issue.id}`}
+                                id={sessionContextRowDomId("issue", issue.id)}
                                 className={`rounded-xl border p-3 ${
                                   selected ? "border-[#d3e5ef] bg-[#f7fbfd]" : "border-[#ecebe8] bg-white"
                                 }`}
@@ -5418,6 +5571,28 @@ export default function ControlPlanePage() {
                                 }}
                               >
                                 Open agent
+                              </Button>
+                            )}
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-8 rounded-lg border-[#e5e5e3] bg-white text-[12px] text-[#37352f] hover:bg-[#f7f7f5]"
+                              onClick={() => {
+                                revealSelectedSessionContextRow();
+                              }}
+                            >
+                              Reveal session row
+                            </Button>
+                            {runtimeAgentId && (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="h-8 rounded-lg border-[#d3e5ef] bg-[#eef7fb] text-[12px] text-[#2a6690] hover:bg-[#e3f2f8]"
+                                onClick={() => {
+                                  revealSelectedSessionContextInAgentTimeline();
+                                }}
+                              >
+                                Reveal in agent timeline
                               </Button>
                             )}
                             {relatedRunLink && (
