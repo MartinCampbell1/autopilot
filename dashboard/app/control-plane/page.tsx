@@ -1377,6 +1377,45 @@ function sanitizeQueueAdvanceFocusDelta(
   };
 }
 
+function buildQueueAdvanceFocusDelta(
+  fromLabel: string,
+  toLabel: string,
+  fromCount: number,
+  toCount: number
+): QueueAdvanceFocusDelta {
+  return {
+    fromLabel,
+    toLabel,
+    fromCount,
+    toCount,
+    timestamp: new Date().toISOString(),
+  };
+}
+
+function readPersistedQueueAdvanceFocusDelta(storageKey: string): QueueAdvanceFocusDelta | null {
+  if (typeof window === "undefined") return null;
+  const raw = window.localStorage.getItem(storageKey);
+  if (!raw) return null;
+  try {
+    return sanitizeQueueAdvanceFocusDelta(JSON.parse(raw) as QueueAdvanceFocusDelta);
+  } catch {
+    return null;
+  }
+}
+
+function persistQueueAdvanceFocusDelta(
+  storageKey: string,
+  value: QueueAdvanceFocusDelta | null | undefined
+): void {
+  if (typeof window === "undefined") return;
+  const sanitized = sanitizeQueueAdvanceFocusDelta(value);
+  if (!sanitized) {
+    window.localStorage.removeItem(storageKey);
+    return;
+  }
+  window.localStorage.setItem(storageKey, JSON.stringify(sanitized));
+}
+
 function visibleEntriesByOperatorVisibilityState<T>(
   entries: T[],
   getKey: (entry: T) => string,
@@ -2503,26 +2542,10 @@ export default function ControlPlanePage() {
       setHydratedSessionQueueFocusStorageKey(storageKey);
       return;
     }
-
-    const raw = window.localStorage.getItem(storageKey);
-    let parsed: QueueAdvanceFocusDelta | null = null;
-    if (raw) {
-      try {
-        parsed = JSON.parse(raw) as QueueAdvanceFocusDelta;
-      } catch {
-        parsed = null;
-      }
-    }
-
-    const sanitized = sanitizeQueueAdvanceFocusDelta(parsed);
+    const sanitized = readPersistedQueueAdvanceFocusDelta(storageKey);
     setSessionQueueFocusDelta(sanitized);
     setHydratedSessionQueueFocusStorageKey(storageKey);
-
-    if (!sanitized) {
-      window.localStorage.removeItem(storageKey);
-      return;
-    }
-    window.localStorage.setItem(storageKey, JSON.stringify(sanitized));
+    persistQueueAdvanceFocusDelta(storageKey, sanitized);
   }, [selectedSessionId]);
 
   useEffect(() => {
@@ -2532,12 +2555,7 @@ export default function ControlPlanePage() {
       return;
     }
     if (typeof window === "undefined") return;
-    const sanitized = sanitizeQueueAdvanceFocusDelta(sessionQueueFocusDelta);
-    if (!sanitized) {
-      window.localStorage.removeItem(storageKey);
-      return;
-    }
-    window.localStorage.setItem(storageKey, JSON.stringify(sanitized));
+    persistQueueAdvanceFocusDelta(storageKey, sessionQueueFocusDelta);
   }, [
     hydratedSessionQueueFocusStorageKey,
     selectedSessionId,
@@ -2710,26 +2728,10 @@ export default function ControlPlanePage() {
       setHydratedAgentQueueFocusStorageKey(storageKey);
       return;
     }
-
-    const raw = window.localStorage.getItem(storageKey);
-    let parsed: QueueAdvanceFocusDelta | null = null;
-    if (raw) {
-      try {
-        parsed = JSON.parse(raw) as QueueAdvanceFocusDelta;
-      } catch {
-        parsed = null;
-      }
-    }
-
-    const sanitized = sanitizeQueueAdvanceFocusDelta(parsed);
+    const sanitized = readPersistedQueueAdvanceFocusDelta(storageKey);
     setAgentQueueFocusDelta(sanitized);
     setHydratedAgentQueueFocusStorageKey(storageKey);
-
-    if (!sanitized) {
-      window.localStorage.removeItem(storageKey);
-      return;
-    }
-    window.localStorage.setItem(storageKey, JSON.stringify(sanitized));
+    persistQueueAdvanceFocusDelta(storageKey, sanitized);
   }, [selectedAgentId]);
 
   useEffect(() => {
@@ -2739,12 +2741,7 @@ export default function ControlPlanePage() {
       return;
     }
     if (typeof window === "undefined") return;
-    const sanitized = sanitizeQueueAdvanceFocusDelta(agentQueueFocusDelta);
-    if (!sanitized) {
-      window.localStorage.removeItem(storageKey);
-      return;
-    }
-    window.localStorage.setItem(storageKey, JSON.stringify(sanitized));
+    persistQueueAdvanceFocusDelta(storageKey, agentQueueFocusDelta);
   }, [
     agentQueueFocusDelta,
     hydratedAgentQueueFocusStorageKey,
@@ -4518,13 +4515,14 @@ export default function ControlPlanePage() {
   );
   const applySessionQueueFocus = useCallback(
     (nextFilter: string, entry?: SessionLineageEntry | null) => {
-      setSessionQueueFocusDelta({
-        fromLabel: sessionLineageFilterLabel(sessionLineageFilter),
-        toLabel: sessionLineageFilterLabel(nextFilter),
-        fromCount: sessionLineageFilterCounts[sessionLineageFilter] ?? sessionLineageEntries.length,
-        toCount: sessionLineageFilterCounts[nextFilter] ?? sessionLineageEntries.length,
-        timestamp: new Date().toISOString(),
-      });
+      setSessionQueueFocusDelta(
+        buildQueueAdvanceFocusDelta(
+          sessionLineageFilterLabel(sessionLineageFilter),
+          sessionLineageFilterLabel(nextFilter),
+          sessionLineageFilterCounts[sessionLineageFilter] ?? sessionLineageEntries.length,
+          sessionLineageFilterCounts[nextFilter] ?? sessionLineageEntries.length
+        )
+      );
       if (entry) {
         focusSessionLineageEntry(entry, nextFilter);
         return;
@@ -4540,13 +4538,14 @@ export default function ControlPlanePage() {
   );
   const applyAgentQueueFocus = useCallback(
     (nextFilter: string, entry?: AgentTimelineEntry | null) => {
-      setAgentQueueFocusDelta({
-        fromLabel: agentTimelineFilterLabel(agentTimelineFilter),
-        toLabel: agentTimelineFilterLabel(nextFilter),
-        fromCount: agentTimelineFilterCounts[agentTimelineFilter] ?? activeAgentTimelineEntries.length,
-        toCount: agentTimelineFilterCounts[nextFilter] ?? activeAgentTimelineEntries.length,
-        timestamp: new Date().toISOString(),
-      });
+      setAgentQueueFocusDelta(
+        buildQueueAdvanceFocusDelta(
+          agentTimelineFilterLabel(agentTimelineFilter),
+          agentTimelineFilterLabel(nextFilter),
+          agentTimelineFilterCounts[agentTimelineFilter] ?? activeAgentTimelineEntries.length,
+          agentTimelineFilterCounts[nextFilter] ?? activeAgentTimelineEntries.length
+        )
+      );
       focusAgentTimeline(nextFilter, entry ? { entry } : undefined);
       if (entry) {
         inspectAgentTimelineEntry(entry);
