@@ -251,6 +251,17 @@ function matchesEventFilter(event: Record<string, unknown>, filter: string): boo
   return eventFamily(name) === filter;
 }
 
+function matchesAgentOutcomeFilter(outcome: AgentScopedOutcome, filter: string): boolean {
+  if (filter === "all") return true;
+  if (filter === "execute") return !outcome.run.dry_run;
+  if (filter === "preview") return outcome.run.dry_run;
+  if (filter === "attention") {
+    const status = toStringValue(outcome.result.status);
+    return ["error", "partial", "pending_approval", "not_executable", "failed"].includes(status);
+  }
+  return true;
+}
+
 function runMatchesSearch(run: ExecutionAgentActionRunRecord, query: string): boolean {
   return matchesSearch(
     [
@@ -632,6 +643,8 @@ export default function ControlPlanePage() {
   const [agentLoading, setAgentLoading] = useState(false);
   const [runFilter, setRunFilter] = useState("all");
   const [eventFilter, setEventFilter] = useState("all");
+  const [agentActivityFilter, setAgentActivityFilter] = useState("all");
+  const [agentActivitySearch, setAgentActivitySearch] = useState("");
   const [historySearch, setHistorySearch] = useState("");
   const [entitySearch, setEntitySearch] = useState("");
   const [refreshing, setRefreshing] = useState(false);
@@ -858,6 +871,11 @@ export default function ControlPlanePage() {
   useEffect(() => {
     setSelectedRunResultIndex(0);
   }, [selectedRunId]);
+
+  useEffect(() => {
+    setAgentActivityFilter("all");
+    setAgentActivitySearch("");
+  }, [selectedAgentId]);
 
   useEffect(() => {
     const visibleRuns = ((selectedSession?.runs || []) as ExecutionAgentActionRunRecord[]).filter(
@@ -1224,6 +1242,35 @@ export default function ControlPlanePage() {
         left.resultIndex - right.resultIndex
     );
   }, [agentScopedRuns, selectedAgentId]);
+  const filteredAgentScopedRuns = useMemo(
+    () =>
+      agentScopedRuns.filter(
+        (run) =>
+          matchesRunFilter(run, agentActivityFilter) &&
+          runMatchesSearch(run, agentActivitySearch)
+      ),
+    [agentActivityFilter, agentActivitySearch, agentScopedRuns]
+  );
+  const filteredAgentScopedOutcomes = useMemo(
+    () =>
+      agentScopedOutcomes.filter(
+        (outcome) =>
+          matchesAgentOutcomeFilter(outcome, agentActivityFilter) &&
+          matchesSearch(
+            [
+              outcome.run.id,
+              outcome.run.actor,
+              outcome.run.mode,
+              outcome.run.reason,
+              outcome.runtimeAgentIds,
+              outcome.result,
+              describeRunResult(outcome.result),
+            ],
+            agentActivitySearch
+          )
+      ),
+    [agentActivityFilter, agentActivitySearch, agentScopedOutcomes]
+  );
   const selectedControl = selectedSession?.control ?? null;
   const loading = !controlSummary || !sessionSummary;
 
@@ -2187,13 +2234,48 @@ export default function ControlPlanePage() {
                               {agentScopedRuns.length} run{agentScopedRuns.length === 1 ? "" : "s"}
                             </Badge>
                           </div>
-                          {agentScopedRuns.length === 0 ? (
+                          <div className="mt-3 space-y-3">
+                            <Input
+                              value={agentActivitySearch}
+                              onChange={(event) => setAgentActivitySearch(event.target.value)}
+                              placeholder="Search agent runs, outcomes, approvals, issues..."
+                              className="h-9 rounded-xl border-[#e5e5e3] bg-white text-[13px] text-[#37352f] placeholder:text-[#9b9a97]"
+                            />
+                            <div className="flex flex-wrap gap-2">
+                              {[
+                                { value: "all", label: "All" },
+                                { value: "execute", label: "Execute" },
+                                { value: "preview", label: "Preview" },
+                                { value: "attention", label: "Attention" },
+                              ].map((option) => {
+                                const selected = agentActivityFilter === option.value;
+                                return (
+                                  <Button
+                                    key={`agent-activity-filter-${option.value}`}
+                                    size="sm"
+                                    variant={selected ? "default" : "outline"}
+                                    className={`h-7 rounded-full px-3 text-[11px] ${
+                                      selected
+                                        ? "bg-[#1a1a1a] text-white hover:bg-[#333]"
+                                        : "border-[#e5e5e3] bg-white text-[#37352f] hover:bg-[#f7f7f5]"
+                                    }`}
+                                    onClick={() => {
+                                      setAgentActivityFilter(option.value);
+                                    }}
+                                  >
+                                    {option.label}
+                                  </Button>
+                                );
+                              })}
+                            </div>
+                          </div>
+                          {filteredAgentScopedRuns.length === 0 ? (
                             <p className="mt-3 text-[13px] text-[#9b9a97]">
-                              No session-linked action runs for this runtime agent.
+                              No agent runs match the current filters.
                             </p>
                           ) : (
                             <div className="mt-3 space-y-3">
-                              {agentScopedRuns.slice(0, 4).map((run) => {
+                              {filteredAgentScopedRuns.slice(0, 4).map((run) => {
                                 const selected = selectedRunId === run.id;
                                 return (
                                   <div
@@ -2272,13 +2354,13 @@ export default function ControlPlanePage() {
                               {agentScopedOutcomes.length} outcome{agentScopedOutcomes.length === 1 ? "" : "s"}
                             </Badge>
                           </div>
-                          {agentScopedOutcomes.length === 0 ? (
+                          {filteredAgentScopedOutcomes.length === 0 ? (
                             <p className="mt-3 text-[13px] text-[#9b9a97]">
-                              No recent action outcomes linked to this runtime agent.
+                              No agent outcomes match the current filters.
                             </p>
                           ) : (
                             <div className="mt-3 space-y-3">
-                              {agentScopedOutcomes.slice(0, 4).map((entry) => {
+                              {filteredAgentScopedOutcomes.slice(0, 4).map((entry) => {
                                 const details = describeRunResult(entry.result);
                                 const selected =
                                   selectedRunId === entry.run.id && selectedRunResultIndex === entry.resultIndex;
