@@ -3286,15 +3286,12 @@ export default function ControlPlanePage() {
               syncedWithSelection:
                 selectedSessionLineageEntry?.key === nextAttentionSessionLineageEntry.key,
               onInspect: () => {
-                setSelectedTriageInboxKey("session-attention");
                 focusSessionLineageEntry(nextAttentionSessionLineageEntry, "attention");
               },
               onSnooze: () => {
-                setSelectedTriageInboxKey("session-attention");
                 snoozeSessionLineageQueueEntry("attention", nextAttentionSessionLineageEntry);
               },
               onDismiss: () => {
-                setSelectedTriageInboxKey("session-attention");
                 dismissSessionLineageQueueEntry("attention", nextAttentionSessionLineageEntry);
               },
             }
@@ -3313,15 +3310,12 @@ export default function ControlPlanePage() {
               syncedWithSelection:
                 selectedSessionLineageEntry?.key === nextDecisionSessionLineageEntry.key,
               onInspect: () => {
-                setSelectedTriageInboxKey("session-decisions");
                 focusSessionLineageEntry(nextDecisionSessionLineageEntry, "decisions");
               },
               onSnooze: () => {
-                setSelectedTriageInboxKey("session-decisions");
                 snoozeSessionLineageQueueEntry("decisions", nextDecisionSessionLineageEntry);
               },
               onDismiss: () => {
-                setSelectedTriageInboxKey("session-decisions");
                 dismissSessionLineageQueueEntry("decisions", nextDecisionSessionLineageEntry);
               },
             }
@@ -3341,15 +3335,12 @@ export default function ControlPlanePage() {
                 selectedAgentTimelineEntryKeyValue ===
                 agentTimelineEntryKey(nextCriticalAgentTimelineEntry),
               onInspect: () => {
-                setSelectedTriageInboxKey("agent-critical");
                 inspectAgentTimelineEntry(nextCriticalAgentTimelineEntry);
               },
               onSnooze: () => {
-                setSelectedTriageInboxKey("agent-critical");
                 snoozeAgentTimelineEntry(nextCriticalAgentTimelineEntry);
               },
               onDismiss: () => {
-                setSelectedTriageInboxKey("agent-critical");
                 dismissAgentTimelineEntry(nextCriticalAgentTimelineEntry);
               },
             }
@@ -3369,15 +3360,12 @@ export default function ControlPlanePage() {
                 selectedAgentTimelineEntryKeyValue ===
                 agentTimelineEntryKey(nextHighAgentTimelineEntry),
               onInspect: () => {
-                setSelectedTriageInboxKey("agent-high");
                 inspectAgentTimelineEntry(nextHighAgentTimelineEntry);
               },
               onSnooze: () => {
-                setSelectedTriageInboxKey("agent-high");
                 snoozeAgentTimelineEntry(nextHighAgentTimelineEntry);
               },
               onDismiss: () => {
-                setSelectedTriageInboxKey("agent-high");
                 dismissAgentTimelineEntry(nextHighAgentTimelineEntry);
               },
             }
@@ -3410,6 +3398,19 @@ export default function ControlPlanePage() {
       null,
     [triageInboxItems, selectedTriageInboxKey]
   );
+  const syncedTriageInboxItem = useMemo(
+    () => triageInboxItems.find((item) => item.syncedWithSelection) ?? null,
+    [triageInboxItems]
+  );
+  const nextTriageInboxCursorKey = useCallback(
+    (currentKey: string) => {
+      if (!triageInboxItems.length) return "";
+      const currentIndex = triageInboxItems.findIndex((item) => item.key === currentKey);
+      if (currentIndex === -1) return triageInboxItems[0]?.key || "";
+      return triageInboxItems[currentIndex + 1]?.key || triageInboxItems[0]?.key || "";
+    },
+    [triageInboxItems]
+  );
   const advanceTriageInboxCursor = useCallback(() => {
     if (!triageInboxItems.length) return;
     setSelectedTriageInboxKey((current) => {
@@ -3418,21 +3419,49 @@ export default function ControlPlanePage() {
       return triageInboxItems[currentIndex + 1]?.key || triageInboxItems[0]?.key || "";
     });
   }, [triageInboxItems]);
+  const inspectTriageInboxItem = useCallback((item: TriageInboxItem) => {
+    setSelectedTriageInboxKey(item.key);
+    item.onInspect();
+  }, []);
+  const inspectAndAdvanceTriageInboxItem = useCallback(
+    (item: TriageInboxItem) => {
+      const nextKey = nextTriageInboxCursorKey(item.key);
+      setSelectedTriageInboxKey(nextKey || item.key);
+      item.onInspect();
+    },
+    [nextTriageInboxCursorKey]
+  );
+  const snoozeTriageInboxItem = useCallback(
+    (item: TriageInboxItem) => {
+      const nextKey = nextTriageInboxCursorKey(item.key);
+      setSelectedTriageInboxKey(nextKey || item.key);
+      item.onSnooze();
+    },
+    [nextTriageInboxCursorKey]
+  );
+  const dismissTriageInboxItem = useCallback(
+    (item: TriageInboxItem) => {
+      const nextKey = nextTriageInboxCursorKey(item.key);
+      setSelectedTriageInboxKey(nextKey || item.key);
+      item.onDismiss();
+    },
+    [nextTriageInboxCursorKey]
+  );
+  const syncTriageInboxCursorToSelection = useCallback(() => {
+    if (!syncedTriageInboxItem) return;
+    setSelectedTriageInboxKey(syncedTriageInboxItem.key);
+  }, [syncedTriageInboxItem]);
   useEffect(() => {
     if (!triageInboxItems.length) {
       setSelectedTriageInboxKey("");
       return;
     }
-    const syncedItem = triageInboxItems.find((item) => item.syncedWithSelection) ?? null;
     setSelectedTriageInboxKey((current) => {
-      if (syncedItem) {
-        return syncedItem.key;
-      }
-      return triageInboxItems.some((item) => item.key === current)
-        ? current
-        : triageInboxItems[0].key;
+      if (triageInboxItems.some((item) => item.key === current)) return current;
+      if (syncedTriageInboxItem) return syncedTriageInboxItem.key;
+      return triageInboxItems[0].key;
     });
-  }, [selectedAgentTimelineEntryKeyValue, selectedSessionLineageEntry, triageInboxItems]);
+  }, [syncedTriageInboxItem, triageInboxItems]);
   useEffect(() => {
     if (!pendingAgentPriorityAutoAdvance) return;
     const entries =
@@ -5172,10 +5201,21 @@ export default function ControlPlanePage() {
                                 variant="outline"
                                 className="h-7 rounded-lg border-[#e5e5e3] bg-white px-2 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
                                 onClick={() => {
-                                  selectedTriageInboxItem.onInspect();
+                                  inspectTriageInboxItem(selectedTriageInboxItem);
                                 }}
                               >
                                 Inspect current
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="h-7 rounded-lg border-[#e5e5e3] bg-white px-2 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
+                                onClick={() => {
+                                  inspectAndAdvanceTriageInboxItem(selectedTriageInboxItem);
+                                }}
+                                disabled={triageInboxItems.length <= 1}
+                              >
+                                Inspect + advance
                               </Button>
                               <Button
                                 size="sm"
@@ -5188,6 +5228,19 @@ export default function ControlPlanePage() {
                               >
                                 Advance cursor
                               </Button>
+                              {syncedTriageInboxItem &&
+                              syncedTriageInboxItem.key !== selectedTriageInboxItem.key ? (
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  className="h-7 rounded-lg border-[#d3e5ef] bg-[#eef7fb] px-2 text-[11px] text-[#2a6690] hover:bg-[#e3f2f8]"
+                                  onClick={() => {
+                                    syncTriageInboxCursorToSelection();
+                                  }}
+                                >
+                                  Sync to selection
+                                </Button>
+                              ) : null}
                             </div>
                           </div>
                           <div className="mt-3 flex flex-wrap gap-2">
@@ -5279,7 +5332,9 @@ export default function ControlPlanePage() {
                                       ? "bg-[#1a1a1a] text-white hover:bg-[#333]"
                                       : "border-[#e5e5e3] bg-white text-[#37352f] hover:bg-[#f7f7f5]"
                                   }`}
-                                  onClick={item.onInspect}
+                                  onClick={() => {
+                                    inspectTriageInboxItem(item);
+                                  }}
                                 >
                                   {cursorSelected ? "Current" : "Inspect"}
                                 </Button>
@@ -5287,7 +5342,20 @@ export default function ControlPlanePage() {
                                   size="sm"
                                   variant="outline"
                                   className="h-7 rounded-lg border-[#e5e5e3] bg-white px-2 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
-                                  onClick={item.onSnooze}
+                                  onClick={() => {
+                                    inspectAndAdvanceTriageInboxItem(item);
+                                  }}
+                                  disabled={triageInboxItems.length <= 1}
+                                >
+                                  Inspect + next
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  className="h-7 rounded-lg border-[#e5e5e3] bg-white px-2 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
+                                  onClick={() => {
+                                    snoozeTriageInboxItem(item);
+                                  }}
                                 >
                                   Snooze 15m
                                 </Button>
@@ -5295,7 +5363,9 @@ export default function ControlPlanePage() {
                                   size="sm"
                                   variant="outline"
                                   className="h-7 rounded-lg border-[#e5e5e3] bg-white px-2 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
-                                  onClick={item.onDismiss}
+                                  onClick={() => {
+                                    dismissTriageInboxItem(item);
+                                  }}
                                 >
                                   Dismiss
                                 </Button>
