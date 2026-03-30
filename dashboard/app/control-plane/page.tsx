@@ -1430,6 +1430,10 @@ export default function ControlPlanePage() {
   const [snoozedAgentTimelineUntil, setSnoozedAgentTimelineUntil] = useState<Record<string, number>>(
     {}
   );
+  const [pendingAgentPriorityAutoAdvance, setPendingAgentPriorityAutoAdvance] = useState<{
+    priority: "critical" | "high";
+    previousKey: string;
+  } | null>(null);
   const [pendingLineageAutoAdvance, setPendingLineageAutoAdvance] = useState<{
     filter: "attention" | "decisions";
     previousKey: string;
@@ -1464,6 +1468,7 @@ export default function ControlPlanePage() {
   const [hydratedAgentTimelineStorageKey, setHydratedAgentTimelineStorageKey] = useState("");
   const [hydratedLineageQueueSessionId, setHydratedLineageQueueSessionId] = useState("");
   const selectedSessionLineageEntryRef = useRef<SessionLineageEntry | null>(null);
+  const selectedAgentTimelineEntryRef = useRef<AgentTimelineEntry | null>(null);
   const sessionLineageFilterRef = useRef("all");
 
   const loadOverview = useCallback(async () => {
@@ -1777,6 +1782,7 @@ export default function ControlPlanePage() {
     setAgentTimelineFilter("all");
     setAgentTimelineSearch("");
     setSelectedAgentTimelineKey("");
+    setPendingAgentPriorityAutoAdvance(null);
   }, [selectedAgentId]);
 
   useEffect(() => {
@@ -1942,7 +1948,9 @@ export default function ControlPlanePage() {
       setErrorMessage("");
       const currentLineageEntry = selectedSessionLineageEntryRef.current;
       const currentLineageFilter = sessionLineageFilterRef.current;
+      const currentAgentEntry = selectedAgentTimelineEntryRef.current;
       let autoAdvanceFilter: "attention" | "decisions" | "" = "";
+      let autoAdvanceAgentPriority: "critical" | "high" | "" = "";
       if (options?.autoAdvanceQueue && currentLineageEntry) {
         if (currentLineageFilter === "attention" || currentLineageFilter === "decisions") {
           autoAdvanceFilter = currentLineageFilter;
@@ -1952,6 +1960,12 @@ export default function ControlPlanePage() {
           autoAdvanceFilter = "decisions";
         }
       }
+      if (options?.autoAdvanceQueue && currentAgentEntry) {
+        const priority = agentTimelinePriority(currentAgentEntry);
+        if (priority === "critical" || priority === "high") {
+          autoAdvanceAgentPriority = priority;
+        }
+      }
       try {
         const message = await task();
         setNotice(message);
@@ -1959,6 +1973,12 @@ export default function ControlPlanePage() {
           setPendingLineageAutoAdvance({
             filter: autoAdvanceFilter,
             previousKey: currentLineageEntry.key,
+          });
+        }
+        if (autoAdvanceAgentPriority && currentAgentEntry) {
+          setPendingAgentPriorityAutoAdvance({
+            priority: autoAdvanceAgentPriority,
+            previousKey: agentTimelineEntryKey(currentAgentEntry),
           });
         }
         await refreshAfterMutation(selectedSessionId);
@@ -2714,6 +2734,16 @@ export default function ControlPlanePage() {
       current.includes(entryKey) ? current : [...current, entryKey]
     );
     setLineageQueueNow(Date.now());
+    const currentEntry = selectedAgentTimelineEntryRef.current;
+    if (currentEntry && agentTimelineEntryKey(currentEntry) === entryKey) {
+      const priority = agentTimelinePriority(entry);
+      if (priority === "critical" || priority === "high") {
+        setPendingAgentPriorityAutoAdvance({
+          priority,
+          previousKey: entryKey,
+        });
+      }
+    }
   }, []);
   const snoozeAgentTimelineEntry = useCallback((entry: AgentTimelineEntry, minutes = 15) => {
     const entryKey = agentTimelineEntryKey(entry);
@@ -2723,6 +2753,16 @@ export default function ControlPlanePage() {
       [entryKey]: snoozedUntil,
     }));
     setLineageQueueNow(Date.now());
+    const currentEntry = selectedAgentTimelineEntryRef.current;
+    if (currentEntry && agentTimelineEntryKey(currentEntry) === entryKey) {
+      const priority = agentTimelinePriority(entry);
+      if (priority === "critical" || priority === "high") {
+        setPendingAgentPriorityAutoAdvance({
+          priority,
+          previousKey: entryKey,
+        });
+      }
+    }
   }, []);
   const restoreAgentTimelineHidden = useCallback(() => {
     setDismissedAgentTimelineKeys([]);
@@ -3033,6 +3073,9 @@ export default function ControlPlanePage() {
       ) ?? filteredAgentTimelineEntries[0] ?? null,
     [filteredAgentTimelineEntries, selectedAgentTimelineKey]
   );
+  useEffect(() => {
+    selectedAgentTimelineEntryRef.current = selectedAgentTimelineEntry;
+  }, [selectedAgentTimelineEntry]);
   const visibleAgentTimelineEntries = useMemo(
     () =>
       withSelectedItem(
@@ -3181,6 +3224,27 @@ export default function ControlPlanePage() {
     },
     [linkedRuns, selectedAgent, selectedAgentId, syncLinkedSelection]
   );
+  useEffect(() => {
+    if (!pendingAgentPriorityAutoAdvance) return;
+    const entries =
+      pendingAgentPriorityAutoAdvance.priority === "critical"
+        ? criticalAgentTimelineEntries
+        : highAgentTimelineEntries;
+    const currentIndex = entries.findIndex(
+      (entry) => agentTimelineEntryKey(entry) === pendingAgentPriorityAutoAdvance.previousKey
+    );
+    const nextEntry =
+      currentIndex === -1 ? (entries[0] ?? null) : (entries[currentIndex + 1] ?? entries[0] ?? null);
+    setPendingAgentPriorityAutoAdvance(null);
+    if (nextEntry) {
+      inspectAgentTimelineEntry(nextEntry);
+    }
+  }, [
+    criticalAgentTimelineEntries,
+    highAgentTimelineEntries,
+    inspectAgentTimelineEntry,
+    pendingAgentPriorityAutoAdvance,
+  ]);
   const selectedSessionContext = useMemo(() => {
     if (selectedSessionContextKind === "issue" && selectedSessionIssue) {
       return { kind: "issue" as const, issue: selectedSessionIssue };
@@ -5606,6 +5670,26 @@ export default function ControlPlanePage() {
                                                 }}
                                               >
                                                 {selected ? "Selected" : "Inspect"}
+                                              </Button>
+                                              <Button
+                                                size="sm"
+                                                variant="outline"
+                                                className="h-7 rounded-lg border-[#e5e5e3] bg-white px-2 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
+                                                onClick={() => {
+                                                  snoozeAgentTimelineEntry(entry);
+                                                }}
+                                              >
+                                                Snooze 15m
+                                              </Button>
+                                              <Button
+                                                size="sm"
+                                                variant="outline"
+                                                className="h-7 rounded-lg border-[#e5e5e3] bg-white px-2 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
+                                                onClick={() => {
+                                                  dismissAgentTimelineEntry(entry);
+                                                }}
+                                              >
+                                                Dismiss
                                               </Button>
                                             </div>
                                           </div>
