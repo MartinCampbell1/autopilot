@@ -124,6 +124,11 @@ type SessionLineageEntry = {
   storyTitle: string;
   event: Record<string, unknown> | null;
 };
+type SessionLineageTrait = {
+  key: string;
+  label: string;
+  className: string;
+};
 
 function agentTimelineEntryKey(entry: AgentTimelineEntry): string {
   return `${entry.kind}:${entry.id}`;
@@ -656,6 +661,24 @@ function matchesSessionLineageFilter(entry: SessionLineageEntry, filter: string)
   if (filter === "decisions") return Boolean(entry.approvalId || entry.issueId);
   if (filter === "agent-linked") return Boolean(entry.runtimeAgentId);
   return true;
+}
+
+function sessionLineageTraits(entry: SessionLineageEntry | null): SessionLineageTrait[] {
+  if (!entry) return [];
+  return [
+    isAttentionLineageEntry(entry)
+      ? { key: "attention", label: "Attention", className: "border-[#f4e0c4] bg-[#fff6e8] text-[#9a6700]" }
+      : null,
+    entry.approvalId || entry.issueId
+      ? { key: "decision", label: "Decision-linked", className: "border-[#d3e5ef] bg-[#eef7fb] text-[#2a6690]" }
+      : null,
+    entry.eventKey
+      ? { key: "event", label: "Event-linked", className: "border-[#d6e9dc] bg-[#eef8f1] text-[#2b6e3f]" }
+      : null,
+    entry.runtimeAgentId
+      ? { key: "agent", label: "Agent-linked", className: "border-[#e5e5e3] bg-white text-[#37352f]" }
+      : null,
+  ].filter(Boolean) as SessionLineageTrait[];
 }
 
 function runMatchesSearch(run: ExecutionAgentActionRunRecord, query: string): boolean {
@@ -1881,22 +1904,16 @@ export default function ControlPlanePage() {
     () => sessionLineageEntries.find((entry) => matchesSessionLineageFilter(entry, "agent-linked")) ?? null,
     [sessionLineageEntries]
   );
+  const attentionSessionLineageQueue = useMemo(
+    () => sessionLineageEntries.filter((entry) => matchesSessionLineageFilter(entry, "attention")).slice(0, 3),
+    [sessionLineageEntries]
+  );
+  const decisionSessionLineageQueue = useMemo(
+    () => sessionLineageEntries.filter((entry) => matchesSessionLineageFilter(entry, "decisions")).slice(0, 3),
+    [sessionLineageEntries]
+  );
   const selectedSessionLineageTraits = useMemo(() => {
-    if (!selectedSessionLineageEntry) return [];
-    return [
-      isAttentionLineageEntry(selectedSessionLineageEntry)
-        ? { key: "attention", label: "Attention", className: "border-[#f4e0c4] bg-[#fff6e8] text-[#9a6700]" }
-        : null,
-      selectedSessionLineageEntry.approvalId || selectedSessionLineageEntry.issueId
-        ? { key: "decision", label: "Decision-linked", className: "border-[#d3e5ef] bg-[#eef7fb] text-[#2a6690]" }
-        : null,
-      selectedSessionLineageEntry.eventKey
-        ? { key: "event", label: "Event-linked", className: "border-[#d6e9dc] bg-[#eef8f1] text-[#2b6e3f]" }
-        : null,
-      selectedSessionLineageEntry.runtimeAgentId
-        ? { key: "agent", label: "Agent-linked", className: "border-[#e5e5e3] bg-white text-[#37352f]" }
-        : null,
-    ].filter(Boolean) as { key: string; label: string; className: string }[];
+    return sessionLineageTraits(selectedSessionLineageEntry);
   }, [selectedSessionLineageEntry]);
   const syncLinkedSelection = useCallback(
     (context: LinkedSelectionContext) => {
@@ -3376,6 +3393,188 @@ export default function ControlPlanePage() {
                                 Re-open selection
                               </Button>
                             ) : null}
+                          </div>
+                        </div>
+                        <div className="grid gap-3 xl:grid-cols-2">
+                          <div className="rounded-xl border border-[#ecebe8] bg-white p-3">
+                            <div className="flex items-center justify-between gap-3">
+                              <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#9b9a97]">
+                                Attention Queue
+                              </p>
+                              <Badge
+                                variant="outline"
+                                className="rounded-full border-[#e5e5e3] bg-[#fafaf9] px-2.5 py-1 text-[11px] font-medium text-[#37352f]"
+                              >
+                                {sessionLineageAttentionCount}
+                              </Badge>
+                            </div>
+                            {!attentionSessionLineageQueue.length ? (
+                              <p className="mt-3 text-[13px] text-[#9b9a97]">
+                                No attention-linked chains in this session.
+                              </p>
+                            ) : (
+                              <div className="mt-3 space-y-3">
+                                {attentionSessionLineageQueue.map((entry) => {
+                                  const selected = selectedSessionLineageEntry?.key === entry.key;
+                                  const queueTraits = sessionLineageTraits(entry).filter(
+                                    (trait) => trait.key !== "attention"
+                                  );
+                                  return (
+                                    <div
+                                      key={`attention-queue-${entry.key}`}
+                                      className={`rounded-xl border p-3 ${
+                                        selected
+                                          ? "border-[#d3e5ef] bg-[#f7fbfd]"
+                                          : "border-[#ecebe8] bg-[#fbfbf9]"
+                                      }`}
+                                    >
+                                      <div className="flex flex-wrap items-start justify-between gap-3">
+                                        <div>
+                                          <p className="text-[13px] font-semibold text-[#37352f]">
+                                            {entry.title}
+                                          </p>
+                                          <p className="mt-2 text-[12px] text-[#787774]">
+                                            run {entry.runId} · outcome {entry.resultIndex + 1}
+                                          </p>
+                                        </div>
+                                        <p className="text-[11px] text-[#9b9a97]">
+                                          {formatTimestamp(entry.timestamp)}
+                                        </p>
+                                      </div>
+                                      <div className="mt-3 flex flex-wrap gap-2">
+                                        <Badge
+                                          variant="outline"
+                                          className={`rounded-full px-2.5 py-1 text-[11px] font-semibold capitalize ${passStatusClass(entry.status)}`}
+                                        >
+                                          {entry.status}
+                                        </Badge>
+                                        {queueTraits.slice(0, 2).map((trait) => (
+                                          <Badge
+                                            key={`${entry.key}-${trait.key}`}
+                                            variant="outline"
+                                            className={`rounded-full px-2.5 py-1 text-[11px] font-medium ${trait.className}`}
+                                          >
+                                            {trait.label}
+                                          </Badge>
+                                        ))}
+                                      </div>
+                                      <div className="mt-3 flex flex-wrap gap-2">
+                                        <Button
+                                          size="sm"
+                                          variant={
+                                            selected && sessionLineageFilter === "attention"
+                                              ? "default"
+                                              : "outline"
+                                          }
+                                          className={`h-7 rounded-lg px-2 text-[11px] ${
+                                            selected && sessionLineageFilter === "attention"
+                                              ? "bg-[#1a1a1a] text-white hover:bg-[#333]"
+                                              : "border-[#e5e5e3] bg-white text-[#37352f] hover:bg-[#f7f7f5]"
+                                          }`}
+                                          onClick={() => {
+                                            focusSessionLineageEntry(entry, "attention");
+                                          }}
+                                        >
+                                          {selected && sessionLineageFilter === "attention"
+                                            ? "Selected"
+                                            : "Inspect"}
+                                        </Button>
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            )}
+                          </div>
+                          <div className="rounded-xl border border-[#ecebe8] bg-white p-3">
+                            <div className="flex items-center justify-between gap-3">
+                              <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#9b9a97]">
+                                Decision Queue
+                              </p>
+                              <Badge
+                                variant="outline"
+                                className="rounded-full border-[#e5e5e3] bg-[#fafaf9] px-2.5 py-1 text-[11px] font-medium text-[#37352f]"
+                              >
+                                {sessionLineageDecisionCount}
+                              </Badge>
+                            </div>
+                            {!decisionSessionLineageQueue.length ? (
+                              <p className="mt-3 text-[13px] text-[#9b9a97]">
+                                No decision-linked chains in this session.
+                              </p>
+                            ) : (
+                              <div className="mt-3 space-y-3">
+                                {decisionSessionLineageQueue.map((entry) => {
+                                  const selected = selectedSessionLineageEntry?.key === entry.key;
+                                  const queueTraits = sessionLineageTraits(entry).filter(
+                                    (trait) => trait.key !== "decision"
+                                  );
+                                  return (
+                                    <div
+                                      key={`decision-queue-${entry.key}`}
+                                      className={`rounded-xl border p-3 ${
+                                        selected
+                                          ? "border-[#d3e5ef] bg-[#f7fbfd]"
+                                          : "border-[#ecebe8] bg-[#fbfbf9]"
+                                      }`}
+                                    >
+                                      <div className="flex flex-wrap items-start justify-between gap-3">
+                                        <div>
+                                          <p className="text-[13px] font-semibold text-[#37352f]">
+                                            {entry.title}
+                                          </p>
+                                          <p className="mt-2 text-[12px] text-[#787774]">
+                                            run {entry.runId} · outcome {entry.resultIndex + 1}
+                                          </p>
+                                        </div>
+                                        <p className="text-[11px] text-[#9b9a97]">
+                                          {formatTimestamp(entry.timestamp)}
+                                        </p>
+                                      </div>
+                                      <div className="mt-3 flex flex-wrap gap-2">
+                                        <Badge
+                                          variant="outline"
+                                          className={`rounded-full px-2.5 py-1 text-[11px] font-semibold capitalize ${passStatusClass(entry.status)}`}
+                                        >
+                                          {entry.status}
+                                        </Badge>
+                                        {queueTraits.slice(0, 2).map((trait) => (
+                                          <Badge
+                                            key={`${entry.key}-${trait.key}`}
+                                            variant="outline"
+                                            className={`rounded-full px-2.5 py-1 text-[11px] font-medium ${trait.className}`}
+                                          >
+                                            {trait.label}
+                                          </Badge>
+                                        ))}
+                                      </div>
+                                      <div className="mt-3 flex flex-wrap gap-2">
+                                        <Button
+                                          size="sm"
+                                          variant={
+                                            selected && sessionLineageFilter === "decisions"
+                                              ? "default"
+                                              : "outline"
+                                          }
+                                          className={`h-7 rounded-lg px-2 text-[11px] ${
+                                            selected && sessionLineageFilter === "decisions"
+                                              ? "bg-[#1a1a1a] text-white hover:bg-[#333]"
+                                              : "border-[#e5e5e3] bg-white text-[#37352f] hover:bg-[#f7f7f5]"
+                                          }`}
+                                          onClick={() => {
+                                            focusSessionLineageEntry(entry, "decisions");
+                                          }}
+                                        >
+                                          {selected && sessionLineageFilter === "decisions"
+                                            ? "Selected"
+                                            : "Inspect"}
+                                        </Button>
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            )}
                           </div>
                         </div>
                         {!filteredSessionLineageEntries.length ? (
