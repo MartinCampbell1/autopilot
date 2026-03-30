@@ -2,6 +2,7 @@
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { triagePriorityClass } from "@/lib/control-plane-ui";
 
 export type QueueAdvanceSignal = {
   key: string;
@@ -72,17 +73,6 @@ function formatTimestamp(value: string): string {
     hour: "2-digit",
     minute: "2-digit",
   }).format(date);
-}
-
-function triagePriorityClass(priority: "critical" | "high" | "normal"): string {
-  switch (priority) {
-    case "critical":
-      return "border-[#f0d0c9] bg-[#fff0ed] text-[#93370d]";
-    case "high":
-      return "border-[#f4e0c4] bg-[#fff6e8] text-[#9a6700]";
-    default:
-      return "border-[#e5e5e3] bg-[#fafaf9] text-[#37352f]";
-  }
 }
 
 function triagePriorityLabel(priority: "critical" | "high" | "normal"): string {
