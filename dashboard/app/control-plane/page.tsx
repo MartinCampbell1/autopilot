@@ -636,18 +636,22 @@ function matchesAgentTimelineFilter(entry: AgentTimelineEntry, filter: string): 
   return true;
 }
 
-function matchesSessionLineageFilter(entry: SessionLineageEntry, filter: string): boolean {
-  if (filter === "all") return true;
+function isAttentionLineageEntry(entry: SessionLineageEntry): boolean {
   const status = entry.status.toLowerCase();
   const eventStatus = toStringValue(asRecord(entry.event)?.status).toLowerCase();
+  return (
+    Boolean(entry.issueId) ||
+    ["error", "partial", "pending_approval", "failed", "rejected", "blocked", "not_executable"].includes(
+      status
+    ) ||
+    ["error", "partial", "pending_approval", "failed"].includes(eventStatus)
+  );
+}
+
+function matchesSessionLineageFilter(entry: SessionLineageEntry, filter: string): boolean {
+  if (filter === "all") return true;
   if (filter === "attention") {
-    return (
-      Boolean(entry.issueId) ||
-      ["error", "partial", "pending_approval", "failed", "rejected", "blocked", "not_executable"].includes(
-        status
-      ) ||
-      ["error", "partial", "pending_approval", "failed"].includes(eventStatus)
-    );
+    return isAttentionLineageEntry(entry);
   }
   if (filter === "decisions") return Boolean(entry.approvalId || entry.issueId);
   if (filter === "agent-linked") return Boolean(entry.runtimeAgentId);
@@ -1865,6 +1869,35 @@ export default function ControlPlanePage() {
     () => sessionLineageEntries.filter((entry) => entry.runtimeAgentId).length,
     [sessionLineageEntries]
   );
+  const latestAttentionLineageEntry = useMemo(
+    () => sessionLineageEntries.find((entry) => matchesSessionLineageFilter(entry, "attention")) ?? null,
+    [sessionLineageEntries]
+  );
+  const latestDecisionLineageEntry = useMemo(
+    () => sessionLineageEntries.find((entry) => matchesSessionLineageFilter(entry, "decisions")) ?? null,
+    [sessionLineageEntries]
+  );
+  const latestAgentLinkedLineageEntry = useMemo(
+    () => sessionLineageEntries.find((entry) => matchesSessionLineageFilter(entry, "agent-linked")) ?? null,
+    [sessionLineageEntries]
+  );
+  const selectedSessionLineageTraits = useMemo(() => {
+    if (!selectedSessionLineageEntry) return [];
+    return [
+      isAttentionLineageEntry(selectedSessionLineageEntry)
+        ? { key: "attention", label: "Attention", className: "border-[#f4e0c4] bg-[#fff6e8] text-[#9a6700]" }
+        : null,
+      selectedSessionLineageEntry.approvalId || selectedSessionLineageEntry.issueId
+        ? { key: "decision", label: "Decision-linked", className: "border-[#d3e5ef] bg-[#eef7fb] text-[#2a6690]" }
+        : null,
+      selectedSessionLineageEntry.eventKey
+        ? { key: "event", label: "Event-linked", className: "border-[#d6e9dc] bg-[#eef8f1] text-[#2b6e3f]" }
+        : null,
+      selectedSessionLineageEntry.runtimeAgentId
+        ? { key: "agent", label: "Agent-linked", className: "border-[#e5e5e3] bg-white text-[#37352f]" }
+        : null,
+    ].filter(Boolean) as { key: string; label: string; className: string }[];
+  }, [selectedSessionLineageEntry]);
   const syncLinkedSelection = useCallback(
     (context: LinkedSelectionContext) => {
       const approvalId = toStringValue(context.approvalId);
@@ -1917,6 +1950,26 @@ export default function ControlPlanePage() {
       }
     },
     [linkedRuns, selectedSession]
+  );
+  const inspectSessionLineageEntry = useCallback(
+    (entry: SessionLineageEntry) => {
+      syncLinkedSelection({
+        runId: entry.runId,
+        resultIndex: entry.resultIndex,
+        approvalId: entry.approvalId,
+        issueId: entry.issueId,
+        runtimeAgentId: entry.runtimeAgentId,
+        event: entry.event,
+      });
+    },
+    [syncLinkedSelection]
+  );
+  const focusSessionLineageEntry = useCallback(
+    (entry: SessionLineageEntry, filter: string) => {
+      setSessionLineageFilter(filter);
+      inspectSessionLineageEntry(entry);
+    },
+    [inspectSessionLineageEntry]
   );
   useEffect(() => {
     if (!selectedRun || !selectedRunResult) {
@@ -3220,6 +3273,111 @@ export default function ControlPlanePage() {
                             }}
                           />
                         </div>
+                        <div className="rounded-xl border border-[#ecebe8] bg-white p-3">
+                          <div className="flex flex-wrap items-center justify-between gap-3">
+                            <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#9b9a97]">
+                              Active Focus
+                            </p>
+                            {selectedSessionLineageEntry ? (
+                              <Badge
+                                variant="outline"
+                                className="rounded-full border-[#e5e5e3] bg-[#fafaf9] px-2.5 py-1 text-[11px] font-medium text-[#37352f]"
+                              >
+                                {formatTimestamp(selectedSessionLineageEntry.timestamp)}
+                              </Badge>
+                            ) : null}
+                          </div>
+                          {!selectedSessionLineageEntry ? (
+                            <p className="mt-3 text-[13px] text-[#9b9a97]">
+                              Select a lineage chain to inspect its linked context.
+                            </p>
+                          ) : (
+                            <>
+                              <div className="mt-3 flex flex-wrap items-center gap-2">
+                                <Badge
+                                  variant="outline"
+                                  className="rounded-full border-[#e5e5e3] bg-[#fafaf9] px-2.5 py-1 text-[11px] font-medium text-[#37352f]"
+                                >
+                                  run {selectedSessionLineageEntry.runId}
+                                </Badge>
+                                <Badge
+                                  variant="outline"
+                                  className="rounded-full border-[#e5e5e3] bg-[#fafaf9] px-2.5 py-1 text-[11px] font-medium text-[#37352f]"
+                                >
+                                  outcome {selectedSessionLineageEntry.resultIndex + 1}
+                                </Badge>
+                                {selectedSessionLineageTraits.map((trait) => (
+                                  <Badge
+                                    key={trait.key}
+                                    variant="outline"
+                                    className={`rounded-full px-2.5 py-1 text-[11px] font-medium ${trait.className}`}
+                                  >
+                                    {trait.label}
+                                  </Badge>
+                                ))}
+                              </div>
+                              <p className="mt-3 text-[12px] text-[#6b6b6b]">
+                                {selectedSessionLineageEntry.title}
+                                {selectedSessionLineageEntry.subtitle
+                                  ? ` · ${selectedSessionLineageEntry.subtitle}`
+                                  : ""}
+                              </p>
+                            </>
+                          )}
+                          <div className="mt-3 flex flex-wrap gap-2">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-7 rounded-lg border-[#e5e5e3] bg-white px-2 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
+                              onClick={() => {
+                                if (latestAttentionLineageEntry) {
+                                  focusSessionLineageEntry(latestAttentionLineageEntry, "attention");
+                                }
+                              }}
+                              disabled={!latestAttentionLineageEntry}
+                            >
+                              Latest attention
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-7 rounded-lg border-[#e5e5e3] bg-white px-2 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
+                              onClick={() => {
+                                if (latestDecisionLineageEntry) {
+                                  focusSessionLineageEntry(latestDecisionLineageEntry, "decisions");
+                                }
+                              }}
+                              disabled={!latestDecisionLineageEntry}
+                            >
+                              Latest decision
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-7 rounded-lg border-[#e5e5e3] bg-white px-2 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
+                              onClick={() => {
+                                if (latestAgentLinkedLineageEntry) {
+                                  focusSessionLineageEntry(latestAgentLinkedLineageEntry, "agent-linked");
+                                }
+                              }}
+                              disabled={!latestAgentLinkedLineageEntry}
+                            >
+                              Latest agent-linked
+                            </Button>
+                            {selectedSessionLineageEntry ? (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="h-7 rounded-lg border-[#e5e5e3] bg-white px-2 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
+                                onClick={() => {
+                                  inspectSessionLineageEntry(selectedSessionLineageEntry);
+                                }}
+                              >
+                                Re-open selection
+                              </Button>
+                            ) : null}
+                          </div>
+                        </div>
                         {!filteredSessionLineageEntries.length ? (
                           <p className="mt-3 text-[13px] text-[#9b9a97]">
                             No lineage chains match the current focus mode.
@@ -3283,32 +3441,14 @@ export default function ControlPlanePage() {
                                         label: `outcome ${entry.resultIndex + 1}`,
                                         tone: "outcome",
                                         active: selected,
-                                        onClick: () => {
-                                          syncLinkedSelection({
-                                            runId: entry.runId,
-                                            resultIndex: entry.resultIndex,
-                                            approvalId: entry.approvalId,
-                                            issueId: entry.issueId,
-                                            runtimeAgentId: entry.runtimeAgentId,
-                                            event: entry.event,
-                                          });
-                                        },
+                                        onClick: () => inspectSessionLineageEntry(entry),
                                       },
                                       entry.approvalId
                                         ? {
                                             key: `lineage-approval-${entry.approvalId}`,
                                             label: `approval ${entry.approvalId}`,
                                             tone: "approval" as const,
-                                            onClick: () => {
-                                              syncLinkedSelection({
-                                                runId: entry.runId,
-                                                resultIndex: entry.resultIndex,
-                                                approvalId: entry.approvalId,
-                                                issueId: entry.issueId,
-                                                runtimeAgentId: entry.runtimeAgentId,
-                                                event: entry.event,
-                                              });
-                                            },
+                                            onClick: () => inspectSessionLineageEntry(entry),
                                           }
                                         : null,
                                       entry.issueId
@@ -3316,16 +3456,7 @@ export default function ControlPlanePage() {
                                             key: `lineage-issue-${entry.issueId}`,
                                             label: `issue ${entry.issueId}`,
                                             tone: "issue" as const,
-                                            onClick: () => {
-                                              syncLinkedSelection({
-                                                runId: entry.runId,
-                                                resultIndex: entry.resultIndex,
-                                                approvalId: entry.approvalId,
-                                                issueId: entry.issueId,
-                                                runtimeAgentId: entry.runtimeAgentId,
-                                                event: entry.event,
-                                              });
-                                            },
+                                            onClick: () => inspectSessionLineageEntry(entry),
                                           }
                                         : null,
                                       entry.eventKey
@@ -3333,16 +3464,7 @@ export default function ControlPlanePage() {
                                             key: `lineage-event-${entry.eventKey}`,
                                             label: `event ${entry.eventName || "event"}`,
                                             tone: "event" as const,
-                                            onClick: () => {
-                                              syncLinkedSelection({
-                                                runId: entry.runId,
-                                                resultIndex: entry.resultIndex,
-                                                approvalId: entry.approvalId,
-                                                issueId: entry.issueId,
-                                                runtimeAgentId: entry.runtimeAgentId,
-                                                event: entry.event,
-                                              });
-                                            },
+                                            onClick: () => inspectSessionLineageEntry(entry),
                                           }
                                         : null,
                                       entry.runtimeAgentId
@@ -3350,16 +3472,7 @@ export default function ControlPlanePage() {
                                             key: `lineage-agent-${entry.runtimeAgentId}`,
                                             label: `agent ${entry.runtimeAgentId}`,
                                             tone: "agent" as const,
-                                            onClick: () => {
-                                              syncLinkedSelection({
-                                                runId: entry.runId,
-                                                resultIndex: entry.resultIndex,
-                                                approvalId: entry.approvalId,
-                                                issueId: entry.issueId,
-                                                runtimeAgentId: entry.runtimeAgentId,
-                                                event: entry.event,
-                                              });
-                                            },
+                                            onClick: () => inspectSessionLineageEntry(entry),
                                           }
                                         : null,
                                     ].filter(Boolean) as RelationshipStripItem[]}
@@ -3379,14 +3492,7 @@ export default function ControlPlanePage() {
                                           : "border-[#e5e5e3] bg-white text-[#37352f] hover:bg-[#f7f7f5]"
                                       }`}
                                       onClick={() => {
-                                        syncLinkedSelection({
-                                          runId: entry.runId,
-                                          resultIndex: entry.resultIndex,
-                                          approvalId: entry.approvalId,
-                                          issueId: entry.issueId,
-                                          runtimeAgentId: entry.runtimeAgentId,
-                                          event: entry.event,
-                                        });
+                                        inspectSessionLineageEntry(entry);
                                       }}
                                     >
                                       {selected ? "Selected" : "Inspect chain"}
