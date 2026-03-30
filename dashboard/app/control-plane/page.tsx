@@ -104,6 +104,26 @@ type RelationshipStripItem = {
   active?: boolean;
   onClick?: () => void;
 };
+type SessionLineageEntry = {
+  key: string;
+  runId: string;
+  resultIndex: number;
+  timestamp: string;
+  status: string;
+  title: string;
+  subtitle: string;
+  message: string;
+  approvalId: string;
+  issueId: string;
+  eventKey: string;
+  eventName: string;
+  runtimeAgentId: string;
+  projectId: string;
+  projectName: string;
+  storyId: number | null;
+  storyTitle: string;
+  event: Record<string, unknown> | null;
+};
 
 function agentTimelineEntryKey(entry: AgentTimelineEntry): string {
   return `${entry.kind}:${entry.id}`;
@@ -1626,6 +1646,20 @@ export default function ControlPlanePage() {
       ),
     [selectedSession]
   );
+  const approvalById = useMemo(() => {
+    const index = new Map<string, ExecutionApprovalRecord>();
+    linkedApprovals.forEach((approval) => {
+      index.set(approval.id, approval);
+    });
+    return index;
+  }, [linkedApprovals]);
+  const issueById = useMemo(() => {
+    const index = new Map<string, ExecutionIssueRecord>();
+    linkedIssues.forEach((issue) => {
+      index.set(issue.id, issue);
+    });
+    return index;
+  }, [linkedIssues]);
   const linkedAgentIds = useMemo(() => {
     const ids = [
       ...(selectedSession?.linked_runtime_agent_ids || []),
@@ -1696,6 +1730,106 @@ export default function ControlPlanePage() {
     if (!selectedRun) return null;
     return selectedRun.results[selectedRunResultIndex] ?? selectedRun.results[0] ?? null;
   }, [selectedRun, selectedRunResultIndex]);
+  const sessionLineageEntries = useMemo(() => {
+    const entries: SessionLineageEntry[] = [];
+    linkedRuns.forEach((run) => {
+      run.results.forEach((result, resultIndex) => {
+        const approvalId = toStringValue(asRecord(result.approval)?.id);
+        const issueId = toStringValue(asRecord(result.issue)?.id);
+        const linkedApproval = approvalId ? approvalById.get(approvalId) ?? null : null;
+        const linkedIssue = issueId ? issueById.get(issueId) ?? null : null;
+        const runtimeAgentId =
+          outcomeRuntimeAgentId(result) ||
+          linkedApproval?.runtime_agent_ids[0] ||
+          linkedIssue?.runtime_agent_ids[0] ||
+          linkedIssue?.runtime_agent_id ||
+          "";
+        const relatedEventMatch = resolveSessionEventFromContext(selectedSession?.events || [], {
+          runId: run.id,
+          approvalId,
+          issueId,
+          runtimeAgentId,
+        });
+        const details = describeRunResult(result);
+        const projectId = outcomeProjectId(result);
+        const projectName = outcomeProjectName(result);
+        const storyId = outcomeStoryId(result);
+        const storyTitle = outcomeStoryTitle(result);
+        const timestamp =
+          toStringValue(relatedEventMatch?.event?.timestamp) ||
+          run.completed_at ||
+          run.updated_at ||
+          run.created_at;
+        entries.push({
+          key: `${run.id}:${resultIndex}`,
+          runId: run.id,
+          resultIndex,
+          timestamp,
+          status: toStringValue(result.status, run.status || "unknown"),
+          title: details.title,
+          subtitle: details.subtitle,
+          message: details.message,
+          approvalId,
+          issueId,
+          eventKey: relatedEventMatch?.key || "",
+          eventName: toStringValue(relatedEventMatch?.event?.event),
+          runtimeAgentId,
+          projectId,
+          projectName,
+          storyId,
+          storyTitle,
+          event: relatedEventMatch?.event || null,
+        });
+      });
+    });
+    return entries.sort(
+      (left, right) =>
+        right.timestamp.localeCompare(left.timestamp) ||
+        right.runId.localeCompare(left.runId) ||
+        left.resultIndex - right.resultIndex
+    );
+  }, [approvalById, issueById, linkedRuns, selectedSession]);
+  const selectedSessionLineageEntry = useMemo(() => {
+    if (selectedRunId) {
+      return (
+        sessionLineageEntries.find(
+          (entry) => entry.runId === selectedRunId && entry.resultIndex === selectedRunResultIndex
+        ) ?? null
+      );
+    }
+    return sessionLineageEntries[0] ?? null;
+  }, [selectedRunId, selectedRunResultIndex, sessionLineageEntries]);
+  const visibleSessionLineageEntries = useMemo(
+    () =>
+      withSelectedItem(
+        sessionLineageEntries,
+        selectedSessionLineageEntry,
+        6,
+        (entry) => entry.key
+      ),
+    [selectedSessionLineageEntry, sessionLineageEntries]
+  );
+  const sessionLineageStatusCounts = useMemo(
+    () =>
+      sessionLineageEntries.reduce<ExecutionPlaneCountMap>((acc, entry) => {
+        acc[entry.status] = (acc[entry.status] || 0) + 1;
+        return acc;
+      }, {}),
+    [sessionLineageEntries]
+  );
+  const sessionLineageDecisionCount = useMemo(
+    () =>
+      sessionLineageEntries.filter((entry) => entry.approvalId || entry.issueId).length,
+    [sessionLineageEntries]
+  );
+  const sessionLineageEventCount = useMemo(
+    () => sessionLineageEntries.filter((entry) => entry.eventKey).length,
+    [sessionLineageEntries]
+  );
+  const sessionLineageAgentCount = useMemo(
+    () => new Set(sessionLineageEntries.map((entry) => entry.runtimeAgentId).filter(Boolean)).size,
+    [sessionLineageEntries]
+  );
   const syncLinkedSelection = useCallback(
     (context: LinkedSelectionContext) => {
       const approvalId = toStringValue(context.approvalId);
@@ -2951,6 +3085,244 @@ export default function ControlPlanePage() {
                           })()}
                         </div>
                       )}
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+
+              <Card className="border border-[#e5e5e3] bg-white shadow-[0_1px_3px_rgba(15,15,15,0.08),0_0_1px_rgba(15,15,15,0.04)]">
+                <CardHeader>
+                  <CardTitle className="text-[18px] font-semibold tracking-[-0.02em] text-[#37352f]">
+                    Session Lineage
+                  </CardTitle>
+                  <CardDescription className="text-[13px] text-[#787774]">
+                    Run-linked picture of recent outcomes, decisions, events, and agents across the current session.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  {!selectedSession ? (
+                    <div className="rounded-xl border border-dashed border-[#e5e5e3] bg-[#fafaf9] px-5 py-8 text-[13px] text-[#9b9a97]">
+                      Select a session to inspect recent lineage chains.
+                    </div>
+                  ) : sessionLineageEntries.length === 0 ? (
+                    <div className="rounded-xl border border-dashed border-[#e5e5e3] bg-[#fafaf9] px-5 py-8 text-[13px] text-[#9b9a97]">
+                      No run-linked lineage recorded for this session yet.
+                    </div>
+                  ) : (
+                    <div className="space-y-4">
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        <SessionMetric
+                          label="Outcomes"
+                          value={String(sessionLineageEntries.length)}
+                          detail={`${linkedRuns.length} run${linkedRuns.length === 1 ? "" : "s"} linked`}
+                        />
+                        <SessionMetric
+                          label="Decisions"
+                          value={String(sessionLineageDecisionCount)}
+                          detail={`${linkedApprovals.length} approvals · ${linkedIssues.length} issues`}
+                        />
+                        <SessionMetric
+                          label="Events"
+                          value={String(sessionLineageEventCount)}
+                          detail={`${selectedSession.events.length} session event${selectedSession.events.length === 1 ? "" : "s"}`}
+                        />
+                        <SessionMetric
+                          label="Agents"
+                          value={String(sessionLineageAgentCount)}
+                          detail={`${linkedAgentIds.length} linked agent${linkedAgentIds.length === 1 ? "" : "s"} in session`}
+                        />
+                      </div>
+
+                      <BreakdownChips
+                        label="Lineage Statuses"
+                        values={sessionLineageStatusCounts}
+                        emptyText="No lineage statuses recorded."
+                      />
+
+                      <div className="rounded-2xl border border-[#ecebe8] bg-[#fbfbf9] p-4">
+                        <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#9b9a97]">
+                          Recent Chains
+                        </p>
+                        <div className="mt-3 space-y-3">
+                          {visibleSessionLineageEntries.map((entry) => {
+                            const selected =
+                              selectedSessionLineageEntry?.key === entry.key;
+                            const workspaceHref =
+                              entry.projectId && entry.storyId
+                                ? `/projects/${entry.projectId}?storyId=${entry.storyId}`
+                                : entry.projectId
+                                  ? `/projects/${entry.projectId}`
+                                  : "";
+                            return (
+                              <div
+                                key={entry.key}
+                                className={`rounded-xl border p-3 ${
+                                  selected
+                                    ? "border-[#d3e5ef] bg-[#f7fbfd]"
+                                    : "border-[#ecebe8] bg-white"
+                                }`}
+                              >
+                                <div className="flex flex-wrap items-start justify-between gap-3">
+                                  <div>
+                                    <p className="text-[13px] font-semibold text-[#37352f]">
+                                      {entry.title}
+                                    </p>
+                                    <p className="mt-2 text-[12px] text-[#787774]">
+                                      {entry.subtitle || "No outcome subtype"}
+                                    </p>
+                                  </div>
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <Badge
+                                      variant="outline"
+                                      className={`rounded-full px-2.5 py-1 text-[11px] font-semibold capitalize ${passStatusClass(entry.status)}`}
+                                    >
+                                      {entry.status}
+                                    </Badge>
+                                    <p className="text-[11px] text-[#9b9a97]">
+                                      {formatTimestamp(entry.timestamp)}
+                                    </p>
+                                  </div>
+                                </div>
+
+                                <RelationshipStrip
+                                  label="Lineage Chain"
+                                  items={[
+                                    {
+                                      key: `lineage-run-${entry.runId}`,
+                                      label: `run ${entry.runId}`,
+                                      tone: "run",
+                                      onClick: () => {
+                                        setSelectedRunId(entry.runId);
+                                        setSelectedRunResultIndex(0);
+                                      },
+                                    },
+                                    {
+                                      key: `lineage-outcome-${entry.key}`,
+                                      label: `outcome ${entry.resultIndex + 1}`,
+                                      tone: "outcome",
+                                      active: selected,
+                                      onClick: () => {
+                                        syncLinkedSelection({
+                                          runId: entry.runId,
+                                          resultIndex: entry.resultIndex,
+                                          approvalId: entry.approvalId,
+                                          issueId: entry.issueId,
+                                          runtimeAgentId: entry.runtimeAgentId,
+                                          event: entry.event,
+                                        });
+                                      },
+                                    },
+                                    entry.approvalId
+                                      ? {
+                                          key: `lineage-approval-${entry.approvalId}`,
+                                          label: `approval ${entry.approvalId}`,
+                                          tone: "approval" as const,
+                                          onClick: () => {
+                                            syncLinkedSelection({
+                                              runId: entry.runId,
+                                              resultIndex: entry.resultIndex,
+                                              approvalId: entry.approvalId,
+                                              issueId: entry.issueId,
+                                              runtimeAgentId: entry.runtimeAgentId,
+                                              event: entry.event,
+                                            });
+                                          },
+                                        }
+                                      : null,
+                                    entry.issueId
+                                      ? {
+                                          key: `lineage-issue-${entry.issueId}`,
+                                          label: `issue ${entry.issueId}`,
+                                          tone: "issue" as const,
+                                          onClick: () => {
+                                            syncLinkedSelection({
+                                              runId: entry.runId,
+                                              resultIndex: entry.resultIndex,
+                                              approvalId: entry.approvalId,
+                                              issueId: entry.issueId,
+                                              runtimeAgentId: entry.runtimeAgentId,
+                                              event: entry.event,
+                                            });
+                                          },
+                                        }
+                                      : null,
+                                    entry.eventKey
+                                      ? {
+                                          key: `lineage-event-${entry.eventKey}`,
+                                          label: `event ${entry.eventName || "event"}`,
+                                          tone: "event" as const,
+                                          onClick: () => {
+                                            syncLinkedSelection({
+                                              runId: entry.runId,
+                                              resultIndex: entry.resultIndex,
+                                              approvalId: entry.approvalId,
+                                              issueId: entry.issueId,
+                                              runtimeAgentId: entry.runtimeAgentId,
+                                              event: entry.event,
+                                            });
+                                          },
+                                        }
+                                      : null,
+                                    entry.runtimeAgentId
+                                      ? {
+                                          key: `lineage-agent-${entry.runtimeAgentId}`,
+                                          label: `agent ${entry.runtimeAgentId}`,
+                                          tone: "agent" as const,
+                                          onClick: () => {
+                                            syncLinkedSelection({
+                                              runId: entry.runId,
+                                              resultIndex: entry.resultIndex,
+                                              approvalId: entry.approvalId,
+                                              issueId: entry.issueId,
+                                              runtimeAgentId: entry.runtimeAgentId,
+                                              event: entry.event,
+                                            });
+                                          },
+                                        }
+                                      : null,
+                                  ].filter(Boolean) as RelationshipStripItem[]}
+                                />
+
+                                <p className="mt-3 text-[12px] text-[#6b6b6b]">
+                                  {entry.message}
+                                </p>
+
+                                <div className="mt-3 flex flex-wrap gap-2">
+                                  <Button
+                                    size="sm"
+                                    variant={selected ? "default" : "outline"}
+                                    className={`h-7 rounded-lg px-2 text-[11px] ${
+                                      selected
+                                        ? "bg-[#1a1a1a] text-white hover:bg-[#333]"
+                                        : "border-[#e5e5e3] bg-white text-[#37352f] hover:bg-[#f7f7f5]"
+                                    }`}
+                                    onClick={() => {
+                                      syncLinkedSelection({
+                                        runId: entry.runId,
+                                        resultIndex: entry.resultIndex,
+                                        approvalId: entry.approvalId,
+                                        issueId: entry.issueId,
+                                        runtimeAgentId: entry.runtimeAgentId,
+                                        event: entry.event,
+                                      });
+                                    }}
+                                  >
+                                    {selected ? "Selected" : "Inspect chain"}
+                                  </Button>
+                                  {workspaceHref && (
+                                    <Link
+                                      href={workspaceHref}
+                                      className="inline-flex h-7 items-center rounded-lg border border-[#e5e5e3] bg-white px-2 text-[11px] font-medium text-[#37352f] transition-colors hover:bg-[#f7f7f5]"
+                                    >
+                                      Open workspace
+                                    </Link>
+                                  )}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
                     </div>
                   )}
                 </CardContent>
