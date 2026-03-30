@@ -1495,6 +1495,9 @@ export default function ControlPlanePage() {
   const [triageInboxFeedbackHistory, setTriageInboxFeedbackHistory] = useState<
     TriageInboxFeedback[]
   >([]);
+  const [triageInboxFeedbackFilter, setTriageInboxFeedbackFilter] = useState<
+    "all" | "success" | "info"
+  >("all");
   const [historySearch, setHistorySearch] = useState("");
   const [entitySearch, setEntitySearch] = useState("");
   const [refreshing, setRefreshing] = useState(false);
@@ -3455,19 +3458,37 @@ export default function ControlPlanePage() {
       null,
     [triageInboxItems, selectedTriageInboxKey]
   );
-  const triageInboxFeedback = useMemo(
-    () => triageInboxFeedbackHistory[0] ?? null,
+  const triageInboxFeedbackCounts = useMemo(
+    () => ({
+      all: triageInboxFeedbackHistory.length,
+      success: triageInboxFeedbackHistory.filter((feedback) => feedback.tone === "success").length,
+      info: triageInboxFeedbackHistory.filter((feedback) => feedback.tone === "info").length,
+    }),
     [triageInboxFeedbackHistory]
   );
+  const visibleTriageInboxFeedbackHistory = useMemo(
+    () =>
+      triageInboxFeedbackFilter === "all"
+        ? triageInboxFeedbackHistory
+        : triageInboxFeedbackHistory.filter(
+            (feedback) => feedback.tone === triageInboxFeedbackFilter
+          ),
+    [triageInboxFeedbackFilter, triageInboxFeedbackHistory]
+  );
+  const triageInboxFeedback = useMemo(
+    () => visibleTriageInboxFeedbackHistory[0] ?? null,
+    [visibleTriageInboxFeedbackHistory]
+  );
   const recentTriageInboxFeedback = useMemo(
-    () => triageInboxFeedbackHistory.slice(1, TRIAGE_INBOX_FEEDBACK_LIMIT),
-    [triageInboxFeedbackHistory]
+    () => visibleTriageInboxFeedbackHistory.slice(1, TRIAGE_INBOX_FEEDBACK_LIMIT),
+    [visibleTriageInboxFeedbackHistory]
   );
   useEffect(() => {
     selectedTriageInboxKeyRef.current = selectedTriageInboxKey;
   }, [selectedTriageInboxKey]);
   useEffect(() => {
     setTriageInboxFeedbackHistory([]);
+    setTriageInboxFeedbackFilter("all");
   }, [selectedAgentId, selectedSessionId]);
   const syncedTriageInboxItem = useMemo(
     () => triageInboxItems.find((item) => item.syncedWithSelection) ?? null,
@@ -5344,8 +5365,41 @@ export default function ControlPlanePage() {
                           <p className="mt-2 text-[12px] text-[#787774]">
                             {selectedTriageInboxItem.subtitle}
                           </p>
-                          {triageInboxFeedback ? (
+                          {triageInboxFeedbackHistory.length ? (
                             <div className="mt-3 space-y-3">
+                              <div className="flex flex-wrap gap-2">
+                                {[
+                                  { value: "all", label: "All" },
+                                  { value: "success", label: "Success" },
+                                  { value: "info", label: "Info" },
+                                ].map((option) => {
+                                  const selected = triageInboxFeedbackFilter === option.value;
+                                  const count =
+                                    triageInboxFeedbackCounts[
+                                      option.value as keyof typeof triageInboxFeedbackCounts
+                                    ];
+                                  return (
+                                    <Button
+                                      key={`triage-feedback-filter-${option.value}`}
+                                      size="sm"
+                                      variant={selected ? "default" : "outline"}
+                                      className={`h-7 rounded-full px-3 text-[11px] ${
+                                        selected
+                                          ? "bg-[#1a1a1a] text-white hover:bg-[#333]"
+                                          : "border-[#e5e5e3] bg-white text-[#37352f] hover:bg-[#f7f7f5]"
+                                      }`}
+                                      onClick={() => {
+                                        setTriageInboxFeedbackFilter(
+                                          option.value as "all" | "success" | "info"
+                                        );
+                                      }}
+                                    >
+                                      {option.label} · {count}
+                                    </Button>
+                                  );
+                                })}
+                              </div>
+                              {triageInboxFeedback ? (
                               <div
                                 className={`rounded-lg border p-3 ${
                                   triageInboxFeedback.tone === "success"
@@ -5385,6 +5439,11 @@ export default function ControlPlanePage() {
                                   </p>
                                 ) : null}
                               </div>
+                              ) : (
+                                <div className="rounded-lg border border-dashed border-[#e5e5e3] bg-[#fafaf9] p-3 text-[12px] text-[#9b9a97]">
+                                  No {triageInboxFeedbackFilter} triage results yet.
+                                </div>
+                              )}
                               {recentTriageInboxFeedback.length ? (
                                 <div className="rounded-lg border border-[#ecebe8] bg-white p-3">
                                   <div className="flex flex-wrap items-center justify-between gap-2">
