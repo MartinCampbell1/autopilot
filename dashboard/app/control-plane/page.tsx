@@ -6,13 +6,10 @@ import { AppSidebar } from "@/components/app-sidebar";
 import {
   BreakdownChips,
   FilterChip,
-  RelationshipStrip,
-  type RelationshipStripItem,
   SessionMetric,
   SummaryStat,
 } from "@/components/control-plane-display";
 import {
-  QueueAdvanceNotice,
   type QueueAdvanceFeedback,
   type QueueAdvanceFocusDelta,
   type QueueAdvanceFocusSummary,
@@ -20,16 +17,12 @@ import {
   type QueueAdvanceReasonDetails,
   type QueueAdvanceSignal,
 } from "@/components/queue-advance-notice";
-import {
-  CollapsibleQueuePanel,
-  QueueGroupControls,
-  QueueItemCard,
-} from "@/components/queue-panels";
 import { SelectedActionRunCard } from "@/components/selected-action-run-card";
 import { SelectedControlPassCard } from "@/components/selected-control-pass-card";
 import { LinkedDecisionsCard } from "@/components/linked-decisions-card";
 import { SelectedOutcomeInspector } from "@/components/selected-outcome-inspector";
 import { SelectedSessionContextCard } from "@/components/selected-session-context-card";
+import { SessionLineageSection } from "@/components/session-lineage-section";
 import { RuntimeAgentActivitySection } from "@/components/runtime-agent-activity-section";
 import { RuntimeAgentTimelineSection } from "@/components/runtime-agent-timeline-section";
 import { Badge } from "@/components/ui/badge";
@@ -4825,806 +4818,76 @@ export default function ControlPlanePage() {
                 )}
               </SelectedActionRunCard>
 
-              <Card className="border border-[#e5e5e3] bg-white shadow-[0_1px_3px_rgba(15,15,15,0.08),0_0_1px_rgba(15,15,15,0.04)]">
-                <CardHeader>
-                  <CardTitle className="text-[18px] font-semibold tracking-[-0.02em] text-[#37352f]">
-                    Session Lineage
-                  </CardTitle>
-                  <CardDescription className="text-[13px] text-[#787774]">
-                    Run-linked picture of recent outcomes, decisions, events, and agents across the current session.
-                  </CardDescription>
-                </CardHeader>
-                <CardContent>
-                  {!selectedSession ? (
-                    <div className="rounded-xl border border-dashed border-[#e5e5e3] bg-[#fafaf9] px-5 py-8 text-[13px] text-[#9b9a97]">
-                      Select a session to inspect recent lineage chains.
-                    </div>
-                  ) : sessionLineageEntries.length === 0 ? (
-                    <div className="rounded-xl border border-dashed border-[#e5e5e3] bg-[#fafaf9] px-5 py-8 text-[13px] text-[#9b9a97]">
-                      No run-linked lineage recorded for this session yet.
-                    </div>
-                  ) : (
-                    <div className="space-y-4">
-                      <div className="grid gap-3 sm:grid-cols-2">
-                        <SessionMetric
-                          label="Outcomes"
-                          value={String(sessionLineageEntries.length)}
-                          detail={`${linkedRuns.length} run${linkedRuns.length === 1 ? "" : "s"} linked`}
-                        />
-                        <SessionMetric
-                          label="Decisions"
-                          value={String(sessionLineageDecisionCount)}
-                          detail={`${linkedApprovals.length} approvals · ${linkedIssues.length} issues`}
-                        />
-                        <SessionMetric
-                          label="Events"
-                          value={String(sessionLineageEventCount)}
-                          detail={`${selectedSession.events.length} session event${selectedSession.events.length === 1 ? "" : "s"}`}
-                        />
-                        <SessionMetric
-                          label="Agents"
-                          value={String(sessionLineageAgentCount)}
-                          detail={`${linkedAgentIds.length} linked agent${linkedAgentIds.length === 1 ? "" : "s"} in session`}
-                        />
-                      </div>
-
-                      <BreakdownChips
-                        label="Lineage Statuses"
-                        values={sessionLineageStatusCounts}
-                        emptyText="No lineage statuses recorded."
-                      />
-
-                      <div className="rounded-2xl border border-[#ecebe8] bg-[#fbfbf9] p-4">
-                        <div className="flex items-center justify-between gap-3">
-                          <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#9b9a97]">
-                            Recent Chains
-                          </p>
-                          <Badge
-                            variant="outline"
-                            className="rounded-full border-[#e5e5e3] bg-white px-2.5 py-1 text-[11px] font-medium text-[#37352f]"
-                          >
-                            {filteredSessionLineageEntries.length}
-                          </Badge>
-                        </div>
-                        <div className="mt-3 flex flex-wrap gap-2">
-                          <FilterChip
-                            label="All"
-                            active={sessionLineageFilter === "all"}
-                            count={sessionLineageEntries.length}
-                            onClick={() => {
-                              setSessionLineageFilter("all");
-                            }}
-                          />
-                          <FilterChip
-                            label="Attention"
-                            active={sessionLineageFilter === "attention"}
-                            count={sessionLineageAttentionCount}
-                            onClick={() => {
-                              setSessionLineageFilter("attention");
-                            }}
-                          />
-                          <FilterChip
-                            label="Decisions"
-                            active={sessionLineageFilter === "decisions"}
-                            count={sessionLineageDecisionCount}
-                            onClick={() => {
-                              setSessionLineageFilter("decisions");
-                            }}
-                          />
-                          <FilterChip
-                            label="Agent-linked"
-                            active={sessionLineageFilter === "agent-linked"}
-                            count={sessionLineageAgentLinkedCount}
-                            onClick={() => {
-                              setSessionLineageFilter("agent-linked");
-                            }}
-                          />
-                        </div>
-                        <div className="rounded-xl border border-[#ecebe8] bg-white p-3">
-                          <div className="flex flex-wrap items-center justify-between gap-3">
-                            <div>
-                              <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#9b9a97]">
-                                Operator State
-                              </p>
-                              <p className="mt-1 text-[12px] text-[#787774]">
-                                {persistedDismissedLineageQueueCount} dismissed ·{" "}
-                                {persistedSnoozedLineageQueueCount} snoozed persisted for this session
-                              </p>
-                              <div className="mt-2 flex flex-wrap gap-2">
-                                {(["critical", "high", "normal"] as TriagePriority[]).map((priority) =>
-                                  sessionLineagePriorityCounts[priority] ? (
-                                    <Badge
-                                      key={`session-lineage-priority-${priority}`}
-                                      variant="outline"
-                                      className={`rounded-full px-2.5 py-1 text-[11px] font-medium ${triagePriorityClass(priority)}`}
-                                    >
-                                      {priority} {sessionLineagePriorityCounts[priority]}
-                                    </Badge>
-                                  ) : null
-                                )}
-                              </div>
-                            </div>
-                            <div className="flex flex-wrap gap-2">
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                className="h-7 rounded-lg border-[#e5e5e3] bg-white px-2 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
-                                onClick={() => {
-                                  void exportSessionLineageQueuePreferences();
-                                }}
-                                disabled={!hasPersistedLineageQueuePreferences}
-                              >
-                                Copy queue state
-                              </Button>
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                className="h-7 rounded-lg border-[#e5e5e3] bg-white px-2 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
-                                onClick={() => {
-                                  resetSessionLineageQueuePreferences();
-                                }}
-                                disabled={!hasPersistedLineageQueuePreferences}
-                              >
-                                Reset queue state
-                              </Button>
-                            </div>
-                          </div>
-                        </div>
-                        <div className="rounded-xl border border-[#ecebe8] bg-white p-3">
-                          <div className="flex flex-wrap items-center justify-between gap-3">
-                            <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#9b9a97]">
-                              Active Focus
-                            </p>
-                            {selectedSessionLineageEntry ? (
-                              <div className="flex flex-wrap items-center gap-2">
-                                {selectedSessionLineagePriority ? (
-                                  <Badge
-                                    variant="outline"
-                                    className={`rounded-full px-2.5 py-1 text-[11px] font-medium ${triagePriorityClass(selectedSessionLineagePriority)}`}
-                                  >
-                                    {selectedSessionLineagePriority}
-                                  </Badge>
-                                ) : null}
-                                <Badge
-                                  variant="outline"
-                                  className="rounded-full border-[#e5e5e3] bg-[#fafaf9] px-2.5 py-1 text-[11px] font-medium text-[#37352f]"
-                                >
-                                  {formatTimestamp(selectedSessionLineageEntry.timestamp)}
-                                </Badge>
-                              </div>
-                            ) : null}
-                          </div>
-                          {!selectedSessionLineageEntry ? (
-                            <p className="mt-3 text-[13px] text-[#9b9a97]">
-                              Select a lineage chain to inspect its linked context.
-                            </p>
-                          ) : (
-                            <>
-                              <div className="mt-3 flex flex-wrap items-center gap-2">
-                                <Badge
-                                  variant="outline"
-                                  className="rounded-full border-[#e5e5e3] bg-[#fafaf9] px-2.5 py-1 text-[11px] font-medium text-[#37352f]"
-                                >
-                                  run {selectedSessionLineageEntry.runId}
-                                </Badge>
-                                <Badge
-                                  variant="outline"
-                                  className="rounded-full border-[#e5e5e3] bg-[#fafaf9] px-2.5 py-1 text-[11px] font-medium text-[#37352f]"
-                                >
-                                  outcome {selectedSessionLineageEntry.resultIndex + 1}
-                                </Badge>
-                                {selectedSessionLineageTraits.map((trait) => (
-                                  <Badge
-                                    key={trait.key}
-                                    variant="outline"
-                                    className={`rounded-full px-2.5 py-1 text-[11px] font-medium ${trait.className}`}
-                                  >
-                                    {trait.label}
-                                  </Badge>
-                                ))}
-                              </div>
-                              <p className="mt-3 text-[12px] text-[#6b6b6b]">
-                                {selectedSessionLineageEntry.title}
-                                {selectedSessionLineageEntry.subtitle
-                                  ? ` · ${selectedSessionLineageEntry.subtitle}`
-                                  : ""}
-                              </p>
-                            </>
-                          )}
-                          <div className="mt-3 flex flex-wrap gap-2">
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              className="h-7 rounded-lg border-[#e5e5e3] bg-white px-2 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
-                              onClick={() => {
-                                if (nextBestSessionLineageEntry) {
-                                  inspectSessionLineageEntry(nextBestSessionLineageEntry);
-                                }
-                              }}
-                              disabled={!nextBestSessionLineageEntry}
-                            >
-                              Inspect next best
-                            </Button>
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              className="h-7 rounded-lg border-[#e5e5e3] bg-white px-2 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
-                              onClick={() => {
-                                advanceSessionLineageQueue("attention");
-                              }}
-                              disabled={!attentionSessionLineageEntries.length}
-                            >
-                              Inspect next attention
-                            </Button>
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              className="h-7 rounded-lg border-[#e5e5e3] bg-white px-2 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
-                              onClick={() => {
-                                advanceSessionLineageQueue("decisions");
-                              }}
-                              disabled={!decisionSessionLineageEntries.length}
-                            >
-                              Inspect next decision
-                            </Button>
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              className="h-7 rounded-lg border-[#e5e5e3] bg-white px-2 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
-                              onClick={() => {
-                                if (latestAgentLinkedLineageEntry) {
-                                  focusSessionLineageEntry(latestAgentLinkedLineageEntry, "agent-linked");
-                                }
-                              }}
-                              disabled={!latestAgentLinkedLineageEntry}
-                            >
-                              Latest agent-linked
-                            </Button>
-                            {selectedSessionLineageEntry ? (
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                className="h-7 rounded-lg border-[#e5e5e3] bg-white px-2 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
-                                onClick={() => {
-                                  inspectSessionLineageEntry(selectedSessionLineageEntry);
-                                }}
-                              >
-                                Re-open selection
-                              </Button>
-                            ) : null}
-                          </div>
-                        </div>
-                        <div className="space-y-3">
-                          <QueueGroupControls
-                            title="Queue Groups"
-                            detail="Attention and decision queues now share the same group controls as the inbox."
-                            openCount={expandedSessionLineageQueues.length}
-                            totalCount={SESSION_LINEAGE_QUEUE_KEYS.length}
-                            onExpandAll={expandAllSessionLineageQueues}
-                            onCollapseAll={collapseAllSessionLineageQueues}
-                            onOpenCurrent={openCurrentSessionLineageQueue}
-                            canOpenCurrent={Boolean(currentSessionLineageQueue)}
-                          />
-                          <QueueAdvanceNotice
-                            label="Queue Advance"
-                            feedback={sessionQueueAdvanceFeedback}
-                            focusSummary={sessionQueueAdvanceFocusSummary}
-                            focusDelta={sessionQueueFocusDelta}
-                            {...sessionQueueAdvanceNoticeActions}
-                          />
-                          <div className="grid gap-3 xl:grid-cols-2">
-                            <CollapsibleQueuePanel
-                              title="Attention Queue"
-                              detail={`${attentionQueuePosition >= 0 ? `Selected ${attentionQueuePosition + 1} of ${attentionSessionLineageEntries.length}` : `${attentionSessionLineageEntries.length} queued`}${hiddenAttentionQueueCount ? ` · ${hiddenAttentionQueueCount} hidden` : ""}`}
-                              expanded={expandedSessionLineageQueues.includes("attention")}
-                              onToggle={() => {
-                                toggleSessionLineageQueueExpansion("attention");
-                              }}
-                              collapsedSummary={
-                                attentionSessionLineageEntries.length
-                                  ? `${attentionSessionLineageEntries.length} visible queue item${
-                                      attentionSessionLineageEntries.length === 1 ? "" : "s"
-                                    } hidden`
-                                  : "Queue collapsed."
-                              }
-                              emptyText="No attention-linked chains in this session."
-                              isEmpty={!attentionSessionLineageQueue.length}
-                              badge={
-                                <Badge
-                                  variant="outline"
-                                  className="rounded-full border-[#e5e5e3] bg-[#fafaf9] px-2.5 py-1 text-[11px] font-medium text-[#37352f]"
-                                >
-                                  {sessionLineageAttentionCount}
-                                </Badge>
-                              }
-                              actions={
-                                <>
-                                  <Button
-                                    size="sm"
-                                    variant="outline"
-                                    className="h-7 rounded-lg border-[#e5e5e3] bg-white px-2 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
-                                    onClick={() => {
-                                      advanceSessionLineageQueue("attention");
-                                    }}
-                                    disabled={!attentionSessionLineageEntries.length}
-                                  >
-                                    Inspect next
-                                  </Button>
-                                  {hiddenAttentionQueueCount ? (
-                                    <Button
-                                      size="sm"
-                                      variant="outline"
-                                      className="h-7 rounded-lg border-[#e5e5e3] bg-white px-2 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
-                                      onClick={() => {
-                                        restoreSessionLineageQueue("attention");
-                                      }}
-                                    >
-                                      Restore hidden
-                                    </Button>
-                                  ) : null}
-                                </>
-                              }
-                            >
-                              <div className="mt-3 space-y-3">
-                                {attentionSessionLineageQueue.map((entry) => {
-                                  const selected = selectedSessionLineageEntry?.key === entry.key;
-                                  const queueTraits = sessionLineageTraits(entry).filter(
-                                    (trait) => trait.key !== "attention"
-                                  );
-                                  const workspaceHref =
-                                    entry.projectId && entry.storyId
-                                      ? `/projects/${entry.projectId}?storyId=${entry.storyId}`
-                                      : entry.projectId
-                                        ? `/projects/${entry.projectId}`
-                                        : "";
-                                  return (
-                                    <QueueItemCard
-                                      key={`attention-queue-${entry.key}`}
-                                      title={entry.title}
-                                      subtitle={`run ${entry.runId} · outcome ${entry.resultIndex + 1}`}
-                                      timestamp={formatTimestamp(entry.timestamp)}
-                                      selected={selected}
-                                      badges={
-                                        <>
-                                        <Badge
-                                          variant="outline"
-                                          className={`rounded-full px-2.5 py-1 text-[11px] font-medium ${triagePriorityClass(sessionLineagePriority(entry))}`}
-                                        >
-                                          {sessionLineagePriority(entry)}
-                                        </Badge>
-                                        <Badge
-                                          variant="outline"
-                                          className={`rounded-full px-2.5 py-1 text-[11px] font-semibold capitalize ${passStatusClass(entry.status)}`}
-                                        >
-                                          {entry.status}
-                                        </Badge>
-                                        {queueTraits.slice(0, 2).map((trait) => (
-                                          <Badge
-                                            key={`${entry.key}-${trait.key}`}
-                                            variant="outline"
-                                            className={`rounded-full px-2.5 py-1 text-[11px] font-medium ${trait.className}`}
-                                          >
-                                            {trait.label}
-                                          </Badge>
-                                        ))}
-                                        </>
-                                      }
-                                      actions={
-                                        <>
-                                        <Button
-                                          size="sm"
-                                          variant={
-                                            selected && sessionLineageFilter === "attention"
-                                              ? "default"
-                                              : "outline"
-                                          }
-                                          className={`h-7 rounded-lg px-2 text-[11px] ${
-                                            selected && sessionLineageFilter === "attention"
-                                              ? "bg-[#1a1a1a] text-white hover:bg-[#333]"
-                                              : "border-[#e5e5e3] bg-white text-[#37352f] hover:bg-[#f7f7f5]"
-                                          }`}
-                                          onClick={() => {
-                                            focusSessionLineageEntry(entry, "attention");
-                                          }}
-                                        >
-                                          {selected && sessionLineageFilter === "attention"
-                                            ? "Selected"
-                                            : "Inspect"}
-                                        </Button>
-                                        <Button
-                                          size="sm"
-                                          variant="outline"
-                                          className="h-7 rounded-lg border-[#e5e5e3] bg-white px-2 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
-                                          onClick={() => {
-                                            snoozeSessionLineageQueueEntry("attention", entry);
-                                          }}
-                                        >
-                                          Snooze 15m
-                                        </Button>
-                                        <Button
-                                          size="sm"
-                                          variant="outline"
-                                          className="h-7 rounded-lg border-[#d3e5ef] bg-[#eef7fb] px-2 text-[11px] text-[#2a6690] hover:bg-[#e3f2f8]"
-                                          onClick={() => {
-                                            advanceSessionLineageQueueFromEntry("attention", entry);
-                                          }}
-                                        >
-                                          Next in queue
-                                        </Button>
-                                        <Button
-                                          size="sm"
-                                          variant="outline"
-                                          className="h-7 rounded-lg border-[#e5e5e3] bg-white px-2 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
-                                          onClick={() => {
-                                            dismissSessionLineageQueueEntry("attention", entry);
-                                          }}
-                                        >
-                                          Dismiss
-                                        </Button>
-                                        <Button
-                                          size="sm"
-                                          variant="outline"
-                                          className="h-7 rounded-lg border-[#e5e5e3] bg-white px-2 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
-                                          onClick={() => {
-                                            findSessionLineageEntryInSession(entry);
-                                          }}
-                                        >
-                                          Find in session
-                                        </Button>
-                                        <Button
-                                          size="sm"
-                                          variant="outline"
-                                          className="h-7 rounded-lg border-[#d3e5ef] bg-[#eef7fb] px-2 text-[11px] text-[#2a6690] hover:bg-[#e3f2f8]"
-                                          onClick={() => {
-                                            revealSessionLineageEntryInTimeline(entry);
-                                          }}
-                                        >
-                                          Reveal in timeline
-                                        </Button>
-                                        {workspaceHref ? (
-                                          <Link
-                                            href={workspaceHref}
-                                            className="inline-flex h-7 items-center rounded-lg border border-[#e5e5e3] bg-white px-2 text-[11px] font-medium text-[#37352f] transition-colors hover:bg-[#f7f7f5]"
-                                          >
-                                            Open workspace
-                                          </Link>
-                                        ) : null}
-                                        </>
-                                      }
-                                    />
-                                  );
-                                })}
-                              </div>
-                            </CollapsibleQueuePanel>
-                            <CollapsibleQueuePanel
-                              title="Decision Queue"
-                              detail={`${decisionQueuePosition >= 0 ? `Selected ${decisionQueuePosition + 1} of ${decisionSessionLineageEntries.length}` : `${decisionSessionLineageEntries.length} queued`}${hiddenDecisionQueueCount ? ` · ${hiddenDecisionQueueCount} hidden` : ""}`}
-                              expanded={expandedSessionLineageQueues.includes("decisions")}
-                              onToggle={() => {
-                                toggleSessionLineageQueueExpansion("decisions");
-                              }}
-                              collapsedSummary={
-                                decisionSessionLineageEntries.length
-                                  ? `${decisionSessionLineageEntries.length} visible queue item${
-                                      decisionSessionLineageEntries.length === 1 ? "" : "s"
-                                    } hidden`
-                                  : "Queue collapsed."
-                              }
-                              emptyText="No decision-linked chains in this session."
-                              isEmpty={!decisionSessionLineageQueue.length}
-                              badge={
-                                <Badge
-                                  variant="outline"
-                                  className="rounded-full border-[#e5e5e3] bg-[#fafaf9] px-2.5 py-1 text-[11px] font-medium text-[#37352f]"
-                                >
-                                  {sessionLineageDecisionCount}
-                                </Badge>
-                              }
-                              actions={
-                                <>
-                                  <Button
-                                    size="sm"
-                                    variant="outline"
-                                    className="h-7 rounded-lg border-[#e5e5e3] bg-white px-2 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
-                                    onClick={() => {
-                                      advanceSessionLineageQueue("decisions");
-                                    }}
-                                    disabled={!decisionSessionLineageEntries.length}
-                                  >
-                                    Inspect next
-                                  </Button>
-                                  {hiddenDecisionQueueCount ? (
-                                    <Button
-                                      size="sm"
-                                      variant="outline"
-                                      className="h-7 rounded-lg border-[#e5e5e3] bg-white px-2 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
-                                      onClick={() => {
-                                        restoreSessionLineageQueue("decisions");
-                                      }}
-                                    >
-                                      Restore hidden
-                                    </Button>
-                                  ) : null}
-                                </>
-                              }
-                            >
-                              <div className="mt-3 space-y-3">
-                                {decisionSessionLineageQueue.map((entry) => {
-                                  const selected = selectedSessionLineageEntry?.key === entry.key;
-                                  const queueTraits = sessionLineageTraits(entry).filter(
-                                    (trait) => trait.key !== "decision"
-                                  );
-                                  const workspaceHref =
-                                    entry.projectId && entry.storyId
-                                      ? `/projects/${entry.projectId}?storyId=${entry.storyId}`
-                                      : entry.projectId
-                                        ? `/projects/${entry.projectId}`
-                                        : "";
-                                  return (
-                                    <QueueItemCard
-                                      key={`decision-queue-${entry.key}`}
-                                      title={entry.title}
-                                      subtitle={`run ${entry.runId} · outcome ${entry.resultIndex + 1}`}
-                                      timestamp={formatTimestamp(entry.timestamp)}
-                                      selected={selected}
-                                      badges={
-                                        <>
-                                        <Badge
-                                          variant="outline"
-                                          className={`rounded-full px-2.5 py-1 text-[11px] font-medium ${triagePriorityClass(sessionLineagePriority(entry))}`}
-                                        >
-                                          {sessionLineagePriority(entry)}
-                                        </Badge>
-                                        <Badge
-                                          variant="outline"
-                                          className={`rounded-full px-2.5 py-1 text-[11px] font-semibold capitalize ${passStatusClass(entry.status)}`}
-                                        >
-                                          {entry.status}
-                                        </Badge>
-                                        {queueTraits.slice(0, 2).map((trait) => (
-                                          <Badge
-                                            key={`${entry.key}-${trait.key}`}
-                                            variant="outline"
-                                            className={`rounded-full px-2.5 py-1 text-[11px] font-medium ${trait.className}`}
-                                          >
-                                            {trait.label}
-                                          </Badge>
-                                        ))}
-                                        </>
-                                      }
-                                      actions={
-                                        <>
-                                        <Button
-                                          size="sm"
-                                          variant={
-                                            selected && sessionLineageFilter === "decisions"
-                                              ? "default"
-                                              : "outline"
-                                          }
-                                          className={`h-7 rounded-lg px-2 text-[11px] ${
-                                            selected && sessionLineageFilter === "decisions"
-                                              ? "bg-[#1a1a1a] text-white hover:bg-[#333]"
-                                              : "border-[#e5e5e3] bg-white text-[#37352f] hover:bg-[#f7f7f5]"
-                                          }`}
-                                          onClick={() => {
-                                            focusSessionLineageEntry(entry, "decisions");
-                                          }}
-                                        >
-                                          {selected && sessionLineageFilter === "decisions"
-                                            ? "Selected"
-                                            : "Inspect"}
-                                        </Button>
-                                        <Button
-                                          size="sm"
-                                          variant="outline"
-                                          className="h-7 rounded-lg border-[#e5e5e3] bg-white px-2 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
-                                          onClick={() => {
-                                            snoozeSessionLineageQueueEntry("decisions", entry);
-                                          }}
-                                        >
-                                          Snooze 15m
-                                        </Button>
-                                        <Button
-                                          size="sm"
-                                          variant="outline"
-                                          className="h-7 rounded-lg border-[#d3e5ef] bg-[#eef7fb] px-2 text-[11px] text-[#2a6690] hover:bg-[#e3f2f8]"
-                                          onClick={() => {
-                                            advanceSessionLineageQueueFromEntry("decisions", entry);
-                                          }}
-                                        >
-                                          Next in queue
-                                        </Button>
-                                        <Button
-                                          size="sm"
-                                          variant="outline"
-                                          className="h-7 rounded-lg border-[#e5e5e3] bg-white px-2 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
-                                          onClick={() => {
-                                            dismissSessionLineageQueueEntry("decisions", entry);
-                                          }}
-                                        >
-                                          Dismiss
-                                        </Button>
-                                        <Button
-                                          size="sm"
-                                          variant="outline"
-                                          className="h-7 rounded-lg border-[#e5e5e3] bg-white px-2 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
-                                          onClick={() => {
-                                            findSessionLineageEntryInSession(entry);
-                                          }}
-                                        >
-                                          Find in session
-                                        </Button>
-                                        <Button
-                                          size="sm"
-                                          variant="outline"
-                                          className="h-7 rounded-lg border-[#d3e5ef] bg-[#eef7fb] px-2 text-[11px] text-[#2a6690] hover:bg-[#e3f2f8]"
-                                          onClick={() => {
-                                            revealSessionLineageEntryInTimeline(entry);
-                                          }}
-                                        >
-                                          Reveal in timeline
-                                        </Button>
-                                        {workspaceHref ? (
-                                          <Link
-                                            href={workspaceHref}
-                                            className="inline-flex h-7 items-center rounded-lg border border-[#e5e5e3] bg-white px-2 text-[11px] font-medium text-[#37352f] transition-colors hover:bg-[#f7f7f5]"
-                                          >
-                                            Open workspace
-                                          </Link>
-                                        ) : null}
-                                        </>
-                                      }
-                                    />
-                                  );
-                                })}
-                              </div>
-                            </CollapsibleQueuePanel>
-                          </div>
-                        </div>
-                        {!filteredSessionLineageEntries.length ? (
-                          <p className="mt-3 text-[13px] text-[#9b9a97]">
-                            No lineage chains match the current focus mode.
-                          </p>
-                        ) : (
-                          <div className="mt-3 space-y-3">
-                            {visibleSessionLineageEntries.map((entry) => {
-                              const selected =
-                                selectedSessionLineageEntry?.key === entry.key;
-                              const workspaceHref =
-                                entry.projectId && entry.storyId
-                                  ? `/projects/${entry.projectId}?storyId=${entry.storyId}`
-                                  : entry.projectId
-                                    ? `/projects/${entry.projectId}`
-                                    : "";
-                              return (
-                                <div
-                                  key={entry.key}
-                                  className={`rounded-xl border p-3 ${
-                                    selected
-                                      ? "border-[#d3e5ef] bg-[#f7fbfd]"
-                                      : "border-[#ecebe8] bg-white"
-                                  }`}
-                                >
-                                  <div className="flex flex-wrap items-start justify-between gap-3">
-                                    <div>
-                                      <p className="text-[13px] font-semibold text-[#37352f]">
-                                        {entry.title}
-                                      </p>
-                                      <p className="mt-2 text-[12px] text-[#787774]">
-                                        {entry.subtitle || "No outcome subtype"}
-                                      </p>
-                                    </div>
-                                    <div className="flex flex-wrap items-center gap-2">
-                                      <Badge
-                                        variant="outline"
-                                        className={`rounded-full px-2.5 py-1 text-[11px] font-medium ${triagePriorityClass(sessionLineagePriority(entry))}`}
-                                      >
-                                        {sessionLineagePriority(entry)}
-                                      </Badge>
-                                      <Badge
-                                        variant="outline"
-                                        className={`rounded-full px-2.5 py-1 text-[11px] font-semibold capitalize ${passStatusClass(entry.status)}`}
-                                      >
-                                        {entry.status}
-                                      </Badge>
-                                      <p className="text-[11px] text-[#9b9a97]">
-                                        {formatTimestamp(entry.timestamp)}
-                                      </p>
-                                    </div>
-                                  </div>
-
-                                  <RelationshipStrip
-                                    label="Lineage Chain"
-                                    items={[
-                                      {
-                                        key: `lineage-run-${entry.runId}`,
-                                        label: `run ${entry.runId}`,
-                                        tone: "run",
-                                        onClick: () => {
-                                          setSelectedRunId(entry.runId);
-                                          setSelectedRunResultIndex(0);
-                                        },
-                                      },
-                                      {
-                                        key: `lineage-outcome-${entry.key}`,
-                                        label: `outcome ${entry.resultIndex + 1}`,
-                                        tone: "outcome",
-                                        active: selected,
-                                        onClick: () => inspectSessionLineageEntry(entry),
-                                      },
-                                      entry.approvalId
-                                        ? {
-                                            key: `lineage-approval-${entry.approvalId}`,
-                                            label: `approval ${entry.approvalId}`,
-                                            tone: "approval" as const,
-                                            onClick: () => inspectSessionLineageEntry(entry),
-                                          }
-                                        : null,
-                                      entry.issueId
-                                        ? {
-                                            key: `lineage-issue-${entry.issueId}`,
-                                            label: `issue ${entry.issueId}`,
-                                            tone: "issue" as const,
-                                            onClick: () => inspectSessionLineageEntry(entry),
-                                          }
-                                        : null,
-                                      entry.eventKey
-                                        ? {
-                                            key: `lineage-event-${entry.eventKey}`,
-                                            label: `event ${entry.eventName || "event"}`,
-                                            tone: "event" as const,
-                                            onClick: () => inspectSessionLineageEntry(entry),
-                                          }
-                                        : null,
-                                      entry.runtimeAgentId
-                                        ? {
-                                            key: `lineage-agent-${entry.runtimeAgentId}`,
-                                            label: `agent ${entry.runtimeAgentId}`,
-                                            tone: "agent" as const,
-                                            onClick: () => inspectSessionLineageEntry(entry),
-                                          }
-                                        : null,
-                                    ].filter(Boolean) as RelationshipStripItem[]}
-                                  />
-
-                                  <p className="mt-3 text-[12px] text-[#6b6b6b]">
-                                    {entry.message}
-                                  </p>
-
-                                  <div className="mt-3 flex flex-wrap gap-2">
-                                    <Button
-                                      size="sm"
-                                      variant={selected ? "default" : "outline"}
-                                      className={`h-7 rounded-lg px-2 text-[11px] ${
-                                        selected
-                                          ? "bg-[#1a1a1a] text-white hover:bg-[#333]"
-                                          : "border-[#e5e5e3] bg-white text-[#37352f] hover:bg-[#f7f7f5]"
-                                      }`}
-                                      onClick={() => {
-                                        inspectSessionLineageEntry(entry);
-                                      }}
-                                    >
-                                      {selected ? "Selected" : "Inspect chain"}
-                                    </Button>
-                                    {workspaceHref && (
-                                      <Link
-                                        href={workspaceHref}
-                                        className="inline-flex h-7 items-center rounded-lg border border-[#e5e5e3] bg-white px-2 text-[11px] font-medium text-[#37352f] transition-colors hover:bg-[#f7f7f5]"
-                                      >
-                                        Open workspace
-                                      </Link>
-                                    )}
-                                  </div>
-                                </div>
-                              );
-                            })}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
+              <SessionLineageSection
+                hasSelectedSession={Boolean(selectedSession)}
+                sessionEventTotalCount={selectedSession?.events.length || 0}
+                sessionLineageEntries={sessionLineageEntries}
+                linkedRunCount={linkedRuns.length}
+                linkedApprovalCount={linkedApprovals.length}
+                linkedIssueCount={linkedIssues.length}
+                linkedAgentCount={linkedAgentIds.length}
+                sessionLineageDecisionCount={sessionLineageDecisionCount}
+                sessionLineageEventCount={sessionLineageEventCount}
+                sessionLineageAgentCount={sessionLineageAgentCount}
+                sessionLineageStatusCounts={sessionLineageStatusCounts}
+                filteredSessionLineageEntriesCount={filteredSessionLineageEntries.length}
+                sessionLineageFilter={sessionLineageFilter as
+                  | "all"
+                  | "attention"
+                  | "decisions"
+                  | "agent-linked"}
+                onSessionLineageFilterChange={(value) => {
+                  setSessionLineageFilter(value);
+                }}
+                sessionLineageAttentionCount={sessionLineageAttentionCount}
+                sessionLineageAgentLinkedCount={sessionLineageAgentLinkedCount}
+                persistedDismissedLineageQueueCount={persistedDismissedLineageQueueCount}
+                persistedSnoozedLineageQueueCount={persistedSnoozedLineageQueueCount}
+                sessionLineagePriorityCounts={sessionLineagePriorityCounts}
+                hasPersistedLineageQueuePreferences={hasPersistedLineageQueuePreferences}
+                onExportSessionLineageQueuePreferences={exportSessionLineageQueuePreferences}
+                onResetSessionLineageQueuePreferences={resetSessionLineageQueuePreferences}
+                selectedSessionLineageEntry={selectedSessionLineageEntry}
+                selectedSessionLineagePriority={selectedSessionLineagePriority}
+                selectedSessionLineageTraits={selectedSessionLineageTraits}
+                formatTimestamp={formatTimestamp}
+                nextBestSessionLineageEntry={nextBestSessionLineageEntry}
+                attentionSessionLineageEntries={attentionSessionLineageEntries}
+                decisionSessionLineageEntries={decisionSessionLineageEntries}
+                latestAgentLinkedLineageEntry={latestAgentLinkedLineageEntry}
+                onInspectSessionLineageEntry={inspectSessionLineageEntry}
+                onAdvanceSessionLineageQueue={advanceSessionLineageQueue}
+                onFocusSessionLineageEntry={focusSessionLineageEntry}
+                expandedSessionLineageQueues={expandedSessionLineageQueues}
+                currentSessionLineageQueue={currentSessionLineageQueue}
+                onExpandAllSessionLineageQueues={expandAllSessionLineageQueues}
+                onCollapseAllSessionLineageQueues={collapseAllSessionLineageQueues}
+                onOpenCurrentSessionLineageQueue={openCurrentSessionLineageQueue}
+                sessionQueueAdvanceFeedback={sessionQueueAdvanceFeedback}
+                sessionQueueAdvanceFocusSummary={sessionQueueAdvanceFocusSummary}
+                sessionQueueFocusDelta={sessionQueueFocusDelta}
+                sessionQueueAdvanceNoticeActions={sessionQueueAdvanceNoticeActions}
+                attentionQueuePosition={attentionQueuePosition}
+                hiddenAttentionQueueCount={hiddenAttentionQueueCount}
+                attentionSessionLineageQueue={attentionSessionLineageQueue}
+                onToggleSessionLineageQueueExpansion={toggleSessionLineageQueueExpansion}
+                onRestoreSessionLineageQueue={restoreSessionLineageQueue}
+                sessionLineagePriority={sessionLineagePriority}
+                sessionLineageTraits={sessionLineageTraits}
+                onSnoozeSessionLineageQueueEntry={snoozeSessionLineageQueueEntry}
+                onAdvanceSessionLineageQueueFromEntry={advanceSessionLineageQueueFromEntry}
+                onDismissSessionLineageQueueEntry={dismissSessionLineageQueueEntry}
+                onFindSessionLineageEntryInSession={findSessionLineageEntryInSession}
+                onRevealSessionLineageEntryInTimeline={revealSessionLineageEntryInTimeline}
+                decisionQueuePosition={decisionQueuePosition}
+                hiddenDecisionQueueCount={hiddenDecisionQueueCount}
+                decisionSessionLineageQueue={decisionSessionLineageQueue}
+                visibleSessionLineageEntries={visibleSessionLineageEntries}
+                onSelectRunOutcome={(runId, resultIndex) => {
+                  setSelectedRunId(runId);
+                  setSelectedRunResultIndex(resultIndex);
+                }}
+              />
 
               <Card className="border border-[#e5e5e3] bg-white shadow-[0_1px_3px_rgba(15,15,15,0.08),0_0_1px_rgba(15,15,15,0.04)]">
                 <CardHeader>
