@@ -51,6 +51,12 @@ from autopilot.core.agent_action_runs import (
     list_agent_action_batch_runs,
 )
 from autopilot.core.control_plane_issues import create_issue, link_issue_approval, list_issues, resolve_issue
+from autopilot.core.orchestrator_control_passes import (
+    OrchestratorControlPassRecord,
+    create_orchestrator_control_pass,
+    get_orchestrator_control_pass,
+    list_orchestrator_control_passes,
+)
 from autopilot.core.orchestrator_sessions import (
     create_orchestrator_session,
     get_orchestrator_session,
@@ -2509,12 +2515,43 @@ def apply_execution_plane_orchestrator_session_control_plan(
     else:
         status = "noop"
 
+    control_pass = create_orchestrator_control_pass(
+        config,
+        orchestrator_session_id=session_id,
+        actor=actor,
+        reason=reason,
+        profile=str(resolved_profile["name"]),
+        customized=bool(resolved_profile["customized"]),
+        recommendation_kinds=list(resolved_profile["recommendation_kinds"]),
+        control_before=initial_control,
+        control_after=final_control,
+        applied=applied,
+        errors=errors,
+        summary={
+            "applied": len(applied),
+            "errors": len(errors),
+            "skipped": len(skipped_kinds),
+            "stopped_reason": stopped_reason,
+            "final_state": final_control.get("state"),
+        },
+        status=status,
+        project_ids=session.project_ids,
+        initiative_id=session.initiative_id,
+        orchestrator=session.orchestrator,
+    )
+    link_orchestrator_session_entities(
+        config,
+        session_id,
+        linked_control_pass_ids=[control_pass.id],
+    )
+
     event_extra = {
         "orchestrator_session_id": session_id,
         "profile": resolved_profile["name"],
         "customized": bool(resolved_profile["customized"]),
         "actor": actor,
         "reason": reason.strip(),
+        "control_pass_id": control_pass.id,
         "applied_recommendation_kinds": [item["recommendation_kind"] for item in applied],
         "error_count": len(errors),
         "stopped_reason": stopped_reason,
@@ -2531,11 +2568,20 @@ def apply_execution_plane_orchestrator_session_control_plan(
             ),
             extra=event_extra,
         )
+        emit_project_event(
+            config,
+            project_id,
+            event="execution_plane_orchestrator_session_control_pass_recorded",
+            status=status,
+            message=f"Orchestrator session control pass `{control_pass.id}` recorded.",
+            extra=event_extra,
+        )
 
     return {
         "status": status,
         "session_id": session_id,
         "profile": resolved_profile,
+        "control_pass": control_pass.model_dump(),
         "control_before": initial_control,
         "control": final_control,
         "applied": applied,
@@ -2593,6 +2639,46 @@ def summarize_execution_plane_orchestrator_sessions(
     }
 
 
+def list_execution_plane_orchestrator_session_control_passes(
+    config: AutopilotConfig,
+    *,
+    orchestrator_session_id: str | None = None,
+    project_id: str | None = None,
+    initiative_id: str | None = None,
+    orchestrator: str | None = None,
+    actor: str | None = None,
+    profile: str | None = None,
+    status: str | None = None,
+) -> list[dict[str, Any]]:
+    """List persisted session-level control-pass records."""
+
+    return [
+        record.model_dump()
+        for record in list_orchestrator_control_passes(
+            config,
+            orchestrator_session_id=orchestrator_session_id,
+            project_id=project_id,
+            initiative_id=initiative_id,
+            orchestrator=orchestrator,
+            actor=actor,
+            profile=profile,
+            status=status,
+        )
+    ]
+
+
+def get_execution_plane_orchestrator_session_control_pass(
+    config: AutopilotConfig,
+    control_pass_id: str,
+) -> dict[str, Any]:
+    """Load one persisted session-level control-pass record."""
+
+    record = get_orchestrator_control_pass(config, control_pass_id)
+    if record is None:
+        raise KeyError(control_pass_id)
+    return record.model_dump()
+
+
 def get_execution_plane_orchestrator_session(
     config: AutopilotConfig,
     session_id: str,
@@ -2606,6 +2692,10 @@ def get_execution_plane_orchestrator_session(
         raise KeyError(session_id)
 
     runs = list_execution_plane_agent_action_runs(config, orchestrator_session_id=session_id)
+    control_passes = list_execution_plane_orchestrator_session_control_passes(
+        config,
+        orchestrator_session_id=session_id,
+    )
     all_events = list_execution_plane_orchestrator_session_events(config, session_id, limit=None)
     events = all_events[-event_limit:] if event_limit > 0 else []
     approvals = [
@@ -2629,12 +2719,14 @@ def get_execution_plane_orchestrator_session(
     return {
         **session.model_dump(),
         "runs": runs,
+        "control_passes": control_passes,
         "approvals": approvals,
         "issues": issues,
         "events": events,
         "control": control,
         "summary": {
             "run_count": len(runs),
+            "control_pass_count": len(control_passes),
             "approval_count": len(approvals),
             "pending_approval_count": sum(1 for approval in approvals if approval.get("status") == "pending"),
             "issue_count": len(issues),

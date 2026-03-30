@@ -529,6 +529,7 @@ def test_execution_plane_orchestrator_session_control_plan_safe_progress_execute
     plan = plan_response.json()
     assert plan["status"] == "ok"
     assert plan["profile"]["name"] == "safe_progress"
+    assert plan["control_pass"]["orchestrator_session_id"] == session["id"]
     assert plan["summary"]["applied"] >= 2
     assert plan["summary"]["final_state"] == "closed"
     assert any(step["recommendation_kind"] == "execute_safe_actions" for step in plan["applied"])
@@ -539,6 +540,24 @@ def test_execution_plane_orchestrator_session_control_plan_safe_progress_execute
     detail = session_detail.json()
     assert detail["status"] == "completed"
     assert detail["control"]["state"] == "closed"
+    assert detail["summary"]["control_pass_count"] == 1
+    assert len(detail["control_passes"]) == 1
+    assert detail["control_passes"][0]["id"] == plan["control_pass"]["id"]
+    assert plan["control_pass"]["id"] in detail["linked_control_pass_ids"]
+
+    session_passes = client.get(
+        f"/api/execution-plane/orchestrator-sessions/{session['id']}/control/passes",
+    )
+    assert session_passes.status_code == 200
+    assert len(session_passes.json()["control_passes"]) == 1
+    assert session_passes.json()["control_passes"][0]["id"] == plan["control_pass"]["id"]
+
+    pass_detail = client.get(
+        f"/api/execution-plane/orchestrator-sessions/control/passes/{plan['control_pass']['id']}",
+    )
+    assert pass_detail.status_code == 200
+    assert pass_detail.json()["id"] == plan["control_pass"]["id"]
+    assert pass_detail.json()["summary"]["final_state"] == "closed"
 
     session_events = client.get(
         f"/api/execution-plane/orchestrator-sessions/{session['id']}/events",
@@ -547,6 +566,7 @@ def test_execution_plane_orchestrator_session_control_plan_safe_progress_execute
     assert session_events.status_code == 200
     event_names = {event["event"] for event in session_events.json()["events"]}
     assert "execution_plane_orchestrator_session_control_plan_applied" in event_names
+    assert "execution_plane_orchestrator_session_control_pass_recorded" in event_names
     assert "execution_plane_orchestrator_session_recommendation_applied" in event_names
 
 
@@ -1649,6 +1669,7 @@ def test_execution_plane_agent_action_execute_escalates_to_approval_when_needed(
     plan = plan_response.json()
     assert plan["status"] == "ok"
     assert plan["profile"]["name"] == "review_only"
+    assert plan["control_pass"]["orchestrator_session_id"] == session["id"]
     assert plan["summary"]["applied"] >= 2
     assert plan["summary"]["final_state"] == "needs_approval"
     assert any(step["recommendation_kind"] == "review_pending_approvals" for step in plan["applied"])
@@ -1659,6 +1680,15 @@ def test_execution_plane_agent_action_execute_escalates_to_approval_when_needed(
     detail_after_plan = linked_after_plan.json()
     assert detail_after_plan["status"] == "open"
     assert detail_after_plan["control"]["state"] == "needs_approval"
+    assert detail_after_plan["summary"]["control_pass_count"] == 1
+
+    global_passes = client.get(
+        "/api/execution-plane/orchestrator-sessions/control/passes",
+        params={"orchestrator_session_id": session["id"], "profile": "review_only"},
+    )
+    assert global_passes.status_code == 200
+    assert len(global_passes.json()["control_passes"]) == 1
+    assert global_passes.json()["control_passes"][0]["id"] == plan["control_pass"]["id"]
 
 
 def test_execution_plane_orchestrator_session_control_apply_completes_healthy_session(

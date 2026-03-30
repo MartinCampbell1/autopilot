@@ -28,8 +28,10 @@ from autopilot.core.execution_plane import (
     get_execution_plane_agent_action,
     get_execution_plane_agent_action_run,
     get_execution_plane_orchestrator_session,
+    get_execution_plane_orchestrator_session_control_pass,
     list_execution_plane_orchestrator_session_events,
     list_execution_plane_orchestrator_session_actions,
+    list_execution_plane_orchestrator_session_control_passes,
     list_execution_plane_orchestrator_session_control_profiles,
     load_project_command_policy,
     ingest_execution_brief_project,
@@ -397,6 +399,62 @@ async def get_execution_orchestrator_session_events(
         return {
             "session_id": session_id,
             "events": list_execution_plane_orchestrator_session_events(config, session_id, limit=limit),
+        }
+    except KeyError as exc:
+        raise HTTPException(404, f"Orchestrator session {session_id} not found") from exc
+
+
+@router.get("/orchestrator-sessions/control/passes")
+async def list_execution_orchestrator_session_control_passes(
+    orchestrator_session_id: str | None = Query(default=None),
+    project_id: str | None = Query(default=None),
+    initiative_id: str | None = Query(default=None),
+    orchestrator: str | None = Query(default=None),
+    actor: str | None = Query(default=None),
+    profile: str | None = Query(default=None),
+    status: str | None = Query(default=None),
+) -> dict[str, object]:
+    config = get_config()
+    return {
+        "control_passes": list_execution_plane_orchestrator_session_control_passes(
+            config,
+            orchestrator_session_id=orchestrator_session_id,
+            project_id=project_id,
+            initiative_id=initiative_id,
+            orchestrator=orchestrator,
+            actor=actor,
+            profile=profile,
+            status=status,
+        )
+    }
+
+
+@router.get("/orchestrator-sessions/control/passes/{control_pass_id}")
+async def get_execution_orchestrator_session_control_pass(control_pass_id: str) -> dict[str, object]:
+    config = get_config()
+    try:
+        return get_execution_plane_orchestrator_session_control_pass(config, control_pass_id)
+    except KeyError as exc:
+        raise HTTPException(404, f"Orchestrator session control pass {control_pass_id} not found") from exc
+
+
+@router.get("/orchestrator-sessions/{session_id}/control/passes")
+async def list_execution_orchestrator_session_control_passes_for_session(
+    session_id: str,
+    profile: str | None = Query(default=None),
+    status: str | None = Query(default=None),
+) -> dict[str, object]:
+    config = get_config()
+    try:
+        get_execution_plane_orchestrator_session(config, session_id, event_limit=1)
+        return {
+            "session_id": session_id,
+            "control_passes": list_execution_plane_orchestrator_session_control_passes(
+                config,
+                orchestrator_session_id=session_id,
+                profile=profile,
+                status=status,
+            ),
         }
     except KeyError as exc:
         raise HTTPException(404, f"Orchestrator session {session_id} not found") from exc

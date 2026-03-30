@@ -44,6 +44,7 @@ class OrchestratorSessionRecord(BaseModel):
     reason: str = ""
     context: dict[str, Any] = Field(default_factory=dict)
     linked_run_ids: list[str] = Field(default_factory=list)
+    linked_control_pass_ids: list[str] = Field(default_factory=list)
     linked_approval_ids: list[str] = Field(default_factory=list)
     linked_issue_ids: list[str] = Field(default_factory=list)
     linked_runtime_agent_ids: list[str] = Field(default_factory=list)
@@ -215,6 +216,7 @@ def link_orchestrator_session_entities(
     *,
     project_ids: list[str] | None = None,
     linked_run_ids: list[str] | None = None,
+    linked_control_pass_ids: list[str] | None = None,
     linked_approval_ids: list[str] | None = None,
     linked_issue_ids: list[str] | None = None,
     linked_runtime_agent_ids: list[str] | None = None,
@@ -227,6 +229,9 @@ def link_orchestrator_session_entities(
 
     session.project_ids = sorted({*session.project_ids, *(str(item) for item in (project_ids or []) if str(item).strip())})
     session.linked_run_ids = sorted({*session.linked_run_ids, *(str(item) for item in (linked_run_ids or []) if str(item).strip())})
+    session.linked_control_pass_ids = sorted(
+        {*session.linked_control_pass_ids, *(str(item) for item in (linked_control_pass_ids or []) if str(item).strip())}
+    )
     session.linked_approval_ids = sorted(
         {*session.linked_approval_ids, *(str(item) for item in (linked_approval_ids or []) if str(item).strip())}
     )
