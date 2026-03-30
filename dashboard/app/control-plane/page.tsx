@@ -1565,6 +1565,50 @@ function CollapsibleQueuePanel({
   );
 }
 
+function QueueItemCard({
+  title,
+  subtitle,
+  timestamp,
+  selected,
+  badges,
+  actions,
+  className = "rounded-xl border p-3",
+  selectedClassName = "border-[#d3e5ef] bg-[#f7fbfd]",
+  unselectedClassName = "border-[#ecebe8] bg-[#fbfbf9]",
+  subtitleClassName = "mt-2 text-[12px] text-[#787774]",
+  badgeRowClassName = "mt-3 flex flex-wrap gap-2",
+  actionRowClassName = "mt-3 flex flex-wrap gap-2",
+}: {
+  title: string;
+  subtitle: string;
+  timestamp: string;
+  selected: boolean;
+  badges?: ReactNode;
+  actions?: ReactNode;
+  className?: string;
+  selectedClassName?: string;
+  unselectedClassName?: string;
+  subtitleClassName?: string;
+  badgeRowClassName?: string;
+  actionRowClassName?: string;
+}) {
+  return (
+    <div
+      className={`${className} ${selected ? selectedClassName : unselectedClassName}`}
+    >
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <p className="text-[13px] font-semibold text-[#37352f]">{title}</p>
+          <p className={subtitleClassName}>{subtitle}</p>
+        </div>
+        <p className="text-[11px] text-[#9b9a97]">{timestamp}</p>
+      </div>
+      {badges ? <div className={badgeRowClassName}>{badges}</div> : null}
+      {actions ? <div className={actionRowClassName}>{actions}</div> : null}
+    </div>
+  );
+}
+
 export default function ControlPlanePage() {
   const [health, setHealth] = useState<AccountHealth | null>(null);
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
@@ -5174,28 +5218,14 @@ export default function ControlPlanePage() {
                                     (trait) => trait.key !== "attention"
                                   );
                                   return (
-                                    <div
+                                    <QueueItemCard
                                       key={`attention-queue-${entry.key}`}
-                                      className={`rounded-xl border p-3 ${
-                                        selected
-                                          ? "border-[#d3e5ef] bg-[#f7fbfd]"
-                                          : "border-[#ecebe8] bg-[#fbfbf9]"
-                                      }`}
-                                    >
-                                      <div className="flex flex-wrap items-start justify-between gap-3">
-                                        <div>
-                                          <p className="text-[13px] font-semibold text-[#37352f]">
-                                            {entry.title}
-                                          </p>
-                                          <p className="mt-2 text-[12px] text-[#787774]">
-                                            run {entry.runId} · outcome {entry.resultIndex + 1}
-                                          </p>
-                                        </div>
-                                        <p className="text-[11px] text-[#9b9a97]">
-                                          {formatTimestamp(entry.timestamp)}
-                                        </p>
-                                      </div>
-                                      <div className="mt-3 flex flex-wrap gap-2">
+                                      title={entry.title}
+                                      subtitle={`run ${entry.runId} · outcome ${entry.resultIndex + 1}`}
+                                      timestamp={formatTimestamp(entry.timestamp)}
+                                      selected={selected}
+                                      badges={
+                                        <>
                                         <Badge
                                           variant="outline"
                                           className={`rounded-full px-2.5 py-1 text-[11px] font-medium ${triagePriorityClass(sessionLineagePriority(entry))}`}
@@ -5217,8 +5247,10 @@ export default function ControlPlanePage() {
                                             {trait.label}
                                           </Badge>
                                         ))}
-                                      </div>
-                                      <div className="mt-3 flex flex-wrap gap-2">
+                                        </>
+                                      }
+                                      actions={
+                                        <>
                                         <Button
                                           size="sm"
                                           variant={
@@ -5259,8 +5291,9 @@ export default function ControlPlanePage() {
                                         >
                                           Dismiss
                                         </Button>
-                                      </div>
-                                    </div>
+                                        </>
+                                      }
+                                    />
                                   );
                                 })}
                               </div>
@@ -5324,28 +5357,14 @@ export default function ControlPlanePage() {
                                     (trait) => trait.key !== "decision"
                                   );
                                   return (
-                                    <div
+                                    <QueueItemCard
                                       key={`decision-queue-${entry.key}`}
-                                      className={`rounded-xl border p-3 ${
-                                        selected
-                                          ? "border-[#d3e5ef] bg-[#f7fbfd]"
-                                          : "border-[#ecebe8] bg-[#fbfbf9]"
-                                      }`}
-                                    >
-                                      <div className="flex flex-wrap items-start justify-between gap-3">
-                                        <div>
-                                          <p className="text-[13px] font-semibold text-[#37352f]">
-                                            {entry.title}
-                                          </p>
-                                          <p className="mt-2 text-[12px] text-[#787774]">
-                                            run {entry.runId} · outcome {entry.resultIndex + 1}
-                                          </p>
-                                        </div>
-                                        <p className="text-[11px] text-[#9b9a97]">
-                                          {formatTimestamp(entry.timestamp)}
-                                        </p>
-                                      </div>
-                                      <div className="mt-3 flex flex-wrap gap-2">
+                                      title={entry.title}
+                                      subtitle={`run ${entry.runId} · outcome ${entry.resultIndex + 1}`}
+                                      timestamp={formatTimestamp(entry.timestamp)}
+                                      selected={selected}
+                                      badges={
+                                        <>
                                         <Badge
                                           variant="outline"
                                           className={`rounded-full px-2.5 py-1 text-[11px] font-medium ${triagePriorityClass(sessionLineagePriority(entry))}`}
@@ -5367,8 +5386,10 @@ export default function ControlPlanePage() {
                                             {trait.label}
                                           </Badge>
                                         ))}
-                                      </div>
-                                      <div className="mt-3 flex flex-wrap gap-2">
+                                        </>
+                                      }
+                                      actions={
+                                        <>
                                         <Button
                                           size="sm"
                                           variant={
@@ -5409,8 +5430,9 @@ export default function ControlPlanePage() {
                                         >
                                           Dismiss
                                         </Button>
-                                      </div>
-                                    </div>
+                                        </>
+                                      }
+                                    />
                                   );
                                 })}
                               </div>
@@ -6732,28 +6754,19 @@ export default function ControlPlanePage() {
                                           agentTimelineEntryKey(selectedAgentTimelineEntry) ===
                                             agentTimelineEntryKey(entry);
                                         return (
-                                          <div
+                                          <QueueItemCard
                                             key={`agent-priority-${queue.key}-${agentTimelineEntryKey(entry)}`}
-                                            className={`rounded-lg border p-2.5 ${
-                                              selected
-                                                ? "border-[#d3e5ef] bg-[#f7fbfd]"
-                                                : "border-[#ecebe8] bg-white"
-                                            }`}
-                                          >
-                                            <div className="flex flex-wrap items-start justify-between gap-2">
-                                              <div>
-                                                <p className="text-[12px] font-semibold text-[#37352f]">
-                                                  {entry.title}
-                                                </p>
-                                                <p className="mt-1 text-[11px] text-[#787774]">
-                                                  {entry.kind} · {entry.subtitle || "No scope metadata"}
-                                                </p>
-                                              </div>
-                                              <p className="text-[11px] text-[#9b9a97]">
-                                                {formatTimestamp(entry.timestamp)}
-                                              </p>
-                                            </div>
-                                            <div className="mt-2 flex flex-wrap items-center gap-2">
+                                            title={entry.title}
+                                            subtitle={`${entry.kind} · ${entry.subtitle || "No scope metadata"}`}
+                                            timestamp={formatTimestamp(entry.timestamp)}
+                                            selected={Boolean(selected)}
+                                            className="rounded-lg border p-2.5"
+                                            unselectedClassName="border-[#ecebe8] bg-white"
+                                            subtitleClassName="mt-1 text-[11px] text-[#787774]"
+                                            badgeRowClassName="mt-2 flex flex-wrap items-center gap-2"
+                                            actionRowClassName="mt-2 flex flex-wrap items-center gap-2"
+                                            badges={
+                                              <>
                                               <Badge
                                                 variant="outline"
                                                 className={`rounded-full px-2.5 py-1 text-[11px] font-semibold capitalize ${
@@ -6763,45 +6776,50 @@ export default function ControlPlanePage() {
                                                       ? passStatusClass(entry.status === "open" ? "partial" : "ok")
                                                       : passStatusClass(entry.status)
                                                 }`}
-                                              >
-                                                {entry.status}
+                                                >
+                                                  {entry.status}
                                               </Badge>
-                                              <Button
-                                                size="sm"
-                                                variant={selected ? "default" : "outline"}
-                                                className={`h-7 rounded-lg px-2 text-[11px] ${
-                                                  selected
-                                                    ? "bg-[#1a1a1a] text-white hover:bg-[#333]"
-                                                    : "border-[#e5e5e3] bg-white text-[#37352f] hover:bg-[#f7f7f5]"
-                                                }`}
-                                                onClick={() => {
-                                                  inspectAgentTimelineEntry(entry);
-                                                }}
-                                              >
-                                                {selected ? "Selected" : "Inspect"}
-                                              </Button>
-                                              <Button
-                                                size="sm"
-                                                variant="outline"
-                                                className="h-7 rounded-lg border-[#e5e5e3] bg-white px-2 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
-                                                onClick={() => {
-                                                  snoozeAgentTimelineEntry(entry);
-                                                }}
-                                              >
-                                                Snooze 15m
-                                              </Button>
-                                              <Button
-                                                size="sm"
-                                                variant="outline"
-                                                className="h-7 rounded-lg border-[#e5e5e3] bg-white px-2 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
-                                                onClick={() => {
-                                                  dismissAgentTimelineEntry(entry);
-                                                }}
-                                              >
-                                                Dismiss
-                                              </Button>
-                                            </div>
-                                          </div>
+                                              </>
+                                            }
+                                            actions={
+                                              <>
+                                                <Button
+                                                  size="sm"
+                                                  variant={selected ? "default" : "outline"}
+                                                  className={`h-7 rounded-lg px-2 text-[11px] ${
+                                                    selected
+                                                      ? "bg-[#1a1a1a] text-white hover:bg-[#333]"
+                                                      : "border-[#e5e5e3] bg-white text-[#37352f] hover:bg-[#f7f7f5]"
+                                                  }`}
+                                                  onClick={() => {
+                                                    inspectAgentTimelineEntry(entry);
+                                                  }}
+                                                >
+                                                  {selected ? "Selected" : "Inspect"}
+                                                </Button>
+                                                <Button
+                                                  size="sm"
+                                                  variant="outline"
+                                                  className="h-7 rounded-lg border-[#e5e5e3] bg-white px-2 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
+                                                  onClick={() => {
+                                                    snoozeAgentTimelineEntry(entry);
+                                                  }}
+                                                >
+                                                  Snooze 15m
+                                                </Button>
+                                                <Button
+                                                  size="sm"
+                                                  variant="outline"
+                                                  className="h-7 rounded-lg border-[#e5e5e3] bg-white px-2 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
+                                                  onClick={() => {
+                                                    dismissAgentTimelineEntry(entry);
+                                                  }}
+                                                >
+                                                  Dismiss
+                                                </Button>
+                                              </>
+                                            }
+                                          />
                                         );
                                       })}
                                     </div>
