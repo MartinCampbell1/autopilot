@@ -401,8 +401,40 @@ export interface ExecutionIssueRecord {
   resolution_note: string;
 }
 
+export interface ExecutionAgentActionRunSummary {
+  selected_count?: number;
+  processed_count?: number;
+  status_counts?: ExecutionPlaneCountMap;
+  [key: string]: unknown;
+}
+
+export interface ExecutionAgentActionRunRecord {
+  id: string;
+  run_kind: string;
+  orchestrator_session_id: string;
+  idempotency_key: string;
+  request_fingerprint: string;
+  actor: string;
+  mode: string;
+  reason: string;
+  dry_run: boolean;
+  policy_profile: string;
+  policy: Record<string, unknown>;
+  selection: Record<string, unknown>;
+  summary: ExecutionAgentActionRunSummary;
+  results: Array<Record<string, unknown>>;
+  status: string;
+  project_ids: string[];
+  initiative_ids: string[];
+  orchestrators: string[];
+  runtime_agent_ids: string[];
+  created_at: string;
+  updated_at: string;
+  completed_at?: string | null;
+}
+
 export interface OrchestratorSessionDetail extends OrchestratorSessionRecord {
-  runs: Array<Record<string, unknown>>;
+  runs: ExecutionAgentActionRunRecord[];
   control_passes: OrchestratorControlPassRecord[];
   approvals: ExecutionApprovalRecord[];
   issues: ExecutionIssueRecord[];

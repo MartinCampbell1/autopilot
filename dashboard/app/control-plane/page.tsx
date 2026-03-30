@@ -32,6 +32,7 @@ import { useSSE } from "@/lib/sse";
 import type {
   AccountHealth,
   ExecutionApprovalRecord,
+  ExecutionAgentActionRunRecord,
   ExecutionPlaneCountMap,
   ExecutionIssueRecord,
   OrchestratorControlPassRecord,
@@ -76,6 +77,69 @@ function toNumber(value: unknown, fallback = 0): number {
 
 function toStringValue(value: unknown, fallback = ""): string {
   return typeof value === "string" && value.trim() ? value : fallback;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function toStringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.map((item) => toStringValue(item)).filter(Boolean)
+    : [];
+}
+
+function extractRunId(value: unknown): string {
+  const record = asRecord(value);
+  if (!record) return "";
+  return toStringValue(asRecord(record.run)?.id);
+}
+
+function extractLatestRunIdFromAppliedSteps(value: Array<Record<string, unknown>>): string {
+  for (const step of [...value].reverse()) {
+    const runId = extractRunId(step.result);
+    if (runId) return runId;
+  }
+  return "";
+}
+
+function formatScopeList(values: string[], fallback: string): string {
+  return values.length ? values.join(", ") : fallback;
+}
+
+function describeRunResult(result: Record<string, unknown>): {
+  title: string;
+  subtitle: string;
+  message: string;
+} {
+  const action = asRecord(result.action);
+  const commandResult = asRecord(result.command_result);
+  const approval = asRecord(result.approval);
+  const issue = asRecord(result.issue);
+  const actionKey = toStringValue(action?.action_key);
+  const command = toStringValue(action?.command);
+  const kind = toStringValue(action?.kind);
+  const actionType = toStringValue(action?.action_type, "operation");
+  const title =
+    actionKey || command || kind || toStringValue(result.status, "run-result");
+  const subtitleParts = [
+    actionType,
+    toStringValue(result.planned_mode),
+    toStringValue(result.status),
+  ].filter(Boolean);
+  const message =
+    toStringValue(result.message) ||
+    toStringValue(commandResult?.message) ||
+    (approval ? `Approval ${toStringValue(approval.id, "created")}` : "") ||
+    (issue ? `Issue ${toStringValue(issue.id, "linked")}` : "") ||
+    "No additional result message.";
+  return {
+    title,
+    subtitle: subtitleParts.join(" · "),
+    message,
+  };
 }
 
 function passStatusClass(status: string): string {
@@ -269,6 +333,7 @@ export default function ControlPlanePage() {
   const [sessionSummary, setSessionSummary] = useState<OrchestratorSessionSummary | null>(null);
   const [controlProfiles, setControlProfiles] = useState<OrchestratorSessionControlProfile[]>([]);
   const [selectedSessionId, setSelectedSessionId] = useState("");
+  const [selectedRunId, setSelectedRunId] = useState("");
   const [selectedPassId, setSelectedPassId] = useState("");
   const [selectedSession, setSelectedSession] = useState<OrchestratorSessionDetail | null>(null);
   const [refreshing, setRefreshing] = useState(false);
@@ -312,6 +377,12 @@ export default function ControlPlanePage() {
   const loadSessionDetail = useCallback(async (sessionId: string) => {
     const detail = await fetchExecutionPlaneOrchestratorSession(sessionId, { eventLimit: 12 });
     setSelectedSession(detail);
+    setSelectedRunId((current) => {
+      if (current && detail.runs.some((run) => run.id === current)) {
+        return current;
+      }
+      return detail.runs[0]?.id ?? "";
+    });
     setSelectedPassId((current) => {
       if (current && detail.control_passes.some((controlPass) => controlPass.id === current)) {
         return current;
@@ -343,6 +414,7 @@ export default function ControlPlanePage() {
   useEffect(() => {
     if (sessions.length === 0) {
       setSelectedSessionId("");
+      setSelectedRunId("");
       setSelectedSession(null);
       return;
     }
@@ -365,6 +437,7 @@ export default function ControlPlanePage() {
 
   useEffect(() => {
     if (!selectedSessionId) {
+      setSelectedRunId("");
       setSelectedSession(null);
       return;
     }
@@ -375,6 +448,12 @@ export default function ControlPlanePage() {
       .then((detail) => {
         if (cancelled) return;
         setSelectedSession(detail);
+        setSelectedRunId((current) => {
+          if (current && detail.runs.some((run) => run.id === current)) {
+            return current;
+          }
+          return detail.runs[0]?.id ?? "";
+        });
         setSelectedPassId((current) => {
           if (current && detail.control_passes.some((controlPass) => controlPass.id === current)) {
             return current;
@@ -453,6 +532,8 @@ export default function ControlPlanePage() {
         actor: DEFAULT_CONTROL_ACTOR,
         reason: `Dashboard applied session recommendation ${recommendation.kind}`,
       });
+      const runId = extractRunId(payload.result);
+      if (runId) setSelectedRunId(runId);
       setNotice(
         `${payload.recommendation.title || recommendation.kind} finished with status ${payload.status}.`
       );
@@ -522,6 +603,8 @@ export default function ControlPlanePage() {
         actor: DEFAULT_CONTROL_ACTOR,
         reason: `Dashboard executed ${profile.name} control pass`,
       });
+      const runId = extractLatestRunIdFromAppliedSteps(payload.applied);
+      if (runId) setSelectedRunId(runId);
       setNotice(
         `Control profile ${payload.profile.name} recorded pass ${payload.control_pass.id} with status ${payload.status}.`
       );
@@ -564,6 +647,13 @@ export default function ControlPlanePage() {
       ),
     [selectedSession]
   );
+  const linkedRuns = useMemo<ExecutionAgentActionRunRecord[]>(
+    () =>
+      [...(selectedSession?.runs || [])].sort((left, right) =>
+        right.created_at.localeCompare(left.created_at)
+      ),
+    [selectedSession]
+  );
   const linkedIssues = useMemo(
     () =>
       [...(selectedSession?.issues || [])].sort((left, right) =>
@@ -571,6 +661,10 @@ export default function ControlPlanePage() {
       ),
     [selectedSession]
   );
+  const selectedRun = useMemo(() => {
+    if (!selectedRunId) return null;
+    return linkedRuns.find((run) => run.id === selectedRunId) ?? null;
+  }, [linkedRuns, selectedRunId]);
   const selectedControl = selectedSession?.control ?? null;
   const loading = !controlSummary || !sessionSummary;
 
@@ -794,6 +888,222 @@ export default function ControlPlanePage() {
             </Card>
 
             <div className="space-y-6">
+              <Card className="border border-[#e5e5e3] bg-white shadow-[0_1px_3px_rgba(15,15,15,0.08),0_0_1px_rgba(15,15,15,0.04)]">
+                <CardHeader>
+                  <CardTitle className="text-[18px] font-semibold tracking-[-0.02em] text-[#37352f]">
+                    Selected Action Run
+                  </CardTitle>
+                  <CardDescription className="text-[13px] text-[#787774]">
+                    Inspect the latest session execution or preview run, including action outcomes.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  {!selectedRun ? (
+                    <div className="rounded-xl border border-dashed border-[#e5e5e3] bg-[#fafaf9] px-5 py-8 text-[13px] text-[#9b9a97]">
+                      Select a linked action run to inspect selection scope and result details.
+                    </div>
+                  ) : (
+                    <div className="space-y-4">
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <p className="font-mono text-[12px] font-semibold text-[#37352f]">
+                              {selectedRun.id}
+                            </p>
+                            <Badge
+                              variant="outline"
+                              className={`rounded-full px-2.5 py-1 text-[11px] font-semibold capitalize ${passStatusClass(selectedRun.status)}`}
+                            >
+                              {selectedRun.status}
+                            </Badge>
+                            <Badge
+                              variant="outline"
+                              className="rounded-full border-[#e5e5e3] bg-[#fafaf9] px-2.5 py-1 text-[11px] font-medium text-[#37352f]"
+                            >
+                              {selectedRun.run_kind}
+                            </Badge>
+                            <Badge
+                              variant="outline"
+                              className="rounded-full border-[#e5e5e3] bg-[#fafaf9] px-2.5 py-1 text-[11px] font-medium text-[#37352f]"
+                            >
+                              {selectedRun.dry_run ? "preview" : "execute"}
+                            </Badge>
+                          </div>
+                          <p className="mt-2 text-[13px] text-[#6b6b6b]">
+                            {selectedRun.actor || "unknown actor"}
+                            {" · "}
+                            {selectedRun.mode || "auto"}
+                            {selectedRun.reason ? ` · ${selectedRun.reason}` : ""}
+                          </p>
+                        </div>
+                        <p className="text-right text-[12px] text-[#9b9a97]">
+                          {formatTimestamp(selectedRun.created_at)}
+                          {selectedRun.completed_at
+                            ? ` · completed ${formatTimestamp(selectedRun.completed_at)}`
+                            : ""}
+                        </p>
+                      </div>
+
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        <SessionMetric
+                          label="Selected"
+                          value={String(toNumber(selectedRun.summary.selected_count))}
+                          detail={`${toNumber(selectedRun.summary.processed_count, selectedRun.results.length)} processed`}
+                        />
+                        <SessionMetric
+                          label="Scope"
+                          value={`${selectedRun.project_ids.length} project${selectedRun.project_ids.length === 1 ? "" : "s"}`}
+                          detail={selectedRun.policy_profile || "Custom policy"}
+                        />
+                        <SessionMetric
+                          label="Initiatives"
+                          value={String(selectedRun.initiative_ids.length)}
+                          detail={formatScopeList(selectedRun.initiative_ids, "No initiative mapping")}
+                        />
+                        <SessionMetric
+                          label="Runtime Agents"
+                          value={String(selectedRun.runtime_agent_ids.length)}
+                          detail={formatScopeList(selectedRun.runtime_agent_ids, "No agent linkage")}
+                        />
+                      </div>
+
+                      <BreakdownChips
+                        label="Result Statuses"
+                        values={(selectedRun.summary.status_counts as ExecutionPlaneCountMap | undefined) || {}}
+                        emptyText="No result statuses recorded."
+                      />
+
+                      <div className="rounded-2xl border border-[#ecebe8] bg-[#fbfbf9] p-4">
+                        <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#9b9a97]">
+                          Selection Scope
+                        </p>
+                        <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                          <SessionMetric
+                            label="Requested Keys"
+                            value={String(toStringArray(selectedRun.selection.requested_action_keys).length)}
+                            detail={formatScopeList(
+                              toStringArray(selectedRun.selection.requested_action_keys).slice(0, 2),
+                              "No explicit action keys"
+                            )}
+                          />
+                          <SessionMetric
+                            label="Selected Keys"
+                            value={String(toStringArray(selectedRun.selection.selected_action_keys).length)}
+                            detail={formatScopeList(
+                              toStringArray(selectedRun.selection.selected_action_keys).slice(0, 2),
+                              "No selected action keys"
+                            )}
+                          />
+                        </div>
+                        {(toStringValue(selectedRun.selection.project_id) ||
+                          toStringValue(selectedRun.selection.initiative_id) ||
+                          toStringValue(selectedRun.selection.orchestrator) ||
+                          toStringValue(selectedRun.selection.runtime_agent_id)) && (
+                          <div className="mt-3 flex flex-wrap gap-2">
+                            {toStringValue(selectedRun.selection.project_id) && (
+                              <Badge
+                                variant="outline"
+                                className="rounded-full border-[#e5e5e3] bg-white px-2.5 py-1 text-[11px] font-medium text-[#37352f]"
+                              >
+                                project {toStringValue(selectedRun.selection.project_id)}
+                              </Badge>
+                            )}
+                            {toStringValue(selectedRun.selection.initiative_id) && (
+                              <Badge
+                                variant="outline"
+                                className="rounded-full border-[#e5e5e3] bg-white px-2.5 py-1 text-[11px] font-medium text-[#37352f]"
+                              >
+                                initiative {toStringValue(selectedRun.selection.initiative_id)}
+                              </Badge>
+                            )}
+                            {toStringValue(selectedRun.selection.orchestrator) && (
+                              <Badge
+                                variant="outline"
+                                className="rounded-full border-[#e5e5e3] bg-white px-2.5 py-1 text-[11px] font-medium text-[#37352f]"
+                              >
+                                orchestrator {toStringValue(selectedRun.selection.orchestrator)}
+                              </Badge>
+                            )}
+                            {toStringValue(selectedRun.selection.runtime_agent_id) && (
+                              <Badge
+                                variant="outline"
+                                className="rounded-full border-[#e5e5e3] bg-white px-2.5 py-1 text-[11px] font-medium text-[#37352f]"
+                              >
+                                agent {toStringValue(selectedRun.selection.runtime_agent_id)}
+                              </Badge>
+                            )}
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="rounded-2xl border border-[#ecebe8] bg-[#fbfbf9] p-4">
+                        <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#9b9a97]">
+                          Action Outcomes
+                        </p>
+                        {selectedRun.results.length === 0 ? (
+                          <p className="mt-3 text-[13px] text-[#9b9a97]">No action results recorded.</p>
+                        ) : (
+                          <div className="mt-3 space-y-3">
+                            {selectedRun.results.slice(0, 8).map((result, index) => {
+                              const details = describeRunResult(result);
+                              const approval = asRecord(result.approval);
+                              const issue = asRecord(result.issue);
+                              const commandResult = asRecord(result.command_result);
+                              return (
+                                <div
+                                  key={`${selectedRun.id}-result-${index}`}
+                                  className="rounded-xl border border-[#ecebe8] bg-white p-3"
+                                >
+                                  <div className="flex flex-wrap items-center justify-between gap-2">
+                                    <p className="text-[13px] font-semibold text-[#37352f]">{details.title}</p>
+                                    <Badge
+                                      variant="outline"
+                                      className={`rounded-full px-2.5 py-1 text-[11px] font-semibold capitalize ${passStatusClass(toStringValue(result.status, "unknown"))}`}
+                                    >
+                                      {toStringValue(result.status, "unknown")}
+                                    </Badge>
+                                  </div>
+                                  <p className="mt-2 text-[12px] text-[#787774]">{details.subtitle}</p>
+                                  <p className="mt-2 text-[12px] text-[#6b6b6b]">{details.message}</p>
+                                  {(approval || issue || commandResult) && (
+                                    <div className="mt-3 flex flex-wrap gap-2">
+                                      {approval && (
+                                        <Badge
+                                          variant="outline"
+                                          className="rounded-full border-[#d3e5ef] bg-[#eef7fb] px-2.5 py-1 text-[11px] font-medium text-[#2a6690]"
+                                        >
+                                          approval {toStringValue(approval.id, "created")}
+                                        </Badge>
+                                      )}
+                                      {issue && (
+                                        <Badge
+                                          variant="outline"
+                                          className="rounded-full border-[#f4e0c4] bg-[#fff6e8] px-2.5 py-1 text-[11px] font-medium text-[#9a6700]"
+                                        >
+                                          issue {toStringValue(issue.id, "linked")}
+                                        </Badge>
+                                      )}
+                                      {commandResult && (
+                                        <Badge
+                                          variant="outline"
+                                          className="rounded-full border-[#e5e5e3] bg-[#fafaf9] px-2.5 py-1 text-[11px] font-medium text-[#37352f]"
+                                        >
+                                          command {toStringValue(commandResult.status, "ok")}
+                                        </Badge>
+                                      )}
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+
               <Card className="border border-[#e5e5e3] bg-white shadow-[0_1px_3px_rgba(15,15,15,0.08),0_0_1px_rgba(15,15,15,0.04)]">
                 <CardHeader>
                   <CardTitle className="text-[18px] font-semibold tracking-[-0.02em] text-[#37352f]">
@@ -1138,7 +1448,7 @@ export default function ControlPlanePage() {
                       )}
                     </div>
 
-                    <div className="grid gap-4 lg:grid-cols-2">
+                    <div className="grid gap-4 xl:grid-cols-3">
                       <div className="rounded-2xl border border-[#ecebe8] bg-[#fbfbf9] p-4">
                         <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#9b9a97]">
                           Action Summary
@@ -1172,6 +1482,87 @@ export default function ControlPlanePage() {
                             emptyText="No commands recorded."
                           />
                         </div>
+                      </div>
+
+                      <div className="rounded-2xl border border-[#ecebe8] bg-[#fbfbf9] p-4">
+                        <div className="flex items-center justify-between gap-3">
+                          <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#9b9a97]">
+                            Action Runs
+                          </p>
+                          <Badge
+                            variant="outline"
+                            className="rounded-full border-[#e5e5e3] bg-white px-2.5 py-1 text-[11px] font-medium text-[#37352f]"
+                          >
+                            {linkedRuns.length}
+                          </Badge>
+                        </div>
+                        {!linkedRuns.length ? (
+                          <p className="mt-3 text-[13px] text-[#9b9a97]">No linked action runs recorded yet.</p>
+                        ) : (
+                          <div className="mt-3 space-y-3">
+                            {linkedRuns.slice(0, 6).map((run) => {
+                              const selected = selectedRunId === run.id;
+                              return (
+                                <div
+                                  key={`${selectedSession.id}-run-${run.id}`}
+                                  className={`rounded-xl border p-3 ${
+                                    selected
+                                      ? "border-[#d3e5ef] bg-[#f7fbfd]"
+                                      : "border-[#ecebe8] bg-white"
+                                  }`}
+                                >
+                                  <div className="flex flex-wrap items-start justify-between gap-3">
+                                    <div>
+                                      <div className="flex flex-wrap items-center gap-2">
+                                        <p className="font-mono text-[11px] text-[#37352f]">{run.id}</p>
+                                        <Badge
+                                          variant="outline"
+                                          className={`rounded-full px-2.5 py-1 text-[11px] font-semibold capitalize ${passStatusClass(run.status)}`}
+                                        >
+                                          {run.status}
+                                        </Badge>
+                                        <Badge
+                                          variant="outline"
+                                          className="rounded-full border-[#e5e5e3] bg-[#fafaf9] px-2.5 py-1 text-[11px] font-medium text-[#37352f]"
+                                        >
+                                          {run.run_kind}
+                                        </Badge>
+                                        <Badge
+                                          variant="outline"
+                                          className="rounded-full border-[#e5e5e3] bg-[#fafaf9] px-2.5 py-1 text-[11px] font-medium text-[#37352f]"
+                                        >
+                                          {run.dry_run ? "preview" : "execute"}
+                                        </Badge>
+                                      </div>
+                                      <p className="mt-2 text-[12px] text-[#787774]">
+                                        {run.mode || "auto"}
+                                        {run.policy_profile ? ` · ${run.policy_profile}` : ""}
+                                      </p>
+                                      <p className="mt-2 text-[12px] text-[#9b9a97]">
+                                        {toNumber(run.summary.selected_count)} selected ·{" "}
+                                        {toNumber(run.summary.processed_count, run.results.length)} processed
+                                      </p>
+                                    </div>
+                                    <Button
+                                      size="sm"
+                                      variant={selected ? "default" : "outline"}
+                                      className={`h-8 rounded-lg text-[12px] ${
+                                        selected
+                                          ? "bg-[#1a1a1a] text-white hover:bg-[#333]"
+                                          : "border-[#e5e5e3] bg-white text-[#37352f] hover:bg-[#f7f7f5]"
+                                      }`}
+                                      onClick={() => {
+                                        setSelectedRunId(run.id);
+                                      }}
+                                    >
+                                      {selected ? "Selected" : "Inspect"}
+                                    </Button>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
                       </div>
 
                       <div className="rounded-2xl border border-[#ecebe8] bg-[#fbfbf9] p-4">
