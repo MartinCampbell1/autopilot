@@ -59,6 +59,8 @@ const DATE_FORMATTER = new Intl.DateTimeFormat(undefined, {
 const DEFAULT_CONTROL_ACTOR = "dashboard-control-plane";
 const LINEAGE_QUEUE_STORAGE_PREFIX = "control-plane:lineage-queue:";
 const AGENT_TIMELINE_STORAGE_PREFIX = "control-plane:agent-timeline:";
+const SESSION_QUEUE_FOCUS_STORAGE_PREFIX = "control-plane:session-queue-focus:";
+const AGENT_QUEUE_FOCUS_STORAGE_PREFIX = "control-plane:agent-queue-focus:";
 const TRIAGE_INBOX_FEEDBACK_LIMIT = 5;
 const SESSION_LINEAGE_QUEUE_KEYS: LineageQueueKind[] = ["attention", "decisions"];
 const AGENT_PRIORITY_QUEUE_KEYS = ["critical", "high"] as const;
@@ -1347,6 +1349,34 @@ function agentTimelineStorageKey(runtimeAgentId: string): string {
   return `${AGENT_TIMELINE_STORAGE_PREFIX}${runtimeAgentId}`;
 }
 
+function sessionQueueFocusStorageKey(sessionId: string): string {
+  return `${SESSION_QUEUE_FOCUS_STORAGE_PREFIX}${sessionId}`;
+}
+
+function agentQueueFocusStorageKey(runtimeAgentId: string): string {
+  return `${AGENT_QUEUE_FOCUS_STORAGE_PREFIX}${runtimeAgentId}`;
+}
+
+function sanitizeQueueAdvanceFocusDelta(
+  value: QueueAdvanceFocusDelta | null | undefined
+): QueueAdvanceFocusDelta | null {
+  if (!value || typeof value !== "object") return null;
+  const fromLabel = toStringValue(value.fromLabel);
+  const toLabel = toStringValue(value.toLabel);
+  const timestamp = toStringValue(value.timestamp);
+  const fromCount = Number(value.fromCount);
+  const toCount = Number(value.toCount);
+  if (!fromLabel || !toLabel || !timestamp) return null;
+  if (!Number.isFinite(fromCount) || !Number.isFinite(toCount)) return null;
+  return {
+    fromLabel,
+    toLabel,
+    fromCount,
+    toCount,
+    timestamp,
+  };
+}
+
 function visibleEntriesByOperatorVisibilityState<T>(
   entries: T[],
   getKey: (entry: T) => string,
@@ -2213,6 +2243,10 @@ export default function ControlPlanePage() {
   const [errorMessage, setErrorMessage] = useState("");
   const [hydratedAgentTimelineStorageKey, setHydratedAgentTimelineStorageKey] = useState("");
   const [hydratedLineageQueueSessionId, setHydratedLineageQueueSessionId] = useState("");
+  const [hydratedSessionQueueFocusStorageKey, setHydratedSessionQueueFocusStorageKey] =
+    useState("");
+  const [hydratedAgentQueueFocusStorageKey, setHydratedAgentQueueFocusStorageKey] =
+    useState("");
   const selectedSessionLineageEntryRef = useRef<SessionLineageEntry | null>(null);
   const selectedAgentTimelineEntryRef = useRef<AgentTimelineEntry | null>(null);
   const selectedTriageInboxKeyRef = useRef("");
@@ -2456,6 +2490,61 @@ export default function ControlPlanePage() {
   ]);
 
   useEffect(() => {
+    if (!selectedSessionId) {
+      setSessionQueueFocusDelta(null);
+      setHydratedSessionQueueFocusStorageKey("");
+      return;
+    }
+
+    const storageKey = sessionQueueFocusStorageKey(selectedSessionId);
+    setHydratedSessionQueueFocusStorageKey("");
+
+    if (typeof window === "undefined") {
+      setHydratedSessionQueueFocusStorageKey(storageKey);
+      return;
+    }
+
+    const raw = window.localStorage.getItem(storageKey);
+    let parsed: QueueAdvanceFocusDelta | null = null;
+    if (raw) {
+      try {
+        parsed = JSON.parse(raw) as QueueAdvanceFocusDelta;
+      } catch {
+        parsed = null;
+      }
+    }
+
+    const sanitized = sanitizeQueueAdvanceFocusDelta(parsed);
+    setSessionQueueFocusDelta(sanitized);
+    setHydratedSessionQueueFocusStorageKey(storageKey);
+
+    if (!sanitized) {
+      window.localStorage.removeItem(storageKey);
+      return;
+    }
+    window.localStorage.setItem(storageKey, JSON.stringify(sanitized));
+  }, [selectedSessionId]);
+
+  useEffect(() => {
+    if (!selectedSessionId) return;
+    const storageKey = sessionQueueFocusStorageKey(selectedSessionId);
+    if (hydratedSessionQueueFocusStorageKey !== storageKey) {
+      return;
+    }
+    if (typeof window === "undefined") return;
+    const sanitized = sanitizeQueueAdvanceFocusDelta(sessionQueueFocusDelta);
+    if (!sanitized) {
+      window.localStorage.removeItem(storageKey);
+      return;
+    }
+    window.localStorage.setItem(storageKey, JSON.stringify(sanitized));
+  }, [
+    hydratedSessionQueueFocusStorageKey,
+    selectedSessionId,
+    sessionQueueFocusDelta,
+  ]);
+
+  useEffect(() => {
     if (!selectedSession) {
       setSelectedAgentId("");
       setSelectedAgent(null);
@@ -2605,6 +2694,61 @@ export default function ControlPlanePage() {
     lineageQueueNow,
     selectedAgentId,
     snoozedAgentTimelineUntil,
+  ]);
+
+  useEffect(() => {
+    if (!selectedAgentId) {
+      setAgentQueueFocusDelta(null);
+      setHydratedAgentQueueFocusStorageKey("");
+      return;
+    }
+
+    const storageKey = agentQueueFocusStorageKey(selectedAgentId);
+    setHydratedAgentQueueFocusStorageKey("");
+
+    if (typeof window === "undefined") {
+      setHydratedAgentQueueFocusStorageKey(storageKey);
+      return;
+    }
+
+    const raw = window.localStorage.getItem(storageKey);
+    let parsed: QueueAdvanceFocusDelta | null = null;
+    if (raw) {
+      try {
+        parsed = JSON.parse(raw) as QueueAdvanceFocusDelta;
+      } catch {
+        parsed = null;
+      }
+    }
+
+    const sanitized = sanitizeQueueAdvanceFocusDelta(parsed);
+    setAgentQueueFocusDelta(sanitized);
+    setHydratedAgentQueueFocusStorageKey(storageKey);
+
+    if (!sanitized) {
+      window.localStorage.removeItem(storageKey);
+      return;
+    }
+    window.localStorage.setItem(storageKey, JSON.stringify(sanitized));
+  }, [selectedAgentId]);
+
+  useEffect(() => {
+    if (!selectedAgentId) return;
+    const storageKey = agentQueueFocusStorageKey(selectedAgentId);
+    if (hydratedAgentQueueFocusStorageKey !== storageKey) {
+      return;
+    }
+    if (typeof window === "undefined") return;
+    const sanitized = sanitizeQueueAdvanceFocusDelta(agentQueueFocusDelta);
+    if (!sanitized) {
+      window.localStorage.removeItem(storageKey);
+      return;
+    }
+    window.localStorage.setItem(storageKey, JSON.stringify(sanitized));
+  }, [
+    agentQueueFocusDelta,
+    hydratedAgentQueueFocusStorageKey,
+    selectedAgentId,
   ]);
 
   useEffect(() => {
