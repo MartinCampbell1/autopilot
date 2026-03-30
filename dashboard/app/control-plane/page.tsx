@@ -2198,6 +2198,33 @@ export default function ControlPlanePage() {
     () => Math.max(decisionSessionLineageSourceEntries.length - decisionSessionLineageEntries.length, 0),
     [decisionSessionLineageEntries.length, decisionSessionLineageSourceEntries.length]
   );
+  const persistedLineageQueueState = useMemo(
+    () =>
+      sanitizePersistedLineageQueueState(
+        {
+          dismissed: dismissedLineageQueueKeys,
+          snoozedUntil: snoozedLineageQueueUntil,
+        },
+        lineageQueueNow
+      ),
+    [dismissedLineageQueueKeys, lineageQueueNow, snoozedLineageQueueUntil]
+  );
+  const persistedDismissedLineageQueueCount = useMemo(
+    () =>
+      persistedLineageQueueState.dismissed.attention.length +
+      persistedLineageQueueState.dismissed.decisions.length,
+    [persistedLineageQueueState]
+  );
+  const persistedSnoozedLineageQueueCount = useMemo(
+    () =>
+      Object.keys(persistedLineageQueueState.snoozedUntil.attention).length +
+      Object.keys(persistedLineageQueueState.snoozedUntil.decisions).length,
+    [persistedLineageQueueState]
+  );
+  const hasPersistedLineageQueuePreferences = useMemo(
+    () => !isPersistedLineageQueueStateEmpty(persistedLineageQueueState),
+    [persistedLineageQueueState]
+  );
   const selectedSessionLineageTraits = useMemo(() => {
     return sessionLineageTraits(selectedSessionLineageEntry);
   }, [selectedSessionLineageEntry]);
@@ -2344,6 +2371,38 @@ export default function ControlPlanePage() {
     }));
     setLineageQueueNow(Date.now());
   }, []);
+  const resetSessionLineageQueuePreferences = useCallback(() => {
+    setDismissedLineageQueueKeys(emptyDismissedLineageQueueKeys());
+    setSnoozedLineageQueueUntil(emptySnoozedLineageQueueUntil());
+    setLineageQueueNow(Date.now());
+    setNotice("Session lineage queue state reset.");
+    setErrorMessage("");
+    if (selectedSessionId && typeof window !== "undefined") {
+      window.localStorage.removeItem(lineageQueueStorageKey(selectedSessionId));
+    }
+  }, [selectedSessionId]);
+  const exportSessionLineageQueuePreferences = useCallback(async () => {
+    if (!selectedSessionId) return;
+    const payload = {
+      sessionId: selectedSessionId,
+      exportedAt: new Date().toISOString(),
+      queueState: persistedLineageQueueState,
+    };
+    const serialized = JSON.stringify(payload, null, 2);
+    try {
+      if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(serialized);
+        setNotice("Copied session lineage queue state.");
+        setErrorMessage("");
+        return;
+      }
+      setErrorMessage("Clipboard is unavailable in this environment.");
+    } catch (error) {
+      setErrorMessage(
+        error instanceof Error ? error.message : "Failed to copy session lineage queue state."
+      );
+    }
+  }, [persistedLineageQueueState, selectedSessionId]);
   useEffect(() => {
     if (!pendingLineageAutoAdvance) return;
     const entries =
@@ -3668,6 +3727,43 @@ export default function ControlPlanePage() {
                               setSessionLineageFilter("agent-linked");
                             }}
                           />
+                        </div>
+                        <div className="rounded-xl border border-[#ecebe8] bg-white p-3">
+                          <div className="flex flex-wrap items-center justify-between gap-3">
+                            <div>
+                              <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#9b9a97]">
+                                Operator State
+                              </p>
+                              <p className="mt-1 text-[12px] text-[#787774]">
+                                {persistedDismissedLineageQueueCount} dismissed ·{" "}
+                                {persistedSnoozedLineageQueueCount} snoozed persisted for this session
+                              </p>
+                            </div>
+                            <div className="flex flex-wrap gap-2">
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="h-7 rounded-lg border-[#e5e5e3] bg-white px-2 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
+                                onClick={() => {
+                                  void exportSessionLineageQueuePreferences();
+                                }}
+                                disabled={!hasPersistedLineageQueuePreferences}
+                              >
+                                Copy queue state
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="h-7 rounded-lg border-[#e5e5e3] bg-white px-2 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
+                                onClick={() => {
+                                  resetSessionLineageQueuePreferences();
+                                }}
+                                disabled={!hasPersistedLineageQueuePreferences}
+                              >
+                                Reset queue state
+                              </Button>
+                            </div>
+                          </div>
                         </div>
                         <div className="rounded-xl border border-[#ecebe8] bg-white p-3">
                           <div className="flex flex-wrap items-center justify-between gap-3">
