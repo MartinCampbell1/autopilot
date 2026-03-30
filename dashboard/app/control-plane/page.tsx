@@ -83,6 +83,75 @@ function agentTimelineEntryKey(entry: AgentTimelineEntry): string {
   return `${entry.kind}:${entry.id}`;
 }
 
+function findRunResultIndexByApprovalId(
+  run: ExecutionAgentActionRunRecord,
+  approvalId: string
+): number {
+  if (!approvalId) return -1;
+  return run.results.findIndex(
+    (result) => toStringValue(asRecord(asRecord(result)?.approval)?.id) === approvalId
+  );
+}
+
+function findRunResultIndexByIssueId(
+  run: ExecutionAgentActionRunRecord,
+  issueId: string
+): number {
+  if (!issueId) return -1;
+  return run.results.findIndex(
+    (result) => toStringValue(asRecord(asRecord(result)?.issue)?.id) === issueId
+  );
+}
+
+function resolveAgentTimelineRunLink(
+  entry: AgentTimelineEntry,
+  runs: ExecutionAgentActionRunRecord[]
+): { run: ExecutionAgentActionRunRecord; resultIndex: number } | null {
+  const linkedApprovalId =
+    entry.approval?.id ||
+    entry.issue?.approval_id ||
+    toStringValue(entry.event?.approval_id);
+  const linkedIssueId = entry.issue?.id || toStringValue(entry.event?.issue_id);
+  const linkedRunId =
+    toStringValue(entry.event?.agent_action_run_id) ||
+    toStringValue(entry.event?.run_id);
+
+  if (linkedRunId) {
+    const directRun = runs.find((run) => run.id === linkedRunId);
+    if (directRun) {
+      const approvalIndex = findRunResultIndexByApprovalId(directRun, linkedApprovalId);
+      if (approvalIndex >= 0) {
+        return { run: directRun, resultIndex: approvalIndex };
+      }
+      const issueIndex = findRunResultIndexByIssueId(directRun, linkedIssueId);
+      if (issueIndex >= 0) {
+        return { run: directRun, resultIndex: issueIndex };
+      }
+      return { run: directRun, resultIndex: 0 };
+    }
+  }
+
+  if (linkedApprovalId) {
+    for (const run of runs) {
+      const resultIndex = findRunResultIndexByApprovalId(run, linkedApprovalId);
+      if (resultIndex >= 0) {
+        return { run, resultIndex };
+      }
+    }
+  }
+
+  if (linkedIssueId) {
+    for (const run of runs) {
+      const resultIndex = findRunResultIndexByIssueId(run, linkedIssueId);
+      if (resultIndex >= 0) {
+        return { run, resultIndex };
+      }
+    }
+  }
+
+  return null;
+}
+
 function formatTimestamp(value?: string | null): string {
   if (!value) return "No activity yet";
   const date = new Date(value);
@@ -1431,6 +1500,13 @@ export default function ControlPlanePage() {
   const latestAgentEventEntry = useMemo(
     () => agentTimelineEntries.find((entry) => entry.kind === "event") ?? null,
     [agentTimelineEntries]
+  );
+  const selectedAgentTimelineRunLink = useMemo(
+    () =>
+      selectedAgentTimelineEntry
+        ? resolveAgentTimelineRunLink(selectedAgentTimelineEntry, linkedRuns)
+        : null,
+    [linkedRuns, selectedAgentTimelineEntry]
   );
   const selectedControl = selectedSession?.control ?? null;
   const loading = !controlSummary || !sessionSummary;
@@ -2879,6 +2955,14 @@ export default function ControlPlanePage() {
                                     toStringValue(entry.event?.approval_id);
                                   const relatedIssueId =
                                     entry.issue?.id || toStringValue(entry.event?.issue_id);
+                                  const relatedRunLink = selectedAgentTimelineRunLink;
+                                  const relatedRunResult =
+                                    relatedRunLink && relatedRunLink.run.results[relatedRunLink.resultIndex]
+                                      ? asRecord(relatedRunLink.run.results[relatedRunLink.resultIndex])
+                                      : null;
+                                  const relatedRunOutcome = relatedRunResult
+                                    ? describeRunResult(relatedRunResult)
+                                    : null;
                                   const payload =
                                     entry.approval || entry.issue || entry.event || {
                                       id: entry.id,
@@ -2933,6 +3017,30 @@ export default function ControlPlanePage() {
                                           label="Scope"
                                           value={entry.subtitle || "No scope metadata"}
                                           detail={workspaceProjectId || "No project linkage"}
+                                        />
+                                        <SessionMetric
+                                          label="Related Run"
+                                          value={relatedRunLink?.run.id || "No linked run"}
+                                          detail={
+                                            relatedRunLink
+                                              ? `${relatedRunLink.run.run_kind} · ${relatedRunLink.run.status}`
+                                              : "No related action run found"
+                                          }
+                                        />
+                                        <SessionMetric
+                                          label="Outcome"
+                                          value={
+                                            relatedRunResult
+                                              ? toStringValue(
+                                                  relatedRunResult.status,
+                                                  `result #${relatedRunLink?.resultIndex ?? 0}`
+                                                )
+                                              : "No linked outcome"
+                                          }
+                                          detail={
+                                            relatedRunOutcome?.title ||
+                                            (relatedRunLink ? "Related run found without a specific outcome match" : "No outcome linkage")
+                                          }
                                         />
                                       </div>
 
@@ -3022,6 +3130,32 @@ export default function ControlPlanePage() {
                                           >
                                             Open workspace
                                           </Link>
+                                        )}
+                                        {relatedRunLink && (
+                                          <Button
+                                            size="sm"
+                                            variant="outline"
+                                            className="h-8 rounded-lg border-[#e5e5e3] bg-white text-[12px] text-[#37352f] hover:bg-[#f7f7f5]"
+                                            onClick={() => {
+                                              setSelectedRunId(relatedRunLink.run.id);
+                                              setSelectedRunResultIndex(0);
+                                            }}
+                                          >
+                                            Open related run
+                                          </Button>
+                                        )}
+                                        {relatedRunLink && relatedRunResult && (
+                                          <Button
+                                            size="sm"
+                                            variant="outline"
+                                            className="h-8 rounded-lg border-[#d3e5ef] bg-[#eef7fb] text-[12px] text-[#2a6690] hover:bg-[#e3f2f8]"
+                                            onClick={() => {
+                                              setSelectedRunId(relatedRunLink.run.id);
+                                              setSelectedRunResultIndex(relatedRunLink.resultIndex);
+                                            }}
+                                          >
+                                            Open related outcome
+                                          </Button>
                                         )}
                                       </div>
 
