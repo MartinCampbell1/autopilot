@@ -168,6 +168,12 @@ type TriageInboxFeedback = {
   tone: "info" | "success";
   timestamp: string;
 };
+type TriageInboxFeedbackGroup = {
+  itemKey: string;
+  itemLabel: string;
+  entries: TriageInboxFeedback[];
+  isActive: boolean;
+};
 
 function agentTimelineEntryKey(entry: AgentTimelineEntry): string {
   return `${entry.kind}:${entry.id}`;
@@ -3483,6 +3489,23 @@ export default function ControlPlanePage() {
     () => visibleTriageInboxFeedbackHistory.slice(1, TRIAGE_INBOX_FEEDBACK_LIMIT),
     [visibleTriageInboxFeedbackHistory]
   );
+  const groupedRecentTriageInboxFeedback = useMemo(() => {
+    const groups = new Map<string, TriageInboxFeedbackGroup>();
+    recentTriageInboxFeedback.forEach((feedback) => {
+      const existing = groups.get(feedback.itemKey);
+      if (existing) {
+        existing.entries.push(feedback);
+        return;
+      }
+      groups.set(feedback.itemKey, {
+        itemKey: feedback.itemKey,
+        itemLabel: feedback.itemLabel,
+        entries: [feedback],
+        isActive: triageInboxItems.some((item) => item.key === feedback.itemKey),
+      });
+    });
+    return Array.from(groups.values());
+  }, [recentTriageInboxFeedback, triageInboxItems]);
   useEffect(() => {
     selectedTriageInboxKeyRef.current = selectedTriageInboxKey;
   }, [selectedTriageInboxKey]);
@@ -3515,6 +3538,14 @@ export default function ControlPlanePage() {
     setSelectedTriageInboxKey(item.key);
     item.onInspect();
   }, []);
+  const openTriageInboxHistoryGroup = useCallback(
+    (itemKey: string) => {
+      const inboxItem = triageInboxItems.find((item) => item.key === itemKey);
+      if (!inboxItem) return;
+      inspectTriageInboxItem(inboxItem);
+    },
+    [inspectTriageInboxItem, triageInboxItems]
+  );
   const inspectAndAdvanceTriageInboxItem = useCallback(
     (item: TriageInboxItem) => {
       const nextKey = nextTriageInboxCursorKey(item.key);
@@ -5444,7 +5475,7 @@ export default function ControlPlanePage() {
                                   No {triageInboxFeedbackFilter} triage results yet.
                                 </div>
                               )}
-                              {recentTriageInboxFeedback.length ? (
+                              {groupedRecentTriageInboxFeedback.length ? (
                                 <div className="rounded-lg border border-[#ecebe8] bg-white p-3">
                                   <div className="flex flex-wrap items-center justify-between gap-2">
                                     <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#9b9a97]">
@@ -5458,22 +5489,75 @@ export default function ControlPlanePage() {
                                     </Badge>
                                   </div>
                                   <div className="mt-3 space-y-2">
-                                    {recentTriageInboxFeedback.map((feedback) => (
+                                    {groupedRecentTriageInboxFeedback.map((group) => (
                                       <div
-                                        key={`${feedback.itemKey}:${feedback.timestamp}`}
+                                        key={`triage-feedback-group-${group.itemKey}`}
                                         className="rounded-lg border border-[#ecebe8] bg-[#fbfbf9] p-2.5"
                                       >
                                         <div className="flex flex-wrap items-center justify-between gap-2">
-                                          <p className="text-[11px] font-semibold text-[#37352f]">
-                                            {feedback.itemLabel}
-                                          </p>
-                                          <p className="text-[11px] text-[#9b9a97]">
-                                            {formatTimestamp(feedback.timestamp)}
-                                          </p>
+                                          <div className="flex flex-wrap items-center gap-2">
+                                            <p className="text-[11px] font-semibold text-[#37352f]">
+                                              {group.itemLabel}
+                                            </p>
+                                            <Badge
+                                              variant="outline"
+                                              className="rounded-full border-[#e5e5e3] bg-white px-2 py-0.5 text-[10px] font-medium text-[#37352f]"
+                                            >
+                                              {group.entries.length}
+                                            </Badge>
+                                            {!group.isActive ? (
+                                              <Badge
+                                                variant="outline"
+                                                className="rounded-full border-[#e5e5e3] bg-[#fafaf9] px-2 py-0.5 text-[10px] font-medium text-[#9b9a97]"
+                                              >
+                                                Not in inbox
+                                              </Badge>
+                                            ) : null}
+                                          </div>
+                                          <div className="flex flex-wrap items-center gap-2">
+                                            <p className="text-[11px] text-[#9b9a97]">
+                                              {formatTimestamp(group.entries[0]?.timestamp || "")}
+                                            </p>
+                                            <Button
+                                              size="sm"
+                                              variant="outline"
+                                              className="h-7 rounded-lg border-[#e5e5e3] bg-white px-2 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
+                                              onClick={() => {
+                                                openTriageInboxHistoryGroup(group.itemKey);
+                                              }}
+                                              disabled={!group.isActive}
+                                            >
+                                              Open in inbox
+                                            </Button>
+                                          </div>
                                         </div>
-                                        <p className="mt-1 text-[12px] text-[#6b6b6b]">
-                                          {feedback.message}
-                                        </p>
+                                        <div className="mt-2 space-y-2">
+                                          {group.entries.map((feedback) => (
+                                            <div
+                                              key={`${feedback.itemKey}:${feedback.timestamp}`}
+                                              className="rounded-lg border border-[#ecebe8] bg-white p-2"
+                                            >
+                                              <div className="flex flex-wrap items-center justify-between gap-2">
+                                                <Badge
+                                                  variant="outline"
+                                                  className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
+                                                    feedback.tone === "success"
+                                                      ? "border-[#d6e9dc] bg-[#eef8f1] text-[#2b6e3f]"
+                                                      : "border-[#e5e5e3] bg-[#fafaf9] text-[#37352f]"
+                                                  }`}
+                                                >
+                                                  {feedback.tone}
+                                                </Badge>
+                                                <p className="text-[11px] text-[#9b9a97]">
+                                                  {formatTimestamp(feedback.timestamp)}
+                                                </p>
+                                              </div>
+                                              <p className="mt-1 text-[12px] text-[#6b6b6b]">
+                                                {feedback.message}
+                                              </p>
+                                            </div>
+                                          ))}
+                                        </div>
                                       </div>
                                     ))}
                                   </div>
