@@ -552,12 +552,34 @@ def test_execution_plane_orchestrator_session_control_plan_safe_progress_execute
     assert len(session_passes.json()["control_passes"]) == 1
     assert session_passes.json()["control_passes"][0]["id"] == plan["control_pass"]["id"]
 
+    session_pass_summary = client.get(
+        f"/api/execution-plane/orchestrator-sessions/{session['id']}/control/passes/summary",
+    )
+    assert session_pass_summary.status_code == 200
+    scoped_summary = session_pass_summary.json()
+    assert scoped_summary["session_id"] == session["id"]
+    assert scoped_summary["totals"]["control_passes"] == 1
+    assert scoped_summary["by_profile"]["safe_progress"] == 1
+    assert scoped_summary["by_final_state"]["closed"] == 1
+    assert scoped_summary["by_session_status_after"]["completed"] == 1
+
     pass_detail = client.get(
         f"/api/execution-plane/orchestrator-sessions/control/passes/{plan['control_pass']['id']}",
     )
     assert pass_detail.status_code == 200
     assert pass_detail.json()["id"] == plan["control_pass"]["id"]
     assert pass_detail.json()["summary"]["final_state"] == "closed"
+
+    global_summary = client.get(
+        "/api/execution-plane/orchestrator-sessions/control/passes/summary",
+        params={"orchestrator_session_id": session["id"]},
+    )
+    assert global_summary.status_code == 200
+    summary_payload = global_summary.json()
+    assert summary_payload["totals"]["control_passes"] == 1
+    assert summary_payload["totals"]["sessions"] == 1
+    assert summary_payload["by_profile"]["safe_progress"] == 1
+    assert summary_payload["by_status"]["ok"] == 1
 
     session_events = client.get(
         f"/api/execution-plane/orchestrator-sessions/{session['id']}/events",
@@ -1689,6 +1711,17 @@ def test_execution_plane_agent_action_execute_escalates_to_approval_when_needed(
     assert global_passes.status_code == 200
     assert len(global_passes.json()["control_passes"]) == 1
     assert global_passes.json()["control_passes"][0]["id"] == plan["control_pass"]["id"]
+
+    review_summary = client.get(
+        "/api/execution-plane/orchestrator-sessions/control/passes/summary",
+        params={"orchestrator_session_id": session["id"], "profile": "review_only"},
+    )
+    assert review_summary.status_code == 200
+    review_summary_payload = review_summary.json()
+    assert review_summary_payload["totals"]["control_passes"] == 1
+    assert review_summary_payload["by_profile"]["review_only"] == 1
+    assert review_summary_payload["by_final_state"]["needs_approval"] == 1
+    assert review_summary_payload["by_session_status_after"]["open"] == 1
 
 
 def test_execution_plane_orchestrator_session_control_apply_completes_healthy_session(

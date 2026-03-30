@@ -2427,6 +2427,7 @@ def apply_execution_plane_orchestrator_session_control_plan(
         recommendation_kinds,
     )
     initial_control = build_execution_plane_orchestrator_session_control(config, session_id)
+    initial_session_status = session.status
     applied: list[dict[str, Any]] = []
     errors: list[dict[str, Any]] = []
     skipped_kinds: list[str] = []
@@ -2515,6 +2516,7 @@ def apply_execution_plane_orchestrator_session_control_plan(
     else:
         status = "noop"
 
+    updated_session = get_orchestrator_session(config, session_id)
     control_pass = create_orchestrator_control_pass(
         config,
         orchestrator_session_id=session_id,
@@ -2538,6 +2540,8 @@ def apply_execution_plane_orchestrator_session_control_plan(
         project_ids=session.project_ids,
         initiative_id=session.initiative_id,
         orchestrator=session.orchestrator,
+        session_status_before=initial_session_status,
+        session_status_after=(updated_session.status if updated_session is not None else ""),
     )
     link_orchestrator_session_entities(
         config,
@@ -2665,6 +2669,97 @@ def list_execution_plane_orchestrator_session_control_passes(
             status=status,
         )
     ]
+
+
+def summarize_execution_plane_orchestrator_session_control_passes(
+    config: AutopilotConfig,
+    *,
+    orchestrator_session_id: str | None = None,
+    project_id: str | None = None,
+    initiative_id: str | None = None,
+    orchestrator: str | None = None,
+    actor: str | None = None,
+    profile: str | None = None,
+    status: str | None = None,
+) -> dict[str, Any]:
+    """Return aggregate counts across persisted session-level control-pass records."""
+
+    records = list_orchestrator_control_passes(
+        config,
+        orchestrator_session_id=orchestrator_session_id,
+        project_id=project_id,
+        initiative_id=initiative_id,
+        orchestrator=orchestrator,
+        actor=actor,
+        profile=profile,
+        status=status,
+    )
+
+    by_status: dict[str, int] = {}
+    by_profile: dict[str, int] = {}
+    by_actor: dict[str, int] = {}
+    by_orchestrator: dict[str, int] = {}
+    by_final_state: dict[str, int] = {}
+    by_stopped_reason: dict[str, int] = {}
+    by_session_status_before: dict[str, int] = {}
+    by_session_status_after: dict[str, int] = {}
+    for record in records:
+        by_status[record.status] = by_status.get(record.status, 0) + 1
+        by_profile[record.profile] = by_profile.get(record.profile, 0) + 1
+        by_actor[record.actor] = by_actor.get(record.actor, 0) + 1
+        if record.orchestrator:
+            by_orchestrator[record.orchestrator] = by_orchestrator.get(record.orchestrator, 0) + 1
+        final_state = str(record.summary.get("final_state") or "")
+        if final_state:
+            by_final_state[final_state] = by_final_state.get(final_state, 0) + 1
+        stopped_reason = str(record.summary.get("stopped_reason") or "")
+        if stopped_reason:
+            by_stopped_reason[stopped_reason] = by_stopped_reason.get(stopped_reason, 0) + 1
+        if record.session_status_before:
+            by_session_status_before[record.session_status_before] = (
+                by_session_status_before.get(record.session_status_before, 0) + 1
+            )
+        if record.session_status_after:
+            by_session_status_after[record.session_status_after] = (
+                by_session_status_after.get(record.session_status_after, 0) + 1
+            )
+
+    return {
+        "totals": {
+            "control_passes": len(records),
+            "ok": sum(1 for record in records if record.status == "ok"),
+            "partial": sum(1 for record in records if record.status == "partial"),
+            "error": sum(1 for record in records if record.status == "error"),
+            "noop": sum(1 for record in records if record.status == "noop"),
+            "customized": sum(1 for record in records if record.customized),
+            "sessions": len(
+                {
+                    record.orchestrator_session_id
+                    for record in records
+                    if record.orchestrator_session_id.strip()
+                }
+            ),
+            "projects": len(
+                {
+                    project_id_item
+                    for record in records
+                    for project_id_item in record.project_ids
+                    if project_id_item.strip()
+                }
+            ),
+            "applied_steps": sum(int(record.summary.get("applied") or 0) for record in records),
+            "error_steps": sum(int(record.summary.get("errors") or 0) for record in records),
+        },
+        "by_status": by_status,
+        "by_profile": by_profile,
+        "by_actor": by_actor,
+        "by_orchestrator": by_orchestrator,
+        "by_final_state": by_final_state,
+        "by_stopped_reason": by_stopped_reason,
+        "by_session_status_before": by_session_status_before,
+        "by_session_status_after": by_session_status_after,
+        "latest_control_pass_at": records[0].created_at if records else None,
+    }
 
 
 def get_execution_plane_orchestrator_session_control_pass(

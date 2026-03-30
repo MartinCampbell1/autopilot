@@ -43,6 +43,8 @@ class OrchestratorControlPassRecord(BaseModel):
     project_ids: list[str] = Field(default_factory=list)
     initiative_id: str = ""
     orchestrator: str = ""
+    session_status_before: str = ""
+    session_status_after: str = ""
     created_at: str
     updated_at: str
     completed_at: str | None = None
@@ -98,6 +100,8 @@ def create_orchestrator_control_pass(
     project_ids: list[str] | None = None,
     initiative_id: str = "",
     orchestrator: str = "",
+    session_status_before: str = "",
+    session_status_after: str = "",
 ) -> OrchestratorControlPassRecord:
     """Create and persist one completed orchestration-pass record."""
 
@@ -121,6 +125,8 @@ def create_orchestrator_control_pass(
         project_ids=sorted({str(item) for item in (project_ids or []) if str(item).strip()}),
         initiative_id=initiative_id.strip(),
         orchestrator=orchestrator.strip(),
+        session_status_before=session_status_before.strip(),
+        session_status_after=session_status_after.strip(),
         created_at=created_at,
         updated_at=created_at,
         completed_at=created_at,
