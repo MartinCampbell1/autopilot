@@ -12,6 +12,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import {
   applyExecutionPlaneOrchestratorSessionControlPlan,
   applyExecutionPlaneOrchestratorSessionRecommendation,
@@ -82,6 +83,29 @@ function toNullableNumber(value: unknown): number | null {
 
 function toStringValue(value: unknown, fallback = ""): string {
   return typeof value === "string" && value.trim() ? value : fallback;
+}
+
+function normalizeSearchQuery(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function searchText(value: unknown): string {
+  if (value === null || value === undefined) return "";
+  if (typeof value === "string") return value.toLowerCase();
+  if (typeof value === "number" || typeof value === "boolean") return String(value).toLowerCase();
+  if (Array.isArray(value)) return value.map((item) => searchText(item)).join(" ");
+  if (typeof value === "object") {
+    return Object.values(value as Record<string, unknown>)
+      .map((item) => searchText(item))
+      .join(" ");
+  }
+  return String(value).toLowerCase();
+}
+
+function matchesSearch(values: unknown[], query: string): boolean {
+  const normalized = normalizeSearchQuery(query);
+  if (!normalized) return true;
+  return values.some((value) => searchText(value).includes(normalized));
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -207,6 +231,126 @@ function matchesEventFilter(event: Record<string, unknown>, filter: string): boo
     return ["error", "partial", "pending_approval", "failed"].includes(status);
   }
   return eventFamily(name) === filter;
+}
+
+function runMatchesSearch(run: ExecutionAgentActionRunRecord, query: string): boolean {
+  return matchesSearch(
+    [
+      run.id,
+      run.run_kind,
+      run.actor,
+      run.mode,
+      run.reason,
+      run.policy_profile,
+      run.status,
+      run.project_ids,
+      run.initiative_ids,
+      run.orchestrators,
+      run.runtime_agent_ids,
+      run.selection,
+      run.summary,
+      run.results,
+    ],
+    query
+  );
+}
+
+function approvalMatchesSearch(approval: ExecutionApprovalRecord, query: string): boolean {
+  return matchesSearch(
+    [
+      approval.id,
+      approval.action,
+      approval.status,
+      approval.reason,
+      approval.project_id,
+      approval.project_name,
+      approval.issue_id,
+      approval.runtime_agent_ids,
+      approval.policy_reasons,
+      approval.payload,
+    ],
+    query
+  );
+}
+
+function issueMatchesSearch(issue: ExecutionIssueRecord, query: string): boolean {
+  return matchesSearch(
+    [
+      issue.id,
+      issue.title,
+      issue.description,
+      issue.root_cause,
+      issue.category,
+      issue.severity,
+      issue.status,
+      issue.project_id,
+      issue.project_name,
+      issue.related_command,
+      issue.runtime_agent_id,
+      issue.runtime_agent_ids,
+      issue.approval_id,
+      issue.context,
+    ],
+    query
+  );
+}
+
+function eventMatchesSearch(event: Record<string, unknown>, query: string): boolean {
+  return matchesSearch(
+    [
+      event.event,
+      event.status,
+      event.message,
+      event.project_id,
+      event.story_id,
+      event.orchestrator_session_id,
+      event,
+    ],
+    query
+  );
+}
+
+function sessionMatchesSearch(session: OrchestratorSessionRecord, query: string): boolean {
+  return matchesSearch(
+    [
+      session.id,
+      session.title,
+      session.orchestrator,
+      session.actor,
+      session.status,
+      session.reason,
+      session.initiative_id,
+      session.project_ids,
+      session.linked_run_ids,
+      session.linked_control_pass_ids,
+      session.linked_approval_ids,
+      session.linked_issue_ids,
+      session.linked_runtime_agent_ids,
+      session.context,
+    ],
+    query
+  );
+}
+
+function controlPassMatchesSearch(controlPass: OrchestratorControlPassRecord, query: string): boolean {
+  return matchesSearch(
+    [
+      controlPass.id,
+      controlPass.orchestrator_session_id,
+      controlPass.actor,
+      controlPass.reason,
+      controlPass.profile,
+      controlPass.recommendation_kinds,
+      controlPass.project_ids,
+      controlPass.initiative_id,
+      controlPass.orchestrator,
+      controlPass.status,
+      controlPass.summary,
+      controlPass.control_before,
+      controlPass.control_after,
+    ],
+    query
+  );
 }
 
 function describeRunResult(result: Record<string, unknown>): {
@@ -467,6 +611,8 @@ export default function ControlPlanePage() {
   const [selectedSession, setSelectedSession] = useState<OrchestratorSessionDetail | null>(null);
   const [runFilter, setRunFilter] = useState("all");
   const [eventFilter, setEventFilter] = useState("all");
+  const [historySearch, setHistorySearch] = useState("");
+  const [entitySearch, setEntitySearch] = useState("");
   const [refreshing, setRefreshing] = useState(false);
   const [sessionLoading, setSessionLoading] = useState(false);
   const [busyActionKey, setBusyActionKey] = useState("");
@@ -569,6 +715,7 @@ export default function ControlPlanePage() {
   useEffect(() => {
     if (!selectedSessionId) {
       setSelectedRunId("");
+      setEntitySearch("");
       setSelectedSession(null);
       return;
     }
@@ -610,12 +757,16 @@ export default function ControlPlanePage() {
   }, [selectedSessionId]);
 
   useEffect(() => {
+    setEntitySearch("");
+  }, [selectedSessionId]);
+
+  useEffect(() => {
     setSelectedRunResultIndex(0);
   }, [selectedRunId]);
 
   useEffect(() => {
     const visibleRuns = ((selectedSession?.runs || []) as ExecutionAgentActionRunRecord[]).filter(
-      (run) => matchesRunFilter(run, runFilter)
+      (run) => matchesRunFilter(run, runFilter) && runMatchesSearch(run, entitySearch)
     );
     if (!visibleRuns.length) {
       return;
@@ -623,7 +774,7 @@ export default function ControlPlanePage() {
     if (!selectedRunId || !visibleRuns.some((run) => run.id === selectedRunId)) {
       setSelectedRunId(visibleRuns[0].id);
     }
-  }, [runFilter, selectedRunId, selectedSession]);
+  }, [entitySearch, runFilter, selectedRunId, selectedSession]);
 
   useEffect(() => {
     const currentRuns = (selectedSession?.runs || []) as ExecutionAgentActionRunRecord[];
@@ -782,8 +933,19 @@ export default function ControlPlanePage() {
     () => projects.filter((project) => !project.archived),
     [projects]
   );
-  const recentControlPasses = useMemo(() => controlPasses.slice(0, 8), [controlPasses]);
-  const recentSessions = useMemo(() => sessions.slice(0, 6), [sessions]);
+  const filteredControlPassHistory = useMemo(
+    () => controlPasses.filter((controlPass) => controlPassMatchesSearch(controlPass, historySearch)),
+    [controlPasses, historySearch]
+  );
+  const recentControlPasses = useMemo(
+    () => filteredControlPassHistory.slice(0, 8),
+    [filteredControlPassHistory]
+  );
+  const filteredSessionHistory = useMemo(
+    () => sessions.filter((session) => sessionMatchesSearch(session, historySearch)),
+    [historySearch, sessions]
+  );
+  const recentSessions = useMemo(() => filteredSessionHistory.slice(0, 6), [filteredSessionHistory]);
   const sortedProfiles = useMemo(
     () =>
       [...controlProfiles].sort((left, right) => {
@@ -814,8 +976,8 @@ export default function ControlPlanePage() {
     [selectedSession]
   );
   const filteredRuns = useMemo(
-    () => linkedRuns.filter((run) => matchesRunFilter(run, runFilter)),
-    [linkedRuns, runFilter]
+    () => linkedRuns.filter((run) => matchesRunFilter(run, runFilter) && runMatchesSearch(run, entitySearch)),
+    [entitySearch, linkedRuns, runFilter]
   );
   const linkedIssues = useMemo(
     () =>
@@ -824,13 +986,24 @@ export default function ControlPlanePage() {
       ),
     [selectedSession]
   );
+  const filteredApprovals = useMemo(
+    () => linkedApprovals.filter((approval) => approvalMatchesSearch(approval, entitySearch)),
+    [entitySearch, linkedApprovals]
+  );
+  const filteredIssues = useMemo(
+    () => linkedIssues.filter((issue) => issueMatchesSearch(issue, entitySearch)),
+    [entitySearch, linkedIssues]
+  );
   const selectedRun = useMemo(() => {
     if (!selectedRunId) return null;
     return linkedRuns.find((run) => run.id === selectedRunId) ?? null;
   }, [linkedRuns, selectedRunId]);
   const filteredEvents = useMemo(
-    () => (selectedSession?.events || []).filter((event) => matchesEventFilter(event, eventFilter)),
-    [eventFilter, selectedSession]
+    () =>
+      (selectedSession?.events || []).filter(
+        (event) => matchesEventFilter(event, eventFilter) && eventMatchesSearch(event, entitySearch)
+      ),
+    [entitySearch, eventFilter, selectedSession]
   );
   const selectedRunResult = useMemo(() => {
     if (!selectedRun) return null;
@@ -948,6 +1121,54 @@ export default function ControlPlanePage() {
             />
           </section>
 
+          <section className="rounded-2xl border border-[#e5e5e3] bg-white p-4 shadow-[0_1px_3px_rgba(15,15,15,0.08),0_0_1px_rgba(15,15,15,0.04)]">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#9b9a97]">
+                  History Search
+                </p>
+                <p className="mt-2 text-[13px] text-[#787774]">
+                  Search recent sessions and control passes by session id, actor, profile, initiative, project, or linked entity ids.
+                </p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Badge
+                  variant="outline"
+                  className="rounded-full border-[#e5e5e3] bg-[#fafaf9] px-2.5 py-1 text-[11px] font-medium text-[#37352f]"
+                >
+                  {filteredSessionHistory.length}/{sessions.length} sessions
+                </Badge>
+                <Badge
+                  variant="outline"
+                  className="rounded-full border-[#e5e5e3] bg-[#fafaf9] px-2.5 py-1 text-[11px] font-medium text-[#37352f]"
+                >
+                  {filteredControlPassHistory.length}/{controlPasses.length} passes
+                </Badge>
+              </div>
+            </div>
+            <div className="mt-3 flex flex-wrap gap-3">
+              <Input
+                value={historySearch}
+                onChange={(event) => {
+                  setHistorySearch(event.target.value);
+                }}
+                placeholder="session id, control pass id, actor, project, initiative, approval, issue..."
+                className="min-w-[280px] flex-1 border-[#e5e5e3] bg-white text-[13px]"
+              />
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-10 rounded-lg border-[#e5e5e3] bg-white text-[12px] text-[#37352f] hover:bg-[#f7f7f5]"
+                disabled={!historySearch.trim()}
+                onClick={() => {
+                  setHistorySearch("");
+                }}
+              >
+                Clear search
+              </Button>
+            </div>
+          </section>
+
           <section className="grid gap-6 xl:grid-cols-[minmax(0,1.5fr)_minmax(320px,0.9fr)]">
             <Card className="border border-[#e5e5e3] bg-white shadow-[0_1px_3px_rgba(15,15,15,0.08),0_0_1px_rgba(15,15,15,0.04)]">
               <CardHeader>
@@ -961,7 +1182,9 @@ export default function ControlPlanePage() {
               <CardContent>
                 {recentControlPasses.length === 0 ? (
                   <div className="rounded-xl border border-dashed border-[#e5e5e3] bg-[#fafaf9] px-5 py-8 text-[13px] text-[#9b9a97]">
-                    No orchestrator control passes recorded yet.
+                    {controlPasses.length
+                      ? "No orchestrator control passes match the current history search."
+                      : "No orchestrator control passes recorded yet."}
                   </div>
                 ) : (
                   <div className="space-y-3">
@@ -1319,6 +1542,42 @@ export default function ControlPlanePage() {
                               Selected Outcome
                             </p>
                             <div className="flex flex-wrap items-center gap-2">
+                              {runtimeAgentId && (
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  className="h-8 rounded-lg border-[#e5e5e3] bg-white px-3 text-[12px] text-[#37352f] hover:bg-[#f7f7f5]"
+                                  onClick={() => {
+                                    setEntitySearch(runtimeAgentId);
+                                  }}
+                                >
+                                  Find agent
+                                </Button>
+                              )}
+                              {toStringValue(asRecord(selectedRunResult.approval)?.id) && (
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  className="h-8 rounded-lg border-[#e5e5e3] bg-white px-3 text-[12px] text-[#37352f] hover:bg-[#f7f7f5]"
+                                  onClick={() => {
+                                    setEntitySearch(toStringValue(asRecord(selectedRunResult.approval)?.id));
+                                  }}
+                                >
+                                  Find approval
+                                </Button>
+                              )}
+                              {toStringValue(asRecord(selectedRunResult.issue)?.id) && (
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  className="h-8 rounded-lg border-[#e5e5e3] bg-white px-3 text-[12px] text-[#37352f] hover:bg-[#f7f7f5]"
+                                  onClick={() => {
+                                    setEntitySearch(toStringValue(asRecord(selectedRunResult.issue)?.id));
+                                  }}
+                                >
+                                  Find issue
+                                </Button>
+                              )}
                               {workspaceHref && (
                                 <Link
                                   href={workspaceHref}
@@ -1519,7 +1778,9 @@ export default function ControlPlanePage() {
                 <CardContent>
                   {recentSessions.length === 0 ? (
                     <div className="rounded-xl border border-dashed border-[#e5e5e3] bg-[#fafaf9] px-5 py-6 text-[13px] text-[#9b9a97]">
-                      No orchestrator sessions recorded yet.
+                      {sessions.length
+                        ? "No orchestrator sessions match the current history search."
+                        : "No orchestrator sessions recorded yet."}
                     </div>
                   ) : (
                     <div className="space-y-3">
@@ -1706,6 +1967,66 @@ export default function ControlPlanePage() {
                         value={String(selectedSession.summary.control_pass_count)}
                         detail={`${selectedSession.summary.run_count} linked runs`}
                       />
+                    </div>
+
+                    <div className="rounded-2xl border border-[#ecebe8] bg-[#fbfbf9] p-4">
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div>
+                          <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#9b9a97]">
+                            Entity Search
+                          </p>
+                          <p className="mt-2 text-[13px] text-[#787774]">
+                            Filter runs, events, approvals, and issues by id, runtime agent, command, story, or reason.
+                          </p>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          <Badge
+                            variant="outline"
+                            className="rounded-full border-[#e5e5e3] bg-white px-2.5 py-1 text-[11px] font-medium text-[#37352f]"
+                          >
+                            {filteredRuns.length}/{linkedRuns.length} runs
+                          </Badge>
+                          <Badge
+                            variant="outline"
+                            className="rounded-full border-[#e5e5e3] bg-white px-2.5 py-1 text-[11px] font-medium text-[#37352f]"
+                          >
+                            {filteredEvents.length}/{selectedSession.events.length} events
+                          </Badge>
+                          <Badge
+                            variant="outline"
+                            className="rounded-full border-[#e5e5e3] bg-white px-2.5 py-1 text-[11px] font-medium text-[#37352f]"
+                          >
+                            {filteredApprovals.length}/{linkedApprovals.length} approvals
+                          </Badge>
+                          <Badge
+                            variant="outline"
+                            className="rounded-full border-[#e5e5e3] bg-white px-2.5 py-1 text-[11px] font-medium text-[#37352f]"
+                          >
+                            {filteredIssues.length}/{linkedIssues.length} issues
+                          </Badge>
+                        </div>
+                      </div>
+                      <div className="mt-3 flex flex-wrap gap-3">
+                        <Input
+                          value={entitySearch}
+                          onChange={(event) => {
+                            setEntitySearch(event.target.value);
+                          }}
+                          placeholder="approval id, issue id, runtime agent, action key, command, story..."
+                          className="min-w-[280px] flex-1 border-[#e5e5e3] bg-white text-[13px]"
+                        />
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-10 rounded-lg border-[#e5e5e3] bg-white text-[12px] text-[#37352f] hover:bg-[#f7f7f5]"
+                          disabled={!entitySearch.trim()}
+                          onClick={() => {
+                            setEntitySearch("");
+                          }}
+                        >
+                          Clear search
+                        </Button>
+                      </div>
                     </div>
 
                     <div className="rounded-2xl border border-[#ecebe8] bg-[#fbfbf9] p-4">
@@ -1955,6 +2276,23 @@ export default function ControlPlanePage() {
                                         {toNumber(run.summary.selected_count)} selected ·{" "}
                                         {toNumber(run.summary.processed_count, run.results.length)} processed
                                       </p>
+                                      {run.runtime_agent_ids.length > 0 && (
+                                        <div className="mt-2 flex flex-wrap gap-2">
+                                          {run.runtime_agent_ids.slice(0, 2).map((runtimeAgentId) => (
+                                            <Button
+                                              key={`${run.id}-${runtimeAgentId}`}
+                                              size="sm"
+                                              variant="outline"
+                                              className="h-7 rounded-full border-[#e5e5e3] bg-white px-2.5 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
+                                              onClick={() => {
+                                                setEntitySearch(runtimeAgentId);
+                                              }}
+                                            >
+                                              {runtimeAgentId}
+                                            </Button>
+                                          ))}
+                                        </div>
+                                      )}
                                     </div>
                                     <Button
                                       size="sm"
@@ -2041,36 +2379,108 @@ export default function ControlPlanePage() {
                         ) : (
                           <div className="mt-3 space-y-3">
                             {filteredEvents.slice(-6).reverse().map((event) => (
-                              <div
-                                key={`${toStringValue(event.event)}-${toStringValue(event.timestamp)}`}
-                                className="rounded-xl border border-[#ecebe8] bg-white p-3"
-                              >
-                                <div className="flex flex-wrap items-center justify-between gap-2">
-                                  <div className="flex flex-wrap items-center gap-2">
-                                    <p className="font-mono text-[11px] text-[#37352f]">
-                                      {toStringValue(event.event, "unknown_event")}
-                                    </p>
-                                    <Badge
-                                      variant="outline"
-                                      className="rounded-full border-[#e5e5e3] bg-[#fafaf9] px-2.5 py-1 text-[11px] font-medium text-[#37352f]"
-                                    >
-                                      {eventFamily(toStringValue(event.event))}
-                                    </Badge>
-                                  </div>
-                                  <Badge
-                                    variant="outline"
-                                    className={`rounded-full px-2.5 py-1 text-[11px] font-medium capitalize ${passStatusClass(toStringValue(event.status, "unknown"))}`}
+                              (() => {
+                                const eventApprovalId = toStringValue(event.approval_id);
+                                const eventIssueId = toStringValue(event.issue_id);
+                                const eventProjectId = toStringValue(event.project_id);
+                                const eventRuntimeAgentIds = [
+                                  toStringValue(event.runtime_agent_id),
+                                  ...toStringArray(event.runtime_agent_ids),
+                                ].filter(Boolean);
+                                return (
+                                  <div
+                                    key={`${toStringValue(event.event)}-${toStringValue(event.timestamp)}`}
+                                    className="rounded-xl border border-[#ecebe8] bg-white p-3"
                                   >
-                                    {toStringValue(event.status, "unknown")}
-                                  </Badge>
-                                </div>
-                                <p className="mt-2 text-[13px] text-[#6b6b6b]">
-                                  {toStringValue(event.message, "No event message")}
-                                </p>
-                                <p className="mt-2 text-[12px] text-[#9b9a97]">
-                                  {formatTimestamp(toStringValue(event.timestamp))}
-                                </p>
-                              </div>
+                                    <div className="flex flex-wrap items-center justify-between gap-2">
+                                      <div className="flex flex-wrap items-center gap-2">
+                                        <p className="font-mono text-[11px] text-[#37352f]">
+                                          {toStringValue(event.event, "unknown_event")}
+                                        </p>
+                                        <Badge
+                                          variant="outline"
+                                          className="rounded-full border-[#e5e5e3] bg-[#fafaf9] px-2.5 py-1 text-[11px] font-medium text-[#37352f]"
+                                        >
+                                          {eventFamily(toStringValue(event.event))}
+                                        </Badge>
+                                      </div>
+                                      <Badge
+                                        variant="outline"
+                                        className={`rounded-full px-2.5 py-1 text-[11px] font-medium capitalize ${passStatusClass(toStringValue(event.status, "unknown"))}`}
+                                      >
+                                        {toStringValue(event.status, "unknown")}
+                                      </Badge>
+                                    </div>
+                                    <p className="mt-2 text-[13px] text-[#6b6b6b]">
+                                      {toStringValue(event.message, "No event message")}
+                                    </p>
+                                    {(eventProjectId ||
+                                      toNullableNumber(event.story_id) ||
+                                      eventApprovalId ||
+                                      eventIssueId ||
+                                      eventRuntimeAgentIds.length > 0) && (
+                                      <div className="mt-3 flex flex-wrap gap-2">
+                                        {eventProjectId && (
+                                          <Link
+                                            href={`/projects/${eventProjectId}`}
+                                            className="inline-flex h-7 items-center rounded-full border border-[#e5e5e3] bg-[#fafaf9] px-2.5 text-[11px] font-medium text-[#37352f] transition-colors hover:bg-[#f7f7f5]"
+                                          >
+                                            project {eventProjectId}
+                                          </Link>
+                                        )}
+                                        {toNullableNumber(event.story_id) && eventProjectId && (
+                                          <Link
+                                            href={`/projects/${eventProjectId}?storyId=${toNullableNumber(event.story_id)}`}
+                                            className="inline-flex h-7 items-center rounded-full border border-[#d3e5ef] bg-[#eef7fb] px-2.5 text-[11px] font-medium text-[#2a6690] transition-colors hover:bg-[#e3f2f8]"
+                                          >
+                                            story {toNullableNumber(event.story_id)}
+                                          </Link>
+                                        )}
+                                        {eventApprovalId && (
+                                          <Button
+                                            size="sm"
+                                            variant="outline"
+                                            className="h-7 rounded-full border-[#d3e5ef] bg-[#eef7fb] px-2.5 text-[11px] text-[#2a6690] hover:bg-[#e3f2f8]"
+                                            onClick={() => {
+                                              setEntitySearch(eventApprovalId);
+                                            }}
+                                          >
+                                            approval {eventApprovalId}
+                                          </Button>
+                                        )}
+                                        {eventIssueId && (
+                                          <Button
+                                            size="sm"
+                                            variant="outline"
+                                            className="h-7 rounded-full border-[#f4e0c4] bg-[#fff6e8] px-2.5 text-[11px] text-[#9a6700] hover:bg-[#fff0d9]"
+                                            onClick={() => {
+                                              setEntitySearch(eventIssueId);
+                                            }}
+                                          >
+                                            issue {eventIssueId}
+                                          </Button>
+                                        )}
+                                        {eventRuntimeAgentIds.slice(0, 2).map((runtimeAgentId) => (
+                                          <Button
+                                            key={`${toStringValue(event.event)}-${runtimeAgentId}`}
+                                            size="sm"
+                                            variant="outline"
+                                            className="h-7 rounded-full border-[#e5e5e3] bg-white px-2.5 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
+                                            onClick={() => {
+                                              setEntitySearch(runtimeAgentId);
+                                            }}
+                                          >
+                                            {runtimeAgentId}
+                                          </Button>
+                                        ))}
+                                      </div>
+                                    )}
+                                    <p className="mt-2 text-[12px] text-[#9b9a97]">
+                                      {formatTimestamp(toStringValue(event.timestamp))}
+                                    </p>
+                                  </div>
+                                );
+                              })()
                             ))}
                           </div>
                         )}
@@ -2258,14 +2668,18 @@ export default function ControlPlanePage() {
                             variant="outline"
                             className="rounded-full border-[#e5e5e3] bg-white px-2.5 py-1 text-[11px] font-medium text-[#37352f]"
                           >
-                            {linkedApprovals.length}
+                            {filteredApprovals.length}
                           </Badge>
                         </div>
-                        {linkedApprovals.length === 0 ? (
-                          <p className="mt-3 text-[13px] text-[#9b9a97]">No linked approvals.</p>
+                        {filteredApprovals.length === 0 ? (
+                          <p className="mt-3 text-[13px] text-[#9b9a97]">
+                            {linkedApprovals.length
+                              ? "No approvals match the current search."
+                              : "No linked approvals."}
+                          </p>
                         ) : (
                           <div className="mt-3 space-y-3">
-                            {linkedApprovals.slice(0, 6).map((approval) => (
+                            {filteredApprovals.slice(0, 6).map((approval) => (
                               <div
                                 key={`${selectedSession.id}-approval-${approval.id}`}
                                 className="rounded-xl border border-[#ecebe8] bg-white p-3"
@@ -2295,8 +2709,33 @@ export default function ControlPlanePage() {
                                     <p className="mt-2 text-[12px] text-[#9b9a97]">
                                       Requested by {approval.requested_by || "unknown"} · {formatTimestamp(approval.created_at)}
                                     </p>
-                                    {approval.policy_reasons.length > 0 && (
+                                    {(approval.policy_reasons.length > 0 || approval.issue_id || approval.runtime_agent_ids.length > 0) && (
                                       <div className="mt-2 flex flex-wrap gap-2">
+                                        {approval.issue_id && (
+                                          <Button
+                                            size="sm"
+                                            variant="outline"
+                                            className="h-7 rounded-full border-[#d3e5ef] bg-[#eef7fb] px-2.5 text-[11px] text-[#2a6690] hover:bg-[#e3f2f8]"
+                                            onClick={() => {
+                                              setEntitySearch(approval.issue_id);
+                                            }}
+                                          >
+                                            issue {approval.issue_id}
+                                          </Button>
+                                        )}
+                                        {approval.runtime_agent_ids.slice(0, 2).map((runtimeAgentId) => (
+                                          <Button
+                                            key={`${approval.id}-${runtimeAgentId}`}
+                                            size="sm"
+                                            variant="outline"
+                                            className="h-7 rounded-full border-[#e5e5e3] bg-white px-2.5 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
+                                            onClick={() => {
+                                              setEntitySearch(runtimeAgentId);
+                                            }}
+                                          >
+                                            {runtimeAgentId}
+                                          </Button>
+                                        ))}
                                         {approval.policy_reasons.slice(0, 3).map((reason) => (
                                           <Badge
                                             key={`${approval.id}-${reason}`}
@@ -2364,14 +2803,18 @@ export default function ControlPlanePage() {
                             variant="outline"
                             className="rounded-full border-[#e5e5e3] bg-white px-2.5 py-1 text-[11px] font-medium text-[#37352f]"
                           >
-                            {linkedIssues.length}
+                            {filteredIssues.length}
                           </Badge>
                         </div>
-                        {linkedIssues.length === 0 ? (
-                          <p className="mt-3 text-[13px] text-[#9b9a97]">No linked issues.</p>
+                        {filteredIssues.length === 0 ? (
+                          <p className="mt-3 text-[13px] text-[#9b9a97]">
+                            {linkedIssues.length
+                              ? "No issues match the current search."
+                              : "No linked issues."}
+                          </p>
                         ) : (
                           <div className="mt-3 space-y-3">
-                            {linkedIssues.slice(0, 6).map((issue) => (
+                            {filteredIssues.slice(0, 6).map((issue) => (
                               <div
                                 key={`${selectedSession.id}-issue-${issue.id}`}
                                 className="rounded-xl border border-[#ecebe8] bg-white p-3"
@@ -2411,6 +2854,40 @@ export default function ControlPlanePage() {
                                       {formatTimestamp(issue.created_at)}
                                       {issue.related_command ? ` · command ${issue.related_command}` : ""}
                                     </p>
+                                    {(issue.approval_id || issue.runtime_agent_ids.length > 0 || issue.runtime_agent_id) && (
+                                      <div className="mt-2 flex flex-wrap gap-2">
+                                        {issue.approval_id && (
+                                          <Button
+                                            size="sm"
+                                            variant="outline"
+                                            className="h-7 rounded-full border-[#d3e5ef] bg-[#eef7fb] px-2.5 text-[11px] text-[#2a6690] hover:bg-[#e3f2f8]"
+                                            onClick={() => {
+                                              setEntitySearch(issue.approval_id);
+                                            }}
+                                          >
+                                            approval {issue.approval_id}
+                                          </Button>
+                                        )}
+                                        {(issue.runtime_agent_ids.length > 0
+                                          ? issue.runtime_agent_ids.slice(0, 2)
+                                          : issue.runtime_agent_id
+                                            ? [issue.runtime_agent_id]
+                                            : []
+                                        ).map((runtimeAgentId) => (
+                                          <Button
+                                            key={`${issue.id}-${runtimeAgentId}`}
+                                            size="sm"
+                                            variant="outline"
+                                            className="h-7 rounded-full border-[#e5e5e3] bg-white px-2.5 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
+                                            onClick={() => {
+                                              setEntitySearch(runtimeAgentId);
+                                            }}
+                                          >
+                                            {runtimeAgentId}
+                                          </Button>
+                                        ))}
+                                      </div>
+                                    )}
                                   </div>
                                   <div className="flex flex-wrap gap-2">
                                     {issue.status === "open" && (
