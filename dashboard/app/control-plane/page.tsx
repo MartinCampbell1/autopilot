@@ -61,6 +61,7 @@ const LINEAGE_QUEUE_STORAGE_PREFIX = "control-plane:lineage-queue:";
 const AGENT_TIMELINE_STORAGE_PREFIX = "control-plane:agent-timeline:";
 const TRIAGE_INBOX_FEEDBACK_LIMIT = 5;
 const SESSION_LINEAGE_QUEUE_KEYS: LineageQueueKind[] = ["attention", "decisions"];
+const AGENT_PRIORITY_QUEUE_KEYS = ["critical", "high"] as const;
 
 type AgentScopedOutcome = {
   run: ExecutionAgentActionRunRecord;
@@ -1511,6 +1512,9 @@ export default function ControlPlanePage() {
   const [expandedSessionLineageQueues, setExpandedSessionLineageQueues] = useState<
     LineageQueueKind[]
   >([...SESSION_LINEAGE_QUEUE_KEYS]);
+  const [expandedAgentPriorityQueues, setExpandedAgentPriorityQueues] = useState<
+    Array<(typeof AGENT_PRIORITY_QUEUE_KEYS)[number]>
+  >([...AGENT_PRIORITY_QUEUE_KEYS]);
   const [historySearch, setHistorySearch] = useState("");
   const [entitySearch, setEntitySearch] = useState("");
   const [refreshing, setRefreshing] = useState(false);
@@ -3303,6 +3307,23 @@ export default function ControlPlanePage() {
     () => (selectedAgentTimelineEntry ? agentTimelinePriority(selectedAgentTimelineEntry) : null),
     [selectedAgentTimelineEntry]
   );
+  const currentAgentPriorityQueue = useMemo<
+    (typeof AGENT_PRIORITY_QUEUE_KEYS)[number] | ""
+  >(() => {
+    if (selectedAgentTimelinePriority === "critical" || selectedAgentTimelinePriority === "high") {
+      return selectedAgentTimelinePriority;
+    }
+    if (filteredAgentTimelineEntries.some((entry) => agentTimelinePriority(entry) === "critical")) {
+      return "critical";
+    }
+    if (filteredAgentTimelineEntries.some((entry) => agentTimelinePriority(entry) === "high")) {
+      return "high";
+    }
+    return "";
+  }, [
+    filteredAgentTimelineEntries,
+    selectedAgentTimelinePriority,
+  ]);
   const criticalAgentTimelineEntries = useMemo(
     () =>
       filteredAgentTimelineEntries.filter(
@@ -3363,6 +3384,30 @@ export default function ControlPlanePage() {
       ),
     [filteredAgentTimelineEntries, selectedAgentTimelineEntry]
   );
+  const toggleAgentPriorityQueueExpansion = useCallback(
+    (priority: (typeof AGENT_PRIORITY_QUEUE_KEYS)[number]) => {
+      setExpandedAgentPriorityQueues((current) =>
+        current.includes(priority)
+          ? current.filter((key) => key !== priority)
+          : [...current, priority]
+      );
+    },
+    []
+  );
+  const expandAllAgentPriorityQueues = useCallback(() => {
+    setExpandedAgentPriorityQueues([...AGENT_PRIORITY_QUEUE_KEYS]);
+  }, []);
+  const collapseAllAgentPriorityQueues = useCallback(() => {
+    setExpandedAgentPriorityQueues([]);
+  }, []);
+  const openCurrentAgentPriorityQueue = useCallback(() => {
+    if (!currentAgentPriorityQueue) return;
+    setExpandedAgentPriorityQueues((current) =>
+      current.includes(currentAgentPriorityQueue)
+        ? current
+        : [...current, currentAgentPriorityQueue]
+    );
+  }, [currentAgentPriorityQueue]);
   const selectedAgentTimelineEntryKeyValue = selectedAgentTimelineEntry
     ? agentTimelineEntryKey(selectedAgentTimelineEntry)
     : "";
@@ -3578,6 +3623,9 @@ export default function ControlPlanePage() {
   useEffect(() => {
     setExpandedSessionLineageQueues([...SESSION_LINEAGE_QUEUE_KEYS]);
   }, [selectedSessionId]);
+  useEffect(() => {
+    setExpandedAgentPriorityQueues([...AGENT_PRIORITY_QUEUE_KEYS]);
+  }, [selectedAgentId]);
   useEffect(() => {
     const availableKeys = groupedRecentTriageInboxFeedback.map((group) => group.itemKey);
     setExpandedTriageInboxResultGroups((current) => {
@@ -6547,6 +6595,41 @@ export default function ControlPlanePage() {
                                 >
                                   Inspect next high
                                 </Button>
+                                <Badge
+                                  variant="outline"
+                                  className="rounded-full border-[#e5e5e3] bg-white px-2.5 py-1 text-[11px] font-medium text-[#37352f]"
+                                >
+                                  {expandedAgentPriorityQueues.length}/{AGENT_PRIORITY_QUEUE_KEYS.length} open
+                                </Badge>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  className="h-7 rounded-lg border-[#e5e5e3] bg-white px-2 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
+                                  onClick={expandAllAgentPriorityQueues}
+                                  disabled={
+                                    expandedAgentPriorityQueues.length >= AGENT_PRIORITY_QUEUE_KEYS.length
+                                  }
+                                >
+                                  Expand all
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  className="h-7 rounded-lg border-[#e5e5e3] bg-white px-2 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
+                                  onClick={collapseAllAgentPriorityQueues}
+                                  disabled={!expandedAgentPriorityQueues.length}
+                                >
+                                  Collapse all
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  className="h-7 rounded-lg border-[#e5e5e3] bg-white px-2 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
+                                  onClick={openCurrentAgentPriorityQueue}
+                                  disabled={!currentAgentPriorityQueue}
+                                >
+                                  Open current queue
+                                </Button>
                               </div>
                             </div>
                             <div className="mt-3 grid gap-3 xl:grid-cols-2">
@@ -6609,9 +6692,35 @@ export default function ControlPlanePage() {
                                       >
                                         {queue.buttonLabel}
                                       </Button>
+                                      <Button
+                                        size="sm"
+                                        variant="outline"
+                                        className="h-7 rounded-lg border-[#e5e5e3] bg-white px-2 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
+                                        onClick={() => {
+                                          toggleAgentPriorityQueueExpansion(
+                                            queue.key as (typeof AGENT_PRIORITY_QUEUE_KEYS)[number]
+                                          );
+                                        }}
+                                      >
+                                        {expandedAgentPriorityQueues.includes(
+                                          queue.key as (typeof AGENT_PRIORITY_QUEUE_KEYS)[number]
+                                        )
+                                          ? "Collapse"
+                                          : "Expand"}
+                                      </Button>
                                     </div>
                                   </div>
-                                  {!queue.entries.length ? (
+                                  {!expandedAgentPriorityQueues.includes(
+                                    queue.key as (typeof AGENT_PRIORITY_QUEUE_KEYS)[number]
+                                  ) ? (
+                                    <p className="mt-3 text-[12px] text-[#9b9a97]">
+                                      {queue.total
+                                        ? `${queue.total} visible queue item${
+                                            queue.total === 1 ? "" : "s"
+                                          } hidden`
+                                        : "Queue collapsed."}
+                                    </p>
+                                  ) : !queue.entries.length ? (
                                     <p className="mt-3 text-[12px] text-[#9b9a97]">
                                       No {queue.key} entries in the current slice.
                                     </p>
