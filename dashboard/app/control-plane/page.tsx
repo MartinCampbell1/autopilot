@@ -1441,6 +1441,72 @@ function SessionMetric({
   );
 }
 
+function QueueGroupControls({
+  title,
+  detail,
+  openCount,
+  totalCount,
+  onExpandAll,
+  onCollapseAll,
+  onOpenCurrent,
+  canOpenCurrent,
+}: {
+  title: string;
+  detail: string;
+  openCount: number;
+  totalCount: number;
+  onExpandAll: () => void;
+  onCollapseAll: () => void;
+  onOpenCurrent: () => void;
+  canOpenCurrent: boolean;
+}) {
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-[#ecebe8] bg-[#fbfbf9] p-3">
+      <div>
+        <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#9b9a97]">
+          {title}
+        </p>
+        <p className="mt-1 text-[12px] text-[#787774]">{detail}</p>
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <Badge
+          variant="outline"
+          className="rounded-full border-[#e5e5e3] bg-white px-2.5 py-1 text-[11px] font-medium text-[#37352f]"
+        >
+          {openCount}/{totalCount} open
+        </Badge>
+        <Button
+          size="sm"
+          variant="outline"
+          className="h-7 rounded-lg border-[#e5e5e3] bg-white px-2 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
+          onClick={onExpandAll}
+          disabled={openCount >= totalCount}
+        >
+          Expand all
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          className="h-7 rounded-lg border-[#e5e5e3] bg-white px-2 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
+          onClick={onCollapseAll}
+          disabled={!openCount}
+        >
+          Collapse all
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          className="h-7 rounded-lg border-[#e5e5e3] bg-white px-2 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
+          onClick={onOpenCurrent}
+          disabled={!canOpenCurrent}
+        >
+          Open current queue
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 export default function ControlPlanePage() {
   const [health, setHealth] = useState<AccountHealth | null>(null);
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
@@ -4980,55 +5046,16 @@ export default function ControlPlanePage() {
                           </div>
                         </div>
                         <div className="space-y-3">
-                          <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-[#ecebe8] bg-[#fbfbf9] p-3">
-                            <div>
-                              <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#9b9a97]">
-                                Queue Groups
-                              </p>
-                              <p className="mt-1 text-[12px] text-[#787774]">
-                                Attention and decision queues now share the same group controls as
-                                the inbox.
-                              </p>
-                            </div>
-                            <div className="flex flex-wrap items-center gap-2">
-                              <Badge
-                                variant="outline"
-                                className="rounded-full border-[#e5e5e3] bg-white px-2.5 py-1 text-[11px] font-medium text-[#37352f]"
-                              >
-                                {expandedSessionLineageQueues.length}/{SESSION_LINEAGE_QUEUE_KEYS.length} open
-                              </Badge>
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                className="h-7 rounded-lg border-[#e5e5e3] bg-white px-2 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
-                                onClick={expandAllSessionLineageQueues}
-                                disabled={
-                                  expandedSessionLineageQueues.length >=
-                                  SESSION_LINEAGE_QUEUE_KEYS.length
-                                }
-                              >
-                                Expand all
-                              </Button>
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                className="h-7 rounded-lg border-[#e5e5e3] bg-white px-2 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
-                                onClick={collapseAllSessionLineageQueues}
-                                disabled={!expandedSessionLineageQueues.length}
-                              >
-                                Collapse all
-                              </Button>
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                className="h-7 rounded-lg border-[#e5e5e3] bg-white px-2 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
-                                onClick={openCurrentSessionLineageQueue}
-                                disabled={!currentSessionLineageQueue}
-                              >
-                                Open current queue
-                              </Button>
-                            </div>
-                          </div>
+                          <QueueGroupControls
+                            title="Queue Groups"
+                            detail="Attention and decision queues now share the same group controls as the inbox."
+                            openCount={expandedSessionLineageQueues.length}
+                            totalCount={SESSION_LINEAGE_QUEUE_KEYS.length}
+                            onExpandAll={expandAllSessionLineageQueues}
+                            onCollapseAll={collapseAllSessionLineageQueues}
+                            onOpenCurrent={openCurrentSessionLineageQueue}
+                            canOpenCurrent={Boolean(currentSessionLineageQueue)}
+                          />
                           <div className="grid gap-3 xl:grid-cols-2">
                             <div className="rounded-xl border border-[#ecebe8] bg-white p-3">
                             <div className="flex flex-wrap items-center justify-between gap-3">
@@ -6595,42 +6622,19 @@ export default function ControlPlanePage() {
                                 >
                                   Inspect next high
                                 </Button>
-                                <Badge
-                                  variant="outline"
-                                  className="rounded-full border-[#e5e5e3] bg-white px-2.5 py-1 text-[11px] font-medium text-[#37352f]"
-                                >
-                                  {expandedAgentPriorityQueues.length}/{AGENT_PRIORITY_QUEUE_KEYS.length} open
-                                </Badge>
-                                <Button
-                                  size="sm"
-                                  variant="outline"
-                                  className="h-7 rounded-lg border-[#e5e5e3] bg-white px-2 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
-                                  onClick={expandAllAgentPriorityQueues}
-                                  disabled={
-                                    expandedAgentPriorityQueues.length >= AGENT_PRIORITY_QUEUE_KEYS.length
-                                  }
-                                >
-                                  Expand all
-                                </Button>
-                                <Button
-                                  size="sm"
-                                  variant="outline"
-                                  className="h-7 rounded-lg border-[#e5e5e3] bg-white px-2 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
-                                  onClick={collapseAllAgentPriorityQueues}
-                                  disabled={!expandedAgentPriorityQueues.length}
-                                >
-                                  Collapse all
-                                </Button>
-                                <Button
-                                  size="sm"
-                                  variant="outline"
-                                  className="h-7 rounded-lg border-[#e5e5e3] bg-white px-2 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
-                                  onClick={openCurrentAgentPriorityQueue}
-                                  disabled={!currentAgentPriorityQueue}
-                                >
-                                  Open current queue
-                                </Button>
                               </div>
+                            </div>
+                            <div className="mt-3">
+                              <QueueGroupControls
+                                title="Queue Groups"
+                                detail="Critical and high slices now share the same group controls as the other triage surfaces."
+                                openCount={expandedAgentPriorityQueues.length}
+                                totalCount={AGENT_PRIORITY_QUEUE_KEYS.length}
+                                onExpandAll={expandAllAgentPriorityQueues}
+                                onCollapseAll={collapseAllAgentPriorityQueues}
+                                onOpenCurrent={openCurrentAgentPriorityQueue}
+                                canOpenCurrent={Boolean(currentAgentPriorityQueue)}
+                              />
                             </div>
                             <div className="mt-3 grid gap-3 xl:grid-cols-2">
                               {[
