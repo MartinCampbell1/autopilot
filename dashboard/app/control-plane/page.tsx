@@ -636,6 +636,24 @@ function matchesAgentTimelineFilter(entry: AgentTimelineEntry, filter: string): 
   return true;
 }
 
+function matchesSessionLineageFilter(entry: SessionLineageEntry, filter: string): boolean {
+  if (filter === "all") return true;
+  const status = entry.status.toLowerCase();
+  const eventStatus = toStringValue(asRecord(entry.event)?.status).toLowerCase();
+  if (filter === "attention") {
+    return (
+      Boolean(entry.issueId) ||
+      ["error", "partial", "pending_approval", "failed", "rejected", "blocked", "not_executable"].includes(
+        status
+      ) ||
+      ["error", "partial", "pending_approval", "failed"].includes(eventStatus)
+    );
+  }
+  if (filter === "decisions") return Boolean(entry.approvalId || entry.issueId);
+  if (filter === "agent-linked") return Boolean(entry.runtimeAgentId);
+  return true;
+}
+
 function runMatchesSearch(run: ExecutionAgentActionRunRecord, query: string): boolean {
   return matchesSearch(
     [
@@ -1086,6 +1104,7 @@ export default function ControlPlanePage() {
   const [agentLoading, setAgentLoading] = useState(false);
   const [runFilter, setRunFilter] = useState("all");
   const [eventFilter, setEventFilter] = useState("all");
+  const [sessionLineageFilter, setSessionLineageFilter] = useState("all");
   const [agentActivityFilter, setAgentActivityFilter] = useState("all");
   const [agentActivitySearch, setAgentActivitySearch] = useState("");
   const [agentTimelineFilter, setAgentTimelineFilter] = useState("all");
@@ -1799,15 +1818,22 @@ export default function ControlPlanePage() {
     }
     return sessionLineageEntries[0] ?? null;
   }, [selectedRunId, selectedRunResultIndex, sessionLineageEntries]);
+  const filteredSessionLineageEntries = useMemo(
+    () =>
+      sessionLineageEntries.filter((entry) =>
+        matchesSessionLineageFilter(entry, sessionLineageFilter)
+      ),
+    [sessionLineageEntries, sessionLineageFilter]
+  );
   const visibleSessionLineageEntries = useMemo(
     () =>
       withSelectedItem(
-        sessionLineageEntries,
+        filteredSessionLineageEntries,
         selectedSessionLineageEntry,
         6,
         (entry) => entry.key
       ),
-    [selectedSessionLineageEntry, sessionLineageEntries]
+    [filteredSessionLineageEntries, selectedSessionLineageEntry]
   );
   const sessionLineageStatusCounts = useMemo(
     () =>
@@ -1822,12 +1848,21 @@ export default function ControlPlanePage() {
       sessionLineageEntries.filter((entry) => entry.approvalId || entry.issueId).length,
     [sessionLineageEntries]
   );
+  const sessionLineageAttentionCount = useMemo(
+    () =>
+      sessionLineageEntries.filter((entry) => matchesSessionLineageFilter(entry, "attention")).length,
+    [sessionLineageEntries]
+  );
   const sessionLineageEventCount = useMemo(
     () => sessionLineageEntries.filter((entry) => entry.eventKey).length,
     [sessionLineageEntries]
   );
   const sessionLineageAgentCount = useMemo(
     () => new Set(sessionLineageEntries.map((entry) => entry.runtimeAgentId).filter(Boolean)).size,
+    [sessionLineageEntries]
+  );
+  const sessionLineageAgentLinkedCount = useMemo(
+    () => sessionLineageEntries.filter((entry) => entry.runtimeAgentId).length,
     [sessionLineageEntries]
   );
   const syncLinkedSelection = useCallback(
@@ -3140,68 +3175,210 @@ export default function ControlPlanePage() {
                       />
 
                       <div className="rounded-2xl border border-[#ecebe8] bg-[#fbfbf9] p-4">
-                        <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#9b9a97]">
-                          Recent Chains
-                        </p>
-                        <div className="mt-3 space-y-3">
-                          {visibleSessionLineageEntries.map((entry) => {
-                            const selected =
-                              selectedSessionLineageEntry?.key === entry.key;
-                            const workspaceHref =
-                              entry.projectId && entry.storyId
-                                ? `/projects/${entry.projectId}?storyId=${entry.storyId}`
-                                : entry.projectId
-                                  ? `/projects/${entry.projectId}`
-                                  : "";
-                            return (
-                              <div
-                                key={entry.key}
-                                className={`rounded-xl border p-3 ${
-                                  selected
-                                    ? "border-[#d3e5ef] bg-[#f7fbfd]"
-                                    : "border-[#ecebe8] bg-white"
-                                }`}
-                              >
-                                <div className="flex flex-wrap items-start justify-between gap-3">
-                                  <div>
-                                    <p className="text-[13px] font-semibold text-[#37352f]">
-                                      {entry.title}
-                                    </p>
-                                    <p className="mt-2 text-[12px] text-[#787774]">
-                                      {entry.subtitle || "No outcome subtype"}
-                                    </p>
+                        <div className="flex items-center justify-between gap-3">
+                          <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#9b9a97]">
+                            Recent Chains
+                          </p>
+                          <Badge
+                            variant="outline"
+                            className="rounded-full border-[#e5e5e3] bg-white px-2.5 py-1 text-[11px] font-medium text-[#37352f]"
+                          >
+                            {filteredSessionLineageEntries.length}
+                          </Badge>
+                        </div>
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          <FilterChip
+                            label="All"
+                            active={sessionLineageFilter === "all"}
+                            count={sessionLineageEntries.length}
+                            onClick={() => {
+                              setSessionLineageFilter("all");
+                            }}
+                          />
+                          <FilterChip
+                            label="Attention"
+                            active={sessionLineageFilter === "attention"}
+                            count={sessionLineageAttentionCount}
+                            onClick={() => {
+                              setSessionLineageFilter("attention");
+                            }}
+                          />
+                          <FilterChip
+                            label="Decisions"
+                            active={sessionLineageFilter === "decisions"}
+                            count={sessionLineageDecisionCount}
+                            onClick={() => {
+                              setSessionLineageFilter("decisions");
+                            }}
+                          />
+                          <FilterChip
+                            label="Agent-linked"
+                            active={sessionLineageFilter === "agent-linked"}
+                            count={sessionLineageAgentLinkedCount}
+                            onClick={() => {
+                              setSessionLineageFilter("agent-linked");
+                            }}
+                          />
+                        </div>
+                        {!filteredSessionLineageEntries.length ? (
+                          <p className="mt-3 text-[13px] text-[#9b9a97]">
+                            No lineage chains match the current focus mode.
+                          </p>
+                        ) : (
+                          <div className="mt-3 space-y-3">
+                            {visibleSessionLineageEntries.map((entry) => {
+                              const selected =
+                                selectedSessionLineageEntry?.key === entry.key;
+                              const workspaceHref =
+                                entry.projectId && entry.storyId
+                                  ? `/projects/${entry.projectId}?storyId=${entry.storyId}`
+                                  : entry.projectId
+                                    ? `/projects/${entry.projectId}`
+                                    : "";
+                              return (
+                                <div
+                                  key={entry.key}
+                                  className={`rounded-xl border p-3 ${
+                                    selected
+                                      ? "border-[#d3e5ef] bg-[#f7fbfd]"
+                                      : "border-[#ecebe8] bg-white"
+                                  }`}
+                                >
+                                  <div className="flex flex-wrap items-start justify-between gap-3">
+                                    <div>
+                                      <p className="text-[13px] font-semibold text-[#37352f]">
+                                        {entry.title}
+                                      </p>
+                                      <p className="mt-2 text-[12px] text-[#787774]">
+                                        {entry.subtitle || "No outcome subtype"}
+                                      </p>
+                                    </div>
+                                    <div className="flex flex-wrap items-center gap-2">
+                                      <Badge
+                                        variant="outline"
+                                        className={`rounded-full px-2.5 py-1 text-[11px] font-semibold capitalize ${passStatusClass(entry.status)}`}
+                                      >
+                                        {entry.status}
+                                      </Badge>
+                                      <p className="text-[11px] text-[#9b9a97]">
+                                        {formatTimestamp(entry.timestamp)}
+                                      </p>
+                                    </div>
                                   </div>
-                                  <div className="flex flex-wrap items-center gap-2">
-                                    <Badge
-                                      variant="outline"
-                                      className={`rounded-full px-2.5 py-1 text-[11px] font-semibold capitalize ${passStatusClass(entry.status)}`}
-                                    >
-                                      {entry.status}
-                                    </Badge>
-                                    <p className="text-[11px] text-[#9b9a97]">
-                                      {formatTimestamp(entry.timestamp)}
-                                    </p>
-                                  </div>
-                                </div>
 
-                                <RelationshipStrip
-                                  label="Lineage Chain"
-                                  items={[
-                                    {
-                                      key: `lineage-run-${entry.runId}`,
-                                      label: `run ${entry.runId}`,
-                                      tone: "run",
-                                      onClick: () => {
-                                        setSelectedRunId(entry.runId);
-                                        setSelectedRunResultIndex(0);
+                                  <RelationshipStrip
+                                    label="Lineage Chain"
+                                    items={[
+                                      {
+                                        key: `lineage-run-${entry.runId}`,
+                                        label: `run ${entry.runId}`,
+                                        tone: "run",
+                                        onClick: () => {
+                                          setSelectedRunId(entry.runId);
+                                          setSelectedRunResultIndex(0);
+                                        },
                                       },
-                                    },
-                                    {
-                                      key: `lineage-outcome-${entry.key}`,
-                                      label: `outcome ${entry.resultIndex + 1}`,
-                                      tone: "outcome",
-                                      active: selected,
-                                      onClick: () => {
+                                      {
+                                        key: `lineage-outcome-${entry.key}`,
+                                        label: `outcome ${entry.resultIndex + 1}`,
+                                        tone: "outcome",
+                                        active: selected,
+                                        onClick: () => {
+                                          syncLinkedSelection({
+                                            runId: entry.runId,
+                                            resultIndex: entry.resultIndex,
+                                            approvalId: entry.approvalId,
+                                            issueId: entry.issueId,
+                                            runtimeAgentId: entry.runtimeAgentId,
+                                            event: entry.event,
+                                          });
+                                        },
+                                      },
+                                      entry.approvalId
+                                        ? {
+                                            key: `lineage-approval-${entry.approvalId}`,
+                                            label: `approval ${entry.approvalId}`,
+                                            tone: "approval" as const,
+                                            onClick: () => {
+                                              syncLinkedSelection({
+                                                runId: entry.runId,
+                                                resultIndex: entry.resultIndex,
+                                                approvalId: entry.approvalId,
+                                                issueId: entry.issueId,
+                                                runtimeAgentId: entry.runtimeAgentId,
+                                                event: entry.event,
+                                              });
+                                            },
+                                          }
+                                        : null,
+                                      entry.issueId
+                                        ? {
+                                            key: `lineage-issue-${entry.issueId}`,
+                                            label: `issue ${entry.issueId}`,
+                                            tone: "issue" as const,
+                                            onClick: () => {
+                                              syncLinkedSelection({
+                                                runId: entry.runId,
+                                                resultIndex: entry.resultIndex,
+                                                approvalId: entry.approvalId,
+                                                issueId: entry.issueId,
+                                                runtimeAgentId: entry.runtimeAgentId,
+                                                event: entry.event,
+                                              });
+                                            },
+                                          }
+                                        : null,
+                                      entry.eventKey
+                                        ? {
+                                            key: `lineage-event-${entry.eventKey}`,
+                                            label: `event ${entry.eventName || "event"}`,
+                                            tone: "event" as const,
+                                            onClick: () => {
+                                              syncLinkedSelection({
+                                                runId: entry.runId,
+                                                resultIndex: entry.resultIndex,
+                                                approvalId: entry.approvalId,
+                                                issueId: entry.issueId,
+                                                runtimeAgentId: entry.runtimeAgentId,
+                                                event: entry.event,
+                                              });
+                                            },
+                                          }
+                                        : null,
+                                      entry.runtimeAgentId
+                                        ? {
+                                            key: `lineage-agent-${entry.runtimeAgentId}`,
+                                            label: `agent ${entry.runtimeAgentId}`,
+                                            tone: "agent" as const,
+                                            onClick: () => {
+                                              syncLinkedSelection({
+                                                runId: entry.runId,
+                                                resultIndex: entry.resultIndex,
+                                                approvalId: entry.approvalId,
+                                                issueId: entry.issueId,
+                                                runtimeAgentId: entry.runtimeAgentId,
+                                                event: entry.event,
+                                              });
+                                            },
+                                          }
+                                        : null,
+                                    ].filter(Boolean) as RelationshipStripItem[]}
+                                  />
+
+                                  <p className="mt-3 text-[12px] text-[#6b6b6b]">
+                                    {entry.message}
+                                  </p>
+
+                                  <div className="mt-3 flex flex-wrap gap-2">
+                                    <Button
+                                      size="sm"
+                                      variant={selected ? "default" : "outline"}
+                                      className={`h-7 rounded-lg px-2 text-[11px] ${
+                                        selected
+                                          ? "bg-[#1a1a1a] text-white hover:bg-[#333]"
+                                          : "border-[#e5e5e3] bg-white text-[#37352f] hover:bg-[#f7f7f5]"
+                                      }`}
+                                      onClick={() => {
                                         syncLinkedSelection({
                                           runId: entry.runId,
                                           resultIndex: entry.resultIndex,
@@ -3210,118 +3387,24 @@ export default function ControlPlanePage() {
                                           runtimeAgentId: entry.runtimeAgentId,
                                           event: entry.event,
                                         });
-                                      },
-                                    },
-                                    entry.approvalId
-                                      ? {
-                                          key: `lineage-approval-${entry.approvalId}`,
-                                          label: `approval ${entry.approvalId}`,
-                                          tone: "approval" as const,
-                                          onClick: () => {
-                                            syncLinkedSelection({
-                                              runId: entry.runId,
-                                              resultIndex: entry.resultIndex,
-                                              approvalId: entry.approvalId,
-                                              issueId: entry.issueId,
-                                              runtimeAgentId: entry.runtimeAgentId,
-                                              event: entry.event,
-                                            });
-                                          },
-                                        }
-                                      : null,
-                                    entry.issueId
-                                      ? {
-                                          key: `lineage-issue-${entry.issueId}`,
-                                          label: `issue ${entry.issueId}`,
-                                          tone: "issue" as const,
-                                          onClick: () => {
-                                            syncLinkedSelection({
-                                              runId: entry.runId,
-                                              resultIndex: entry.resultIndex,
-                                              approvalId: entry.approvalId,
-                                              issueId: entry.issueId,
-                                              runtimeAgentId: entry.runtimeAgentId,
-                                              event: entry.event,
-                                            });
-                                          },
-                                        }
-                                      : null,
-                                    entry.eventKey
-                                      ? {
-                                          key: `lineage-event-${entry.eventKey}`,
-                                          label: `event ${entry.eventName || "event"}`,
-                                          tone: "event" as const,
-                                          onClick: () => {
-                                            syncLinkedSelection({
-                                              runId: entry.runId,
-                                              resultIndex: entry.resultIndex,
-                                              approvalId: entry.approvalId,
-                                              issueId: entry.issueId,
-                                              runtimeAgentId: entry.runtimeAgentId,
-                                              event: entry.event,
-                                            });
-                                          },
-                                        }
-                                      : null,
-                                    entry.runtimeAgentId
-                                      ? {
-                                          key: `lineage-agent-${entry.runtimeAgentId}`,
-                                          label: `agent ${entry.runtimeAgentId}`,
-                                          tone: "agent" as const,
-                                          onClick: () => {
-                                            syncLinkedSelection({
-                                              runId: entry.runId,
-                                              resultIndex: entry.resultIndex,
-                                              approvalId: entry.approvalId,
-                                              issueId: entry.issueId,
-                                              runtimeAgentId: entry.runtimeAgentId,
-                                              event: entry.event,
-                                            });
-                                          },
-                                        }
-                                      : null,
-                                  ].filter(Boolean) as RelationshipStripItem[]}
-                                />
-
-                                <p className="mt-3 text-[12px] text-[#6b6b6b]">
-                                  {entry.message}
-                                </p>
-
-                                <div className="mt-3 flex flex-wrap gap-2">
-                                  <Button
-                                    size="sm"
-                                    variant={selected ? "default" : "outline"}
-                                    className={`h-7 rounded-lg px-2 text-[11px] ${
-                                      selected
-                                        ? "bg-[#1a1a1a] text-white hover:bg-[#333]"
-                                        : "border-[#e5e5e3] bg-white text-[#37352f] hover:bg-[#f7f7f5]"
-                                    }`}
-                                    onClick={() => {
-                                      syncLinkedSelection({
-                                        runId: entry.runId,
-                                        resultIndex: entry.resultIndex,
-                                        approvalId: entry.approvalId,
-                                        issueId: entry.issueId,
-                                        runtimeAgentId: entry.runtimeAgentId,
-                                        event: entry.event,
-                                      });
-                                    }}
-                                  >
-                                    {selected ? "Selected" : "Inspect chain"}
-                                  </Button>
-                                  {workspaceHref && (
-                                    <Link
-                                      href={workspaceHref}
-                                      className="inline-flex h-7 items-center rounded-lg border border-[#e5e5e3] bg-white px-2 text-[11px] font-medium text-[#37352f] transition-colors hover:bg-[#f7f7f5]"
+                                      }}
                                     >
-                                      Open workspace
-                                    </Link>
-                                  )}
+                                      {selected ? "Selected" : "Inspect chain"}
+                                    </Button>
+                                    {workspaceHref && (
+                                      <Link
+                                        href={workspaceHref}
+                                        className="inline-flex h-7 items-center rounded-lg border border-[#e5e5e3] bg-white px-2 text-[11px] font-medium text-[#37352f] transition-colors hover:bg-[#f7f7f5]"
+                                      >
+                                        Open workspace
+                                      </Link>
+                                    )}
+                                  </div>
                                 </div>
-                              </div>
-                            );
-                          })}
-                        </div>
+                              );
+                            })}
+                          </div>
+                        )}
                       </div>
                     </div>
                   )}
