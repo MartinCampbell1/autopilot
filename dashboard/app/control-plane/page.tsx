@@ -791,6 +791,32 @@ function nextBestTriageItem<T>(
   return rankedEntries[currentIndex + 1] ?? rankedEntries[0] ?? null;
 }
 
+function triageQueuePosition<T>(
+  entries: T[],
+  current: T | null,
+  getKey: (entry: T) => string
+): number {
+  if (!current) return -1;
+  return entries.findIndex((entry) => getKey(entry) === getKey(current));
+}
+
+function nextTriageEntryByPriority<T>(
+  entries: T[],
+  current: T | null,
+  getKey: (entry: T) => string,
+  getPriority: (entry: T) => TriagePriority,
+  priority: TriagePriority
+): T | null {
+  const queue = entries.filter((entry) => getPriority(entry) === priority);
+  if (!queue.length) return null;
+  if (!current || getPriority(current) !== priority) {
+    return queue[0] ?? null;
+  }
+  const currentIndex = queue.findIndex((entry) => getKey(entry) === getKey(current));
+  if (currentIndex === -1) return queue[0] ?? null;
+  return queue[currentIndex + 1] ?? queue[0] ?? null;
+}
+
 function nextSessionLineageQueueEntry(
   entries: SessionLineageEntry[],
   current: SessionLineageEntry | null
@@ -3073,6 +3099,66 @@ export default function ControlPlanePage() {
   const selectedAgentTimelinePriority = useMemo(
     () => (selectedAgentTimelineEntry ? agentTimelinePriority(selectedAgentTimelineEntry) : null),
     [selectedAgentTimelineEntry]
+  );
+  const criticalAgentTimelineEntries = useMemo(
+    () =>
+      filteredAgentTimelineEntries.filter(
+        (entry) => agentTimelinePriority(entry) === "critical"
+      ),
+    [filteredAgentTimelineEntries]
+  );
+  const highAgentTimelineEntries = useMemo(
+    () =>
+      filteredAgentTimelineEntries.filter((entry) => agentTimelinePriority(entry) === "high"),
+    [filteredAgentTimelineEntries]
+  );
+  const criticalAgentTimelineQueue = useMemo(
+    () => criticalAgentTimelineEntries.slice(0, 2),
+    [criticalAgentTimelineEntries]
+  );
+  const highAgentTimelineQueue = useMemo(
+    () => highAgentTimelineEntries.slice(0, 2),
+    [highAgentTimelineEntries]
+  );
+  const criticalAgentTimelinePosition = useMemo(
+    () =>
+      triageQueuePosition(
+        criticalAgentTimelineEntries,
+        selectedAgentTimelineEntry,
+        agentTimelineEntryKey
+      ),
+    [criticalAgentTimelineEntries, selectedAgentTimelineEntry]
+  );
+  const highAgentTimelinePosition = useMemo(
+    () =>
+      triageQueuePosition(
+        highAgentTimelineEntries,
+        selectedAgentTimelineEntry,
+        agentTimelineEntryKey
+      ),
+    [highAgentTimelineEntries, selectedAgentTimelineEntry]
+  );
+  const nextCriticalAgentTimelineEntry = useMemo(
+    () =>
+      nextTriageEntryByPriority(
+        filteredAgentTimelineEntries,
+        selectedAgentTimelineEntry,
+        agentTimelineEntryKey,
+        agentTimelinePriority,
+        "critical"
+      ),
+    [filteredAgentTimelineEntries, selectedAgentTimelineEntry]
+  );
+  const nextHighAgentTimelineEntry = useMemo(
+    () =>
+      nextTriageEntryByPriority(
+        filteredAgentTimelineEntries,
+        selectedAgentTimelineEntry,
+        agentTimelineEntryKey,
+        agentTimelinePriority,
+        "high"
+      ),
+    [filteredAgentTimelineEntries, selectedAgentTimelineEntry]
   );
   const inspectAgentTimelineEntry = useCallback(
     (entry: AgentTimelineEntry) => {
@@ -5358,6 +5444,177 @@ export default function ControlPlanePage() {
                                   Reset timeline state
                                 </Button>
                               </div>
+                            </div>
+                          </div>
+                          <div className="rounded-xl border border-[#ecebe8] bg-white p-3">
+                            <div className="flex flex-wrap items-center justify-between gap-3">
+                              <div>
+                                <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#9b9a97]">
+                                  Priority Queue
+                                </p>
+                                <p className="mt-1 text-[12px] text-[#787774]">
+                                  Next-best triage for the current agent timeline slice.
+                                </p>
+                              </div>
+                              <div className="flex flex-wrap gap-2">
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  className="h-7 rounded-lg border-[#f0d0c9] bg-[#fff0ed] px-2 text-[11px] text-[#93370d] hover:bg-[#ffe5df]"
+                                  onClick={() => {
+                                    if (nextCriticalAgentTimelineEntry) {
+                                      inspectAgentTimelineEntry(nextCriticalAgentTimelineEntry);
+                                    }
+                                  }}
+                                  disabled={!nextCriticalAgentTimelineEntry}
+                                >
+                                  Inspect next critical
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  className="h-7 rounded-lg border-[#f4e0c4] bg-[#fff6e8] px-2 text-[11px] text-[#9a6700] hover:bg-[#fff0d9]"
+                                  onClick={() => {
+                                    if (nextHighAgentTimelineEntry) {
+                                      inspectAgentTimelineEntry(nextHighAgentTimelineEntry);
+                                    }
+                                  }}
+                                  disabled={!nextHighAgentTimelineEntry}
+                                >
+                                  Inspect next high
+                                </Button>
+                              </div>
+                            </div>
+                            <div className="mt-3 grid gap-3 xl:grid-cols-2">
+                              {[
+                                {
+                                  key: "critical",
+                                  label: "Critical Queue",
+                                  entries: criticalAgentTimelineQueue,
+                                  total: criticalAgentTimelineEntries.length,
+                                  position: criticalAgentTimelinePosition,
+                                  buttonLabel: "Inspect next critical",
+                                  nextEntry: nextCriticalAgentTimelineEntry,
+                                  buttonClassName:
+                                    "border-[#f0d0c9] bg-[#fff0ed] text-[#93370d] hover:bg-[#ffe5df]",
+                                },
+                                {
+                                  key: "high",
+                                  label: "High Queue",
+                                  entries: highAgentTimelineQueue,
+                                  total: highAgentTimelineEntries.length,
+                                  position: highAgentTimelinePosition,
+                                  buttonLabel: "Inspect next high",
+                                  nextEntry: nextHighAgentTimelineEntry,
+                                  buttonClassName:
+                                    "border-[#f4e0c4] bg-[#fff6e8] text-[#9a6700] hover:bg-[#fff0d9]",
+                                },
+                              ].map((queue) => (
+                                <div
+                                  key={`agent-priority-queue-${queue.key}`}
+                                  className="rounded-xl border border-[#ecebe8] bg-[#fbfbf9] p-3"
+                                >
+                                  <div className="flex flex-wrap items-center justify-between gap-2">
+                                    <div>
+                                      <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#9b9a97]">
+                                        {queue.label}
+                                      </p>
+                                      <p className="mt-1 text-[12px] text-[#787774]">
+                                        {queue.position >= 0
+                                          ? `Selected ${queue.position + 1} of ${queue.total}`
+                                          : `${queue.total} queued`}
+                                      </p>
+                                    </div>
+                                    <div className="flex items-center gap-2">
+                                      <Badge
+                                        variant="outline"
+                                        className={`rounded-full px-2.5 py-1 text-[11px] font-medium ${triagePriorityClass(queue.key as TriagePriority)}`}
+                                      >
+                                        {queue.total}
+                                      </Badge>
+                                      <Button
+                                        size="sm"
+                                        variant="outline"
+                                        className={`h-7 rounded-lg px-2 text-[11px] ${queue.buttonClassName}`}
+                                        onClick={() => {
+                                          if (queue.nextEntry) {
+                                            inspectAgentTimelineEntry(queue.nextEntry);
+                                          }
+                                        }}
+                                        disabled={!queue.nextEntry}
+                                      >
+                                        {queue.buttonLabel}
+                                      </Button>
+                                    </div>
+                                  </div>
+                                  {!queue.entries.length ? (
+                                    <p className="mt-3 text-[12px] text-[#9b9a97]">
+                                      No {queue.key} entries in the current slice.
+                                    </p>
+                                  ) : (
+                                    <div className="mt-3 space-y-2">
+                                      {queue.entries.map((entry) => {
+                                        const selected =
+                                          selectedAgentTimelineEntry &&
+                                          agentTimelineEntryKey(selectedAgentTimelineEntry) ===
+                                            agentTimelineEntryKey(entry);
+                                        return (
+                                          <div
+                                            key={`agent-priority-${queue.key}-${agentTimelineEntryKey(entry)}`}
+                                            className={`rounded-lg border p-2.5 ${
+                                              selected
+                                                ? "border-[#d3e5ef] bg-[#f7fbfd]"
+                                                : "border-[#ecebe8] bg-white"
+                                            }`}
+                                          >
+                                            <div className="flex flex-wrap items-start justify-between gap-2">
+                                              <div>
+                                                <p className="text-[12px] font-semibold text-[#37352f]">
+                                                  {entry.title}
+                                                </p>
+                                                <p className="mt-1 text-[11px] text-[#787774]">
+                                                  {entry.kind} · {entry.subtitle || "No scope metadata"}
+                                                </p>
+                                              </div>
+                                              <p className="text-[11px] text-[#9b9a97]">
+                                                {formatTimestamp(entry.timestamp)}
+                                              </p>
+                                            </div>
+                                            <div className="mt-2 flex flex-wrap items-center gap-2">
+                                              <Badge
+                                                variant="outline"
+                                                className={`rounded-full px-2.5 py-1 text-[11px] font-semibold capitalize ${
+                                                  entry.kind === "approval"
+                                                    ? approvalStatusClass(entry.status)
+                                                    : entry.kind === "issue"
+                                                      ? passStatusClass(entry.status === "open" ? "partial" : "ok")
+                                                      : passStatusClass(entry.status)
+                                                }`}
+                                              >
+                                                {entry.status}
+                                              </Badge>
+                                              <Button
+                                                size="sm"
+                                                variant={selected ? "default" : "outline"}
+                                                className={`h-7 rounded-lg px-2 text-[11px] ${
+                                                  selected
+                                                    ? "bg-[#1a1a1a] text-white hover:bg-[#333]"
+                                                    : "border-[#e5e5e3] bg-white text-[#37352f] hover:bg-[#f7f7f5]"
+                                                }`}
+                                                onClick={() => {
+                                                  inspectAgentTimelineEntry(entry);
+                                                }}
+                                              >
+                                                {selected ? "Selected" : "Inspect"}
+                                              </Button>
+                                            </div>
+                                          </div>
+                                        );
+                                      })}
+                                    </div>
+                                  )}
+                                </div>
+                              ))}
                             </div>
                           </div>
                         </div>
