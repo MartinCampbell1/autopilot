@@ -3509,6 +3509,15 @@ export default function ControlPlanePage() {
     });
     return Array.from(groups.values());
   }, [recentTriageInboxFeedback, triageInboxItems]);
+  const currentTriageInboxFeedbackGroup = useMemo(
+    () =>
+      selectedTriageInboxItem
+        ? groupedRecentTriageInboxFeedback.find(
+            (group) => group.itemKey === selectedTriageInboxItem.key
+          ) ?? null
+        : null,
+    [groupedRecentTriageInboxFeedback, selectedTriageInboxItem]
+  );
   useEffect(() => {
     selectedTriageInboxKeyRef.current = selectedTriageInboxKey;
   }, [selectedTriageInboxKey]);
@@ -3596,6 +3605,22 @@ export default function ControlPlanePage() {
         : [...current, itemKey]
     );
   }, []);
+  const expandAllTriageInboxResultGroups = useCallback(() => {
+    setExpandedTriageInboxResultGroups(
+      groupedRecentTriageInboxFeedback.map((group) => group.itemKey)
+    );
+  }, [groupedRecentTriageInboxFeedback]);
+  const collapseAllTriageInboxResultGroups = useCallback(() => {
+    setExpandedTriageInboxResultGroups([]);
+  }, []);
+  const openCurrentTriageInboxResultGroup = useCallback(() => {
+    if (!currentTriageInboxFeedbackGroup) return;
+    setExpandedTriageInboxResultGroups((current) =>
+      current.includes(currentTriageInboxFeedbackGroup.itemKey)
+        ? current
+        : [...current, currentTriageInboxFeedbackGroup.itemKey]
+    );
+  }, [currentTriageInboxFeedbackGroup]);
   useEffect(() => {
     if (!triageInboxItems.length) {
       setSelectedTriageInboxKey("");
@@ -5501,12 +5526,45 @@ export default function ControlPlanePage() {
                                     <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#9b9a97]">
                                       Recent Results
                                     </p>
-                                    <Badge
-                                      variant="outline"
-                                      className="rounded-full border-[#e5e5e3] bg-[#fafaf9] px-2.5 py-1 text-[11px] font-medium text-[#37352f]"
-                                    >
-                                      {recentTriageInboxFeedback.length}
-                                    </Badge>
+                                    <div className="flex flex-wrap items-center gap-2">
+                                      <Badge
+                                        variant="outline"
+                                        className="rounded-full border-[#e5e5e3] bg-[#fafaf9] px-2.5 py-1 text-[11px] font-medium text-[#37352f]"
+                                      >
+                                        {recentTriageInboxFeedback.length}
+                                      </Badge>
+                                      <Button
+                                        size="sm"
+                                        variant="outline"
+                                        className="h-7 rounded-lg border-[#e5e5e3] bg-white px-2 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
+                                        onClick={expandAllTriageInboxResultGroups}
+                                        disabled={
+                                          !groupedRecentTriageInboxFeedback.length ||
+                                          expandedTriageInboxResultGroups.length >=
+                                            groupedRecentTriageInboxFeedback.length
+                                        }
+                                      >
+                                        Expand all
+                                      </Button>
+                                      <Button
+                                        size="sm"
+                                        variant="outline"
+                                        className="h-7 rounded-lg border-[#e5e5e3] bg-white px-2 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
+                                        onClick={collapseAllTriageInboxResultGroups}
+                                        disabled={!expandedTriageInboxResultGroups.length}
+                                      >
+                                        Collapse all
+                                      </Button>
+                                      <Button
+                                        size="sm"
+                                        variant="outline"
+                                        className="h-7 rounded-lg border-[#e5e5e3] bg-white px-2 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
+                                        onClick={openCurrentTriageInboxResultGroup}
+                                        disabled={!currentTriageInboxFeedbackGroup}
+                                      >
+                                        Open current group
+                                      </Button>
+                                    </div>
                                   </div>
                                   <div className="mt-3 space-y-2">
                                     {groupedRecentTriageInboxFeedback.map((group) => (
