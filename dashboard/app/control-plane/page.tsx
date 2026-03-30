@@ -145,6 +145,21 @@ type SessionLineageTrait = {
   label: string;
   className: string;
 };
+type TriageInboxItem = {
+  key: string;
+  label: string;
+  queueDetail: string;
+  title: string;
+  subtitle: string;
+  timestamp: string;
+  status: string;
+  statusClassName: string;
+  priority: TriagePriority;
+  syncedWithSelection: boolean;
+  onInspect: () => void;
+  onSnooze: () => void;
+  onDismiss: () => void;
+};
 
 function agentTimelineEntryKey(entry: AgentTimelineEntry): string {
   return `${entry.kind}:${entry.id}`;
@@ -1468,6 +1483,7 @@ export default function ControlPlanePage() {
   const [selectedSessionEventKey, setSelectedSessionEventKey] = useState("");
   const [selectedSessionContextKind, setSelectedSessionContextKind] =
     useState<SessionContextKind>("");
+  const [selectedTriageInboxKey, setSelectedTriageInboxKey] = useState("");
   const [historySearch, setHistorySearch] = useState("");
   const [entitySearch, setEntitySearch] = useState("");
   const [refreshing, setRefreshing] = useState(false);
@@ -3229,11 +3245,9 @@ export default function ControlPlanePage() {
       ),
     [filteredAgentTimelineEntries, selectedAgentTimelineEntry]
   );
-  const triageInboxItemCount =
-    Number(Boolean(nextAttentionSessionLineageEntry)) +
-    Number(Boolean(nextDecisionSessionLineageEntry)) +
-    Number(Boolean(nextCriticalAgentTimelineEntry)) +
-    Number(Boolean(nextHighAgentTimelineEntry));
+  const selectedAgentTimelineEntryKeyValue = selectedAgentTimelineEntry
+    ? agentTimelineEntryKey(selectedAgentTimelineEntry)
+    : "";
   const inspectAgentTimelineEntry = useCallback(
     (entry: AgentTimelineEntry) => {
       const relatedRunLink = resolveAgentTimelineRunLink(entry, linkedRuns);
@@ -3255,6 +3269,170 @@ export default function ControlPlanePage() {
     },
     [linkedRuns, selectedAgent, selectedAgentId, syncLinkedSelection]
   );
+  const triageInboxItems = useMemo(
+    () =>
+      [
+        nextAttentionSessionLineageEntry
+          ? {
+              key: "session-attention",
+              label: "Session Attention",
+              queueDetail: `${attentionSessionLineageEntries.length} queued`,
+              title: nextAttentionSessionLineageEntry.title,
+              subtitle: `run ${nextAttentionSessionLineageEntry.runId} · outcome ${nextAttentionSessionLineageEntry.resultIndex + 1}`,
+              timestamp: nextAttentionSessionLineageEntry.timestamp,
+              status: nextAttentionSessionLineageEntry.status,
+              statusClassName: passStatusClass(nextAttentionSessionLineageEntry.status),
+              priority: sessionLineagePriority(nextAttentionSessionLineageEntry),
+              syncedWithSelection:
+                selectedSessionLineageEntry?.key === nextAttentionSessionLineageEntry.key,
+              onInspect: () => {
+                setSelectedTriageInboxKey("session-attention");
+                focusSessionLineageEntry(nextAttentionSessionLineageEntry, "attention");
+              },
+              onSnooze: () => {
+                setSelectedTriageInboxKey("session-attention");
+                snoozeSessionLineageQueueEntry("attention", nextAttentionSessionLineageEntry);
+              },
+              onDismiss: () => {
+                setSelectedTriageInboxKey("session-attention");
+                dismissSessionLineageQueueEntry("attention", nextAttentionSessionLineageEntry);
+              },
+            }
+          : null,
+        nextDecisionSessionLineageEntry
+          ? {
+              key: "session-decisions",
+              label: "Session Decision",
+              queueDetail: `${decisionSessionLineageEntries.length} queued`,
+              title: nextDecisionSessionLineageEntry.title,
+              subtitle: `run ${nextDecisionSessionLineageEntry.runId} · outcome ${nextDecisionSessionLineageEntry.resultIndex + 1}`,
+              timestamp: nextDecisionSessionLineageEntry.timestamp,
+              status: nextDecisionSessionLineageEntry.status,
+              statusClassName: passStatusClass(nextDecisionSessionLineageEntry.status),
+              priority: sessionLineagePriority(nextDecisionSessionLineageEntry),
+              syncedWithSelection:
+                selectedSessionLineageEntry?.key === nextDecisionSessionLineageEntry.key,
+              onInspect: () => {
+                setSelectedTriageInboxKey("session-decisions");
+                focusSessionLineageEntry(nextDecisionSessionLineageEntry, "decisions");
+              },
+              onSnooze: () => {
+                setSelectedTriageInboxKey("session-decisions");
+                snoozeSessionLineageQueueEntry("decisions", nextDecisionSessionLineageEntry);
+              },
+              onDismiss: () => {
+                setSelectedTriageInboxKey("session-decisions");
+                dismissSessionLineageQueueEntry("decisions", nextDecisionSessionLineageEntry);
+              },
+            }
+          : null,
+        nextCriticalAgentTimelineEntry
+          ? {
+              key: "agent-critical",
+              label: "Agent Critical",
+              queueDetail: `${criticalAgentTimelineEntries.length} queued`,
+              title: nextCriticalAgentTimelineEntry.title,
+              subtitle: `${nextCriticalAgentTimelineEntry.kind} · ${nextCriticalAgentTimelineEntry.subtitle || "No scope metadata"}`,
+              timestamp: nextCriticalAgentTimelineEntry.timestamp,
+              status: nextCriticalAgentTimelineEntry.status,
+              statusClassName: agentTimelineEntryStatusClass(nextCriticalAgentTimelineEntry),
+              priority: agentTimelinePriority(nextCriticalAgentTimelineEntry),
+              syncedWithSelection:
+                selectedAgentTimelineEntryKeyValue ===
+                agentTimelineEntryKey(nextCriticalAgentTimelineEntry),
+              onInspect: () => {
+                setSelectedTriageInboxKey("agent-critical");
+                inspectAgentTimelineEntry(nextCriticalAgentTimelineEntry);
+              },
+              onSnooze: () => {
+                setSelectedTriageInboxKey("agent-critical");
+                snoozeAgentTimelineEntry(nextCriticalAgentTimelineEntry);
+              },
+              onDismiss: () => {
+                setSelectedTriageInboxKey("agent-critical");
+                dismissAgentTimelineEntry(nextCriticalAgentTimelineEntry);
+              },
+            }
+          : null,
+        nextHighAgentTimelineEntry
+          ? {
+              key: "agent-high",
+              label: "Agent High",
+              queueDetail: `${highAgentTimelineEntries.length} queued`,
+              title: nextHighAgentTimelineEntry.title,
+              subtitle: `${nextHighAgentTimelineEntry.kind} · ${nextHighAgentTimelineEntry.subtitle || "No scope metadata"}`,
+              timestamp: nextHighAgentTimelineEntry.timestamp,
+              status: nextHighAgentTimelineEntry.status,
+              statusClassName: agentTimelineEntryStatusClass(nextHighAgentTimelineEntry),
+              priority: agentTimelinePriority(nextHighAgentTimelineEntry),
+              syncedWithSelection:
+                selectedAgentTimelineEntryKeyValue ===
+                agentTimelineEntryKey(nextHighAgentTimelineEntry),
+              onInspect: () => {
+                setSelectedTriageInboxKey("agent-high");
+                inspectAgentTimelineEntry(nextHighAgentTimelineEntry);
+              },
+              onSnooze: () => {
+                setSelectedTriageInboxKey("agent-high");
+                snoozeAgentTimelineEntry(nextHighAgentTimelineEntry);
+              },
+              onDismiss: () => {
+                setSelectedTriageInboxKey("agent-high");
+                dismissAgentTimelineEntry(nextHighAgentTimelineEntry);
+              },
+            }
+          : null,
+      ].filter(Boolean) as TriageInboxItem[],
+    [
+      attentionSessionLineageEntries.length,
+      criticalAgentTimelineEntries.length,
+      decisionSessionLineageEntries.length,
+      dismissAgentTimelineEntry,
+      dismissSessionLineageQueueEntry,
+      focusSessionLineageEntry,
+      highAgentTimelineEntries.length,
+      inspectAgentTimelineEntry,
+      nextAttentionSessionLineageEntry,
+      nextCriticalAgentTimelineEntry,
+      nextDecisionSessionLineageEntry,
+      nextHighAgentTimelineEntry,
+      selectedAgentTimelineEntryKeyValue,
+      selectedSessionLineageEntry,
+      snoozeAgentTimelineEntry,
+      snoozeSessionLineageQueueEntry,
+    ]
+  );
+  const triageInboxItemCount = triageInboxItems.length;
+  const selectedTriageInboxItem = useMemo(
+    () =>
+      triageInboxItems.find((item) => item.key === selectedTriageInboxKey) ??
+      triageInboxItems[0] ??
+      null,
+    [triageInboxItems, selectedTriageInboxKey]
+  );
+  const advanceTriageInboxCursor = useCallback(() => {
+    if (!triageInboxItems.length) return;
+    setSelectedTriageInboxKey((current) => {
+      const currentIndex = triageInboxItems.findIndex((item) => item.key === current);
+      if (currentIndex === -1) return triageInboxItems[0]?.key || "";
+      return triageInboxItems[currentIndex + 1]?.key || triageInboxItems[0]?.key || "";
+    });
+  }, [triageInboxItems]);
+  useEffect(() => {
+    if (!triageInboxItems.length) {
+      setSelectedTriageInboxKey("");
+      return;
+    }
+    const syncedItem = triageInboxItems.find((item) => item.syncedWithSelection) ?? null;
+    setSelectedTriageInboxKey((current) => {
+      if (syncedItem) {
+        return syncedItem.key;
+      }
+      return triageInboxItems.some((item) => item.key === current)
+        ? current
+        : triageInboxItems[0].key;
+    });
+  }, [selectedAgentTimelineEntryKeyValue, selectedSessionLineageEntry, triageInboxItems]);
   useEffect(() => {
     if (!pendingAgentPriorityAutoAdvance) return;
     const entries =
@@ -4976,119 +5154,81 @@ export default function ControlPlanePage() {
                       No session or agent triage items are active in the current slice.
                     </div>
                   ) : (
-                    <div className="grid gap-3 xl:grid-cols-2 2xl:grid-cols-4">
-                      {[
-                        nextAttentionSessionLineageEntry
-                          ? {
-                              key: "session-attention",
-                              label: "Session Attention",
-                              queueDetail: `${attentionSessionLineageEntries.length} queued`,
-                              entry: nextAttentionSessionLineageEntry,
-                              selected: selectedSessionLineageEntry?.key === nextAttentionSessionLineageEntry.key,
-                              statusClassName: passStatusClass(nextAttentionSessionLineageEntry.status),
-                              priority: sessionLineagePriority(nextAttentionSessionLineageEntry),
-                              onInspect: () => {
-                                focusSessionLineageEntry(nextAttentionSessionLineageEntry, "attention");
-                              },
-                              onSnooze: () => {
-                                snoozeSessionLineageQueueEntry(
-                                  "attention",
-                                  nextAttentionSessionLineageEntry
-                                );
-                              },
-                              onDismiss: () => {
-                                dismissSessionLineageQueueEntry(
-                                  "attention",
-                                  nextAttentionSessionLineageEntry
-                                );
-                              },
-                              subtitle: `run ${nextAttentionSessionLineageEntry.runId} · outcome ${nextAttentionSessionLineageEntry.resultIndex + 1}`,
-                            }
-                          : null,
-                        nextDecisionSessionLineageEntry
-                          ? {
-                              key: "session-decisions",
-                              label: "Session Decision",
-                              queueDetail: `${decisionSessionLineageEntries.length} queued`,
-                              entry: nextDecisionSessionLineageEntry,
-                              selected: selectedSessionLineageEntry?.key === nextDecisionSessionLineageEntry.key,
-                              statusClassName: passStatusClass(nextDecisionSessionLineageEntry.status),
-                              priority: sessionLineagePriority(nextDecisionSessionLineageEntry),
-                              onInspect: () => {
-                                focusSessionLineageEntry(nextDecisionSessionLineageEntry, "decisions");
-                              },
-                              onSnooze: () => {
-                                snoozeSessionLineageQueueEntry(
-                                  "decisions",
-                                  nextDecisionSessionLineageEntry
-                                );
-                              },
-                              onDismiss: () => {
-                                dismissSessionLineageQueueEntry(
-                                  "decisions",
-                                  nextDecisionSessionLineageEntry
-                                );
-                              },
-                              subtitle: `run ${nextDecisionSessionLineageEntry.runId} · outcome ${nextDecisionSessionLineageEntry.resultIndex + 1}`,
-                            }
-                          : null,
-                        nextCriticalAgentTimelineEntry
-                          ? {
-                              key: "agent-critical",
-                              label: "Agent Critical",
-                              queueDetail: `${criticalAgentTimelineEntries.length} queued`,
-                              entry: nextCriticalAgentTimelineEntry,
-                              selected:
-                                selectedAgentTimelineEntry &&
-                                agentTimelineEntryKey(selectedAgentTimelineEntry) ===
-                                  agentTimelineEntryKey(nextCriticalAgentTimelineEntry),
-                              statusClassName: agentTimelineEntryStatusClass(nextCriticalAgentTimelineEntry),
-                              priority: agentTimelinePriority(nextCriticalAgentTimelineEntry),
-                              onInspect: () => {
-                                inspectAgentTimelineEntry(nextCriticalAgentTimelineEntry);
-                              },
-                              onSnooze: () => {
-                                snoozeAgentTimelineEntry(nextCriticalAgentTimelineEntry);
-                              },
-                              onDismiss: () => {
-                                dismissAgentTimelineEntry(nextCriticalAgentTimelineEntry);
-                              },
-                              subtitle: `${nextCriticalAgentTimelineEntry.kind} · ${nextCriticalAgentTimelineEntry.subtitle || "No scope metadata"}`,
-                            }
-                          : null,
-                        nextHighAgentTimelineEntry
-                          ? {
-                              key: "agent-high",
-                              label: "Agent High",
-                              queueDetail: `${highAgentTimelineEntries.length} queued`,
-                              entry: nextHighAgentTimelineEntry,
-                              selected:
-                                selectedAgentTimelineEntry &&
-                                agentTimelineEntryKey(selectedAgentTimelineEntry) ===
-                                  agentTimelineEntryKey(nextHighAgentTimelineEntry),
-                              statusClassName: agentTimelineEntryStatusClass(nextHighAgentTimelineEntry),
-                              priority: agentTimelinePriority(nextHighAgentTimelineEntry),
-                              onInspect: () => {
-                                inspectAgentTimelineEntry(nextHighAgentTimelineEntry);
-                              },
-                              onSnooze: () => {
-                                snoozeAgentTimelineEntry(nextHighAgentTimelineEntry);
-                              },
-                              onDismiss: () => {
-                                dismissAgentTimelineEntry(nextHighAgentTimelineEntry);
-                              },
-                              subtitle: `${nextHighAgentTimelineEntry.kind} · ${nextHighAgentTimelineEntry.subtitle || "No scope metadata"}`,
-                            }
-                          : null,
-                      ]
-                        .filter(Boolean)
-                        .map((item) => {
-                          if (!item) return null;
+                    <div className="space-y-3">
+                      {selectedTriageInboxItem ? (
+                        <div className="rounded-xl border border-[#ecebe8] bg-[#fbfbf9] p-3">
+                          <div className="flex flex-wrap items-center justify-between gap-3">
+                            <div>
+                              <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#9b9a97]">
+                                Current Cursor
+                              </p>
+                              <p className="mt-1 text-[12px] text-[#787774]">
+                                {selectedTriageInboxItem.label} · {selectedTriageInboxItem.queueDetail}
+                              </p>
+                            </div>
+                            <div className="flex flex-wrap gap-2">
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="h-7 rounded-lg border-[#e5e5e3] bg-white px-2 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
+                                onClick={() => {
+                                  selectedTriageInboxItem.onInspect();
+                                }}
+                              >
+                                Inspect current
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="h-7 rounded-lg border-[#e5e5e3] bg-white px-2 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
+                                onClick={() => {
+                                  advanceTriageInboxCursor();
+                                }}
+                                disabled={triageInboxItems.length <= 1}
+                              >
+                                Advance cursor
+                              </Button>
+                            </div>
+                          </div>
+                          <div className="mt-3 flex flex-wrap gap-2">
+                            <Badge
+                              variant="outline"
+                              className={`rounded-full px-2.5 py-1 text-[11px] font-medium ${triagePriorityClass(selectedTriageInboxItem.priority)}`}
+                            >
+                              {selectedTriageInboxItem.priority}
+                            </Badge>
+                            <Badge
+                              variant="outline"
+                              className={`rounded-full px-2.5 py-1 text-[11px] font-semibold capitalize ${selectedTriageInboxItem.statusClassName}`}
+                            >
+                              {selectedTriageInboxItem.status}
+                            </Badge>
+                            {selectedTriageInboxItem.syncedWithSelection ? (
+                              <Badge
+                                variant="outline"
+                                className="rounded-full border-[#d3e5ef] bg-[#eef7fb] px-2.5 py-1 text-[11px] font-medium text-[#2a6690]"
+                              >
+                                Synced with selection
+                              </Badge>
+                            ) : null}
+                          </div>
+                          <p className="mt-3 text-[13px] font-semibold text-[#37352f]">
+                            {selectedTriageInboxItem.title}
+                          </p>
+                          <p className="mt-2 text-[12px] text-[#787774]">
+                            {selectedTriageInboxItem.subtitle}
+                          </p>
+                        </div>
+                      ) : null}
+
+                      <div className="grid gap-3 xl:grid-cols-2 2xl:grid-cols-4">
+                        {triageInboxItems.map((item) => {
+                          const cursorSelected = selectedTriageInboxItem?.key === item.key;
                           return (
                             <div
                               key={`triage-inbox-${item.key}`}
                               className={`rounded-xl border p-3 ${
-                                item.selected
+                                cursorSelected
                                   ? "border-[#d3e5ef] bg-[#f7fbfd]"
                                   : "border-[#ecebe8] bg-[#fbfbf9]"
                               }`}
@@ -5101,11 +5241,11 @@ export default function ControlPlanePage() {
                                   <p className="mt-1 text-[12px] text-[#787774]">{item.queueDetail}</p>
                                 </div>
                                 <p className="text-[11px] text-[#9b9a97]">
-                                  {formatTimestamp(item.entry.timestamp)}
+                                  {formatTimestamp(item.timestamp)}
                                 </p>
                               </div>
                               <p className="mt-3 text-[13px] font-semibold text-[#37352f]">
-                                {item.entry.title}
+                                {item.title}
                               </p>
                               <p className="mt-2 text-[12px] text-[#787774]">{item.subtitle}</p>
                               <div className="mt-3 flex flex-wrap gap-2">
@@ -5119,21 +5259,29 @@ export default function ControlPlanePage() {
                                   variant="outline"
                                   className={`rounded-full px-2.5 py-1 text-[11px] font-semibold capitalize ${item.statusClassName}`}
                                 >
-                                  {item.entry.status}
+                                  {item.status}
                                 </Badge>
+                                {item.syncedWithSelection ? (
+                                  <Badge
+                                    variant="outline"
+                                    className="rounded-full border-[#d3e5ef] bg-[#eef7fb] px-2.5 py-1 text-[11px] font-medium text-[#2a6690]"
+                                  >
+                                    Synced
+                                  </Badge>
+                                ) : null}
                               </div>
                               <div className="mt-3 flex flex-wrap gap-2">
                                 <Button
                                   size="sm"
-                                  variant={item.selected ? "default" : "outline"}
+                                  variant={cursorSelected ? "default" : "outline"}
                                   className={`h-7 rounded-lg px-2 text-[11px] ${
-                                    item.selected
+                                    cursorSelected
                                       ? "bg-[#1a1a1a] text-white hover:bg-[#333]"
                                       : "border-[#e5e5e3] bg-white text-[#37352f] hover:bg-[#f7f7f5]"
                                   }`}
                                   onClick={item.onInspect}
                                 >
-                                  {item.selected ? "Selected" : "Inspect"}
+                                  {cursorSelected ? "Current" : "Inspect"}
                                 </Button>
                                 <Button
                                   size="sm"
@@ -5155,6 +5303,7 @@ export default function ControlPlanePage() {
                             </div>
                           );
                         })}
+                      </div>
                     </div>
                   )}
                 </CardContent>
