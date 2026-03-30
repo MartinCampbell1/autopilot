@@ -58,6 +58,14 @@ const DATE_FORMATTER = new Intl.DateTimeFormat(undefined, {
 
 const DEFAULT_CONTROL_ACTOR = "dashboard-control-plane";
 
+type AgentScopedOutcome = {
+  run: ExecutionAgentActionRunRecord;
+  result: Record<string, unknown>;
+  resultIndex: number;
+  timestamp: string;
+  runtimeAgentIds: string[];
+};
+
 function formatTimestamp(value?: string | null): string {
   if (!value) return "No activity yet";
   const date = new Date(value);
@@ -175,6 +183,13 @@ function outcomeStoryTitle(result: Record<string, unknown>): string {
 function outcomeRuntimeAgentId(result: Record<string, unknown>): string {
   const action = asRecord(result.action);
   return toStringValue(action?.runtime_agent_id);
+}
+
+function outcomeRuntimeAgentIds(result: Record<string, unknown>): string[] {
+  const action = asRecord(result.action);
+  const linkedIds = toStringArray(action?.runtime_agent_ids);
+  const singleId = toStringValue(action?.runtime_agent_id);
+  return [...new Set([...linkedIds, ...(singleId ? [singleId] : [])])];
 }
 
 function formatJson(value: unknown): string {
@@ -1170,6 +1185,45 @@ export default function ControlPlanePage() {
     if (!selectedRun) return null;
     return selectedRun.results[selectedRunResultIndex] ?? selectedRun.results[0] ?? null;
   }, [selectedRun, selectedRunResultIndex]);
+  const agentScopedRuns = useMemo(() => {
+    if (!selectedAgentId) return [] as ExecutionAgentActionRunRecord[];
+    return linkedRuns.filter((run) => {
+      if (run.runtime_agent_ids.includes(selectedAgentId)) return true;
+      if (toStringValue(run.selection.runtime_agent_id) === selectedAgentId) return true;
+      return run.results.some((result) => {
+        const record = asRecord(result);
+        return record ? outcomeRuntimeAgentIds(record).includes(selectedAgentId) : false;
+      });
+    });
+  }, [linkedRuns, selectedAgentId]);
+  const agentScopedOutcomes = useMemo(() => {
+    if (!selectedAgentId) return [] as AgentScopedOutcome[];
+    const outcomes: AgentScopedOutcome[] = [];
+    agentScopedRuns.forEach((run) => {
+      const defaultToRunScope = run.runtime_agent_ids.length === 1 && run.runtime_agent_ids[0] === selectedAgentId;
+      run.results.forEach((rawResult, resultIndex) => {
+        const result = asRecord(rawResult);
+        if (!result) return;
+        const runtimeAgentIds = outcomeRuntimeAgentIds(result);
+        if (!runtimeAgentIds.includes(selectedAgentId) && !defaultToRunScope) {
+          return;
+        }
+        outcomes.push({
+          run,
+          result,
+          resultIndex,
+          timestamp: run.completed_at || run.updated_at || run.created_at,
+          runtimeAgentIds,
+        });
+      });
+    });
+    return outcomes.sort(
+      (left, right) =>
+        right.timestamp.localeCompare(left.timestamp) ||
+        right.run.created_at.localeCompare(left.run.created_at) ||
+        left.resultIndex - right.resultIndex
+    );
+  }, [agentScopedRuns, selectedAgentId]);
   const selectedControl = selectedSession?.control ?? null;
   const loading = !controlSummary || !sessionSummary;
 
@@ -2118,6 +2172,211 @@ export default function ControlPlanePage() {
                             ))}
                           </div>
                         )}
+                      </div>
+
+                      <div className="grid gap-4 lg:grid-cols-2">
+                        <div className="rounded-2xl border border-[#ecebe8] bg-[#fbfbf9] p-4">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#9b9a97]">
+                              Agent Action Runs
+                            </p>
+                            <Badge
+                              variant="outline"
+                              className="rounded-full border-[#e5e5e3] bg-white px-2.5 py-1 text-[11px] font-medium text-[#37352f]"
+                            >
+                              {agentScopedRuns.length} run{agentScopedRuns.length === 1 ? "" : "s"}
+                            </Badge>
+                          </div>
+                          {agentScopedRuns.length === 0 ? (
+                            <p className="mt-3 text-[13px] text-[#9b9a97]">
+                              No session-linked action runs for this runtime agent.
+                            </p>
+                          ) : (
+                            <div className="mt-3 space-y-3">
+                              {agentScopedRuns.slice(0, 4).map((run) => {
+                                const selected = selectedRunId === run.id;
+                                return (
+                                  <div
+                                    key={`${selectedAgent.runtime_agent_id}-run-${run.id}`}
+                                    className={`rounded-xl border p-3 ${
+                                      selected ? "border-[#d3e5ef] bg-[#f7fbfd]" : "border-[#ecebe8] bg-white"
+                                    }`}
+                                  >
+                                    <div className="flex flex-wrap items-center justify-between gap-2">
+                                      <p className="font-mono text-[11px] text-[#37352f]">{run.id}</p>
+                                      <div className="flex flex-wrap items-center gap-2">
+                                        <Badge
+                                          variant="outline"
+                                          className={`rounded-full px-2.5 py-1 text-[11px] font-semibold capitalize ${passStatusClass(run.status)}`}
+                                        >
+                                          {run.status}
+                                        </Badge>
+                                        <Badge
+                                          variant="outline"
+                                          className="rounded-full border-[#e5e5e3] bg-[#fafaf9] px-2.5 py-1 text-[11px] font-medium text-[#37352f]"
+                                        >
+                                          {run.dry_run ? "preview" : "execute"}
+                                        </Badge>
+                                      </div>
+                                    </div>
+                                    <p className="mt-2 text-[12px] text-[#6b6b6b]">
+                                      {run.actor || "unknown actor"}
+                                      {" · "}
+                                      {formatTimestamp(run.created_at)}
+                                    </p>
+                                    <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                                      <SessionMetric
+                                        label="Outcomes"
+                                        value={String(run.results.length)}
+                                        detail={`${toNumber(run.summary.processed_count, run.results.length)} processed`}
+                                      />
+                                      <SessionMetric
+                                        label="Policy"
+                                        value={run.policy_profile || "Custom"}
+                                        detail={run.mode || "auto"}
+                                      />
+                                    </div>
+                                    <div className="mt-3 flex flex-wrap gap-2">
+                                      <Button
+                                        size="sm"
+                                        variant={selected ? "default" : "outline"}
+                                        className={`h-7 rounded-lg px-2 text-[11px] ${
+                                          selected
+                                            ? "bg-[#1a1a1a] text-white hover:bg-[#333]"
+                                            : "border-[#e5e5e3] bg-white text-[#37352f] hover:bg-[#f7f7f5]"
+                                        }`}
+                                        onClick={() => {
+                                          setSelectedRunId(run.id);
+                                          setSelectedRunResultIndex(0);
+                                        }}
+                                      >
+                                        {selected ? "Selected" : "Inspect run"}
+                                      </Button>
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
+
+                        <div className="rounded-2xl border border-[#ecebe8] bg-[#fbfbf9] p-4">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#9b9a97]">
+                              Recent Outcomes
+                            </p>
+                            <Badge
+                              variant="outline"
+                              className="rounded-full border-[#e5e5e3] bg-white px-2.5 py-1 text-[11px] font-medium text-[#37352f]"
+                            >
+                              {agentScopedOutcomes.length} outcome{agentScopedOutcomes.length === 1 ? "" : "s"}
+                            </Badge>
+                          </div>
+                          {agentScopedOutcomes.length === 0 ? (
+                            <p className="mt-3 text-[13px] text-[#9b9a97]">
+                              No recent action outcomes linked to this runtime agent.
+                            </p>
+                          ) : (
+                            <div className="mt-3 space-y-3">
+                              {agentScopedOutcomes.slice(0, 4).map((entry) => {
+                                const details = describeRunResult(entry.result);
+                                const selected =
+                                  selectedRunId === entry.run.id && selectedRunResultIndex === entry.resultIndex;
+                                const projectId = outcomeProjectId(entry.result);
+                                const storyId = outcomeStoryId(entry.result);
+                                const linkedApprovalId = toStringValue(asRecord(entry.result.approval)?.id);
+                                const linkedIssueId = toStringValue(asRecord(entry.result.issue)?.id);
+                                return (
+                                  <div
+                                    key={`${entry.run.id}-result-${entry.resultIndex}`}
+                                    className={`rounded-xl border p-3 ${
+                                      selected ? "border-[#d3e5ef] bg-[#f7fbfd]" : "border-[#ecebe8] bg-white"
+                                    }`}
+                                  >
+                                    <div className="flex flex-wrap items-center justify-between gap-2">
+                                      <p className="text-[13px] font-semibold text-[#37352f]">{details.title}</p>
+                                      <Badge
+                                        variant="outline"
+                                        className={`rounded-full px-2.5 py-1 text-[11px] font-semibold capitalize ${passStatusClass(toStringValue(entry.result.status, "unknown"))}`}
+                                      >
+                                        {toStringValue(entry.result.status, "unknown")}
+                                      </Badge>
+                                    </div>
+                                    <p className="mt-2 text-[12px] text-[#787774]">
+                                      {details.subtitle || "No outcome subtype"}
+                                      {" · "}
+                                      {formatTimestamp(entry.timestamp)}
+                                    </p>
+                                    <p className="mt-2 text-[12px] text-[#6b6b6b]">{details.message}</p>
+                                    <div className="mt-3 flex flex-wrap gap-2">
+                                      {projectId && (
+                                        <Badge
+                                          variant="outline"
+                                          className="rounded-full border-[#e5e5e3] bg-[#fafaf9] px-2.5 py-1 text-[11px] font-medium text-[#37352f]"
+                                        >
+                                          project {projectId}
+                                        </Badge>
+                                      )}
+                                      {storyId && (
+                                        <Badge
+                                          variant="outline"
+                                          className="rounded-full border-[#d3e5ef] bg-[#eef7fb] px-2.5 py-1 text-[11px] font-medium text-[#2a6690]"
+                                        >
+                                          story {storyId}
+                                        </Badge>
+                                      )}
+                                      {linkedApprovalId && (
+                                        <Badge
+                                          variant="outline"
+                                          className="rounded-full border-[#d3e5ef] bg-[#eef7fb] px-2.5 py-1 text-[11px] font-medium text-[#2a6690]"
+                                        >
+                                          approval {linkedApprovalId}
+                                        </Badge>
+                                      )}
+                                      {linkedIssueId && (
+                                        <Badge
+                                          variant="outline"
+                                          className="rounded-full border-[#f4e0c4] bg-[#fff6e8] px-2.5 py-1 text-[11px] font-medium text-[#9a6700]"
+                                        >
+                                          issue {linkedIssueId}
+                                        </Badge>
+                                      )}
+                                    </div>
+                                    <div className="mt-3 flex flex-wrap gap-2">
+                                      <Button
+                                        size="sm"
+                                        variant={selected ? "default" : "outline"}
+                                        className={`h-7 rounded-lg px-2 text-[11px] ${
+                                          selected
+                                            ? "bg-[#1a1a1a] text-white hover:bg-[#333]"
+                                            : "border-[#e5e5e3] bg-white text-[#37352f] hover:bg-[#f7f7f5]"
+                                        }`}
+                                        onClick={() => {
+                                          setSelectedRunId(entry.run.id);
+                                          setSelectedRunResultIndex(entry.resultIndex);
+                                        }}
+                                      >
+                                        {selected ? "Selected" : "Inspect outcome"}
+                                      </Button>
+                                      <Button
+                                        size="sm"
+                                        variant="outline"
+                                        className="h-7 rounded-lg border-[#e5e5e3] bg-white px-2 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
+                                        onClick={() => {
+                                          setEntitySearch(entry.run.id);
+                                          setSelectedRunId(entry.run.id);
+                                          setSelectedRunResultIndex(entry.resultIndex);
+                                        }}
+                                      >
+                                        Find in session
+                                      </Button>
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
                       </div>
 
                       <div className="grid gap-4 lg:grid-cols-3">
