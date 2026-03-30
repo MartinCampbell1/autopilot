@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AppSidebar } from "@/components/app-sidebar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -681,6 +681,25 @@ function sessionLineageTraits(entry: SessionLineageEntry | null): SessionLineage
   ].filter(Boolean) as SessionLineageTrait[];
 }
 
+function nextSessionLineageQueueEntry(
+  entries: SessionLineageEntry[],
+  current: SessionLineageEntry | null
+): SessionLineageEntry | null {
+  if (!entries.length) return null;
+  if (!current) return entries[0];
+  const currentIndex = entries.findIndex((entry) => entry.key === current.key);
+  if (currentIndex === -1) return entries[0];
+  return entries[currentIndex + 1] ?? entries[0];
+}
+
+function sessionLineageQueuePosition(
+  entries: SessionLineageEntry[],
+  current: SessionLineageEntry | null
+): number {
+  if (!current) return -1;
+  return entries.findIndex((entry) => entry.key === current.key);
+}
+
 function runMatchesSearch(run: ExecutionAgentActionRunRecord, query: string): boolean {
   return matchesSearch(
     [
@@ -1139,6 +1158,10 @@ export default function ControlPlanePage() {
   const [selectedAgentTimelineKey, setSelectedAgentTimelineKey] = useState("");
   const [pendingAgentTimelineTarget, setPendingAgentTimelineTarget] =
     useState<PendingAgentTimelineTarget | null>(null);
+  const [pendingLineageAutoAdvance, setPendingLineageAutoAdvance] = useState<{
+    filter: "attention" | "decisions";
+    previousKey: string;
+  } | null>(null);
   const [pendingSessionRowDomId, setPendingSessionRowDomId] = useState("");
   const [pendingAgentTimelineRowDomId, setPendingAgentTimelineRowDomId] = useState("");
   const [selectedSessionApprovalId, setSelectedSessionApprovalId] = useState("");
@@ -1153,6 +1176,8 @@ export default function ControlPlanePage() {
   const [busyActionKey, setBusyActionKey] = useState("");
   const [notice, setNotice] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
+  const selectedSessionLineageEntryRef = useRef<SessionLineageEntry | null>(null);
+  const sessionLineageFilterRef = useRef("all");
 
   const loadOverview = useCallback(async () => {
     try {
@@ -1470,14 +1495,36 @@ export default function ControlPlanePage() {
   );
 
   const runDecisionAction = useCallback(
-    async (actionKey: string, task: () => Promise<string>) => {
+    async (
+      actionKey: string,
+      task: () => Promise<string>,
+      options?: { autoAdvanceQueue?: boolean }
+    ) => {
       if (!selectedSessionId) return;
       setBusyActionKey(actionKey);
       setNotice("");
       setErrorMessage("");
+      const currentLineageEntry = selectedSessionLineageEntryRef.current;
+      const currentLineageFilter = sessionLineageFilterRef.current;
+      let autoAdvanceFilter: "attention" | "decisions" | "" = "";
+      if (options?.autoAdvanceQueue && currentLineageEntry) {
+        if (currentLineageFilter === "attention" || currentLineageFilter === "decisions") {
+          autoAdvanceFilter = currentLineageFilter;
+        } else if (matchesSessionLineageFilter(currentLineageEntry, "attention")) {
+          autoAdvanceFilter = "attention";
+        } else if (matchesSessionLineageFilter(currentLineageEntry, "decisions")) {
+          autoAdvanceFilter = "decisions";
+        }
+      }
       try {
         const message = await task();
         setNotice(message);
+        if (autoAdvanceFilter && currentLineageEntry) {
+          setPendingLineageAutoAdvance({
+            filter: autoAdvanceFilter,
+            previousKey: currentLineageEntry.key,
+          });
+        }
         await refreshAfterMutation(selectedSessionId);
         if (selectedAgentId) {
           const detail = await loadAgentDetail(selectedAgentId);
@@ -1491,7 +1538,12 @@ export default function ControlPlanePage() {
         setBusyActionKey("");
       }
     },
-    [loadAgentDetail, refreshAfterMutation, selectedAgentId, selectedSessionId]
+    [
+      loadAgentDetail,
+      refreshAfterMutation,
+      selectedAgentId,
+      selectedSessionId,
+    ]
   );
 
   const applyRecommendation = async (recommendation: OrchestratorSessionControlRecommendation) => {
@@ -1523,46 +1575,62 @@ export default function ControlPlanePage() {
   };
 
   const approveApproval = async (approval: ExecutionApprovalRecord) => {
-    await runDecisionAction(`approval-approve:${approval.id}`, async () => {
-      const payload = await approveExecutionPlaneApproval(approval.id, {
-        actor: DEFAULT_CONTROL_ACTOR,
-        note: `Dashboard approved ${approval.action} for session ${selectedSessionId}`,
-      });
-      return `Approval ${payload.approval.id} marked ${payload.approval.status}.`;
-    });
+    await runDecisionAction(
+      `approval-approve:${approval.id}`,
+      async () => {
+        const payload = await approveExecutionPlaneApproval(approval.id, {
+          actor: DEFAULT_CONTROL_ACTOR,
+          note: `Dashboard approved ${approval.action} for session ${selectedSessionId}`,
+        });
+        return `Approval ${payload.approval.id} marked ${payload.approval.status}.`;
+      },
+      { autoAdvanceQueue: true }
+    );
   };
 
   const rejectApproval = async (approval: ExecutionApprovalRecord) => {
-    await runDecisionAction(`approval-reject:${approval.id}`, async () => {
-      const payload = await rejectExecutionPlaneApproval(approval.id, {
-        actor: DEFAULT_CONTROL_ACTOR,
-        note: `Dashboard rejected ${approval.action} for session ${selectedSessionId}`,
-      });
-      return `Approval ${payload.approval.id} marked ${payload.approval.status}.`;
-    });
+    await runDecisionAction(
+      `approval-reject:${approval.id}`,
+      async () => {
+        const payload = await rejectExecutionPlaneApproval(approval.id, {
+          actor: DEFAULT_CONTROL_ACTOR,
+          note: `Dashboard rejected ${approval.action} for session ${selectedSessionId}`,
+        });
+        return `Approval ${payload.approval.id} marked ${payload.approval.status}.`;
+      },
+      { autoAdvanceQueue: true }
+    );
   };
 
   const applyApproval = async (approval: ExecutionApprovalRecord) => {
-    await runDecisionAction(`approval-apply:${approval.id}`, async () => {
-      const payload = await applyExecutionPlaneApproval(approval.id, {
-        actor: DEFAULT_CONTROL_ACTOR,
-        note: `Dashboard applied ${approval.action} for session ${selectedSessionId}`,
-      });
-      return toStringValue(
-        payload.command_result.message,
-        `Approval ${payload.approval.id} applied successfully.`
-      );
-    });
+    await runDecisionAction(
+      `approval-apply:${approval.id}`,
+      async () => {
+        const payload = await applyExecutionPlaneApproval(approval.id, {
+          actor: DEFAULT_CONTROL_ACTOR,
+          note: `Dashboard applied ${approval.action} for session ${selectedSessionId}`,
+        });
+        return toStringValue(
+          payload.command_result.message,
+          `Approval ${payload.approval.id} applied successfully.`
+        );
+      },
+      { autoAdvanceQueue: true }
+    );
   };
 
   const resolveIssue = async (issue: ExecutionIssueRecord) => {
-    await runDecisionAction(`issue-resolve:${issue.id}`, async () => {
-      const payload = await resolveExecutionPlaneIssue(issue.id, {
-        actor: DEFAULT_CONTROL_ACTOR,
-        note: `Dashboard resolved issue ${issue.id} for session ${selectedSessionId}`,
-      });
-      return `Issue ${payload.issue.id} marked ${payload.issue.status}.`;
-    });
+    await runDecisionAction(
+      `issue-resolve:${issue.id}`,
+      async () => {
+        const payload = await resolveExecutionPlaneIssue(issue.id, {
+          actor: DEFAULT_CONTROL_ACTOR,
+          note: `Dashboard resolved issue ${issue.id} for session ${selectedSessionId}`,
+        });
+        return `Issue ${payload.issue.id} marked ${payload.issue.status}.`;
+      },
+      { autoAdvanceQueue: true }
+    );
   };
 
   const runAgentSuggestedCommand = async (
@@ -1892,29 +1960,43 @@ export default function ControlPlanePage() {
     () => sessionLineageEntries.filter((entry) => entry.runtimeAgentId).length,
     [sessionLineageEntries]
   );
-  const latestAttentionLineageEntry = useMemo(
-    () => sessionLineageEntries.find((entry) => matchesSessionLineageFilter(entry, "attention")) ?? null,
-    [sessionLineageEntries]
-  );
-  const latestDecisionLineageEntry = useMemo(
-    () => sessionLineageEntries.find((entry) => matchesSessionLineageFilter(entry, "decisions")) ?? null,
-    [sessionLineageEntries]
-  );
   const latestAgentLinkedLineageEntry = useMemo(
     () => sessionLineageEntries.find((entry) => matchesSessionLineageFilter(entry, "agent-linked")) ?? null,
     [sessionLineageEntries]
   );
-  const attentionSessionLineageQueue = useMemo(
-    () => sessionLineageEntries.filter((entry) => matchesSessionLineageFilter(entry, "attention")).slice(0, 3),
+  const attentionSessionLineageEntries = useMemo(
+    () => sessionLineageEntries.filter((entry) => matchesSessionLineageFilter(entry, "attention")),
     [sessionLineageEntries]
   );
-  const decisionSessionLineageQueue = useMemo(
-    () => sessionLineageEntries.filter((entry) => matchesSessionLineageFilter(entry, "decisions")).slice(0, 3),
+  const decisionSessionLineageEntries = useMemo(
+    () => sessionLineageEntries.filter((entry) => matchesSessionLineageFilter(entry, "decisions")),
     [sessionLineageEntries]
+  );
+  const attentionSessionLineageQueue = useMemo(
+    () => attentionSessionLineageEntries.slice(0, 3),
+    [attentionSessionLineageEntries]
+  );
+  const decisionSessionLineageQueue = useMemo(
+    () => decisionSessionLineageEntries.slice(0, 3),
+    [decisionSessionLineageEntries]
+  );
+  const attentionQueuePosition = useMemo(
+    () => sessionLineageQueuePosition(attentionSessionLineageEntries, selectedSessionLineageEntry),
+    [attentionSessionLineageEntries, selectedSessionLineageEntry]
+  );
+  const decisionQueuePosition = useMemo(
+    () => sessionLineageQueuePosition(decisionSessionLineageEntries, selectedSessionLineageEntry),
+    [decisionSessionLineageEntries, selectedSessionLineageEntry]
   );
   const selectedSessionLineageTraits = useMemo(() => {
     return sessionLineageTraits(selectedSessionLineageEntry);
   }, [selectedSessionLineageEntry]);
+  useEffect(() => {
+    selectedSessionLineageEntryRef.current = selectedSessionLineageEntry;
+  }, [selectedSessionLineageEntry]);
+  useEffect(() => {
+    sessionLineageFilterRef.current = sessionLineageFilter;
+  }, [sessionLineageFilter]);
   const syncLinkedSelection = useCallback(
     (context: LinkedSelectionContext) => {
       const approvalId = toStringValue(context.approvalId);
@@ -1988,6 +2070,44 @@ export default function ControlPlanePage() {
     },
     [inspectSessionLineageEntry]
   );
+  const advanceSessionLineageQueue = useCallback(
+    (filter: "attention" | "decisions") => {
+      const entries =
+        filter === "attention" ? attentionSessionLineageEntries : decisionSessionLineageEntries;
+      const nextEntry = nextSessionLineageQueueEntry(entries, selectedSessionLineageEntry);
+      if (!nextEntry) return;
+      focusSessionLineageEntry(nextEntry, filter);
+    },
+    [
+      attentionSessionLineageEntries,
+      decisionSessionLineageEntries,
+      focusSessionLineageEntry,
+      selectedSessionLineageEntry,
+    ]
+  );
+  useEffect(() => {
+    if (!pendingLineageAutoAdvance) return;
+    const entries =
+      pendingLineageAutoAdvance.filter === "attention"
+        ? attentionSessionLineageEntries
+        : decisionSessionLineageEntries;
+    const currentIndex = entries.findIndex(
+      (entry) => entry.key === pendingLineageAutoAdvance.previousKey
+    );
+    const nextEntry =
+      currentIndex === -1 ? (entries[0] ?? null) : (entries[currentIndex + 1] ?? entries[0] ?? null);
+    setPendingLineageAutoAdvance(null);
+    if (nextEntry) {
+      focusSessionLineageEntry(nextEntry, pendingLineageAutoAdvance.filter);
+    } else {
+      setSessionLineageFilter(pendingLineageAutoAdvance.filter);
+    }
+  }, [
+    attentionSessionLineageEntries,
+    decisionSessionLineageEntries,
+    focusSessionLineageEntry,
+    pendingLineageAutoAdvance,
+  ]);
   useEffect(() => {
     if (!selectedRun || !selectedRunResult) {
       setSelectedSessionApprovalId("");
@@ -3347,26 +3467,22 @@ export default function ControlPlanePage() {
                               variant="outline"
                               className="h-7 rounded-lg border-[#e5e5e3] bg-white px-2 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
                               onClick={() => {
-                                if (latestAttentionLineageEntry) {
-                                  focusSessionLineageEntry(latestAttentionLineageEntry, "attention");
-                                }
+                                advanceSessionLineageQueue("attention");
                               }}
-                              disabled={!latestAttentionLineageEntry}
+                              disabled={!attentionSessionLineageEntries.length}
                             >
-                              Latest attention
+                              Inspect next attention
                             </Button>
                             <Button
                               size="sm"
                               variant="outline"
                               className="h-7 rounded-lg border-[#e5e5e3] bg-white px-2 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
                               onClick={() => {
-                                if (latestDecisionLineageEntry) {
-                                  focusSessionLineageEntry(latestDecisionLineageEntry, "decisions");
-                                }
+                                advanceSessionLineageQueue("decisions");
                               }}
-                              disabled={!latestDecisionLineageEntry}
+                              disabled={!decisionSessionLineageEntries.length}
                             >
-                              Latest decision
+                              Inspect next decision
                             </Button>
                             <Button
                               size="sm"
@@ -3397,16 +3513,36 @@ export default function ControlPlanePage() {
                         </div>
                         <div className="grid gap-3 xl:grid-cols-2">
                           <div className="rounded-xl border border-[#ecebe8] bg-white p-3">
-                            <div className="flex items-center justify-between gap-3">
-                              <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#9b9a97]">
-                                Attention Queue
-                              </p>
-                              <Badge
-                                variant="outline"
-                                className="rounded-full border-[#e5e5e3] bg-[#fafaf9] px-2.5 py-1 text-[11px] font-medium text-[#37352f]"
-                              >
-                                {sessionLineageAttentionCount}
-                              </Badge>
+                            <div className="flex flex-wrap items-center justify-between gap-3">
+                              <div>
+                                <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#9b9a97]">
+                                  Attention Queue
+                                </p>
+                                <p className="mt-1 text-[12px] text-[#787774]">
+                                  {attentionQueuePosition >= 0
+                                    ? `Selected ${attentionQueuePosition + 1} of ${attentionSessionLineageEntries.length}`
+                                    : `${attentionSessionLineageEntries.length} queued`}
+                                </p>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <Badge
+                                  variant="outline"
+                                  className="rounded-full border-[#e5e5e3] bg-[#fafaf9] px-2.5 py-1 text-[11px] font-medium text-[#37352f]"
+                                >
+                                  {sessionLineageAttentionCount}
+                                </Badge>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  className="h-7 rounded-lg border-[#e5e5e3] bg-white px-2 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
+                                  onClick={() => {
+                                    advanceSessionLineageQueue("attention");
+                                  }}
+                                  disabled={!attentionSessionLineageEntries.length}
+                                >
+                                  Inspect next
+                                </Button>
+                              </div>
                             </div>
                             {!attentionSessionLineageQueue.length ? (
                               <p className="mt-3 text-[13px] text-[#9b9a97]">
@@ -3487,16 +3623,36 @@ export default function ControlPlanePage() {
                             )}
                           </div>
                           <div className="rounded-xl border border-[#ecebe8] bg-white p-3">
-                            <div className="flex items-center justify-between gap-3">
-                              <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#9b9a97]">
-                                Decision Queue
-                              </p>
-                              <Badge
-                                variant="outline"
-                                className="rounded-full border-[#e5e5e3] bg-[#fafaf9] px-2.5 py-1 text-[11px] font-medium text-[#37352f]"
-                              >
-                                {sessionLineageDecisionCount}
-                              </Badge>
+                            <div className="flex flex-wrap items-center justify-between gap-3">
+                              <div>
+                                <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#9b9a97]">
+                                  Decision Queue
+                                </p>
+                                <p className="mt-1 text-[12px] text-[#787774]">
+                                  {decisionQueuePosition >= 0
+                                    ? `Selected ${decisionQueuePosition + 1} of ${decisionSessionLineageEntries.length}`
+                                    : `${decisionSessionLineageEntries.length} queued`}
+                                </p>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <Badge
+                                  variant="outline"
+                                  className="rounded-full border-[#e5e5e3] bg-[#fafaf9] px-2.5 py-1 text-[11px] font-medium text-[#37352f]"
+                                >
+                                  {sessionLineageDecisionCount}
+                                </Badge>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  className="h-7 rounded-lg border-[#e5e5e3] bg-white px-2 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
+                                  onClick={() => {
+                                    advanceSessionLineageQueue("decisions");
+                                  }}
+                                  disabled={!decisionSessionLineageEntries.length}
+                                >
+                                  Inspect next
+                                </Button>
+                              </div>
                             </div>
                             {!decisionSessionLineageQueue.length ? (
                               <p className="mt-3 text-[13px] text-[#9b9a97]">
