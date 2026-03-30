@@ -79,6 +79,13 @@ type AgentTimelineEntry = {
   event?: Record<string, unknown>;
 };
 
+type PendingAgentTimelineTarget = {
+  runtimeAgentId: string;
+  runId: string;
+  approvalId: string;
+  issueId: string;
+};
+
 function agentTimelineEntryKey(entry: AgentTimelineEntry): string {
   return `${entry.kind}:${entry.id}`;
 }
@@ -147,6 +154,65 @@ function resolveAgentTimelineRunLink(
         return { run, resultIndex };
       }
     }
+  }
+
+  return null;
+}
+
+function resolveAgentTimelineEntryFromTarget(
+  entries: AgentTimelineEntry[],
+  target: PendingAgentTimelineTarget
+): AgentTimelineEntry | null {
+  if (target.approvalId) {
+    const approvalEntry = entries.find(
+      (entry) => entry.kind === "approval" && entry.approval?.id === target.approvalId
+    );
+    if (approvalEntry) return approvalEntry;
+  }
+
+  if (target.issueId) {
+    const issueEntry = entries.find(
+      (entry) => entry.kind === "issue" && entry.issue?.id === target.issueId
+    );
+    if (issueEntry) return issueEntry;
+  }
+
+  const eventMatches = entries.filter((entry) => entry.kind === "event");
+
+  const exactEvent = eventMatches.find((entry) => {
+    const eventRunId =
+      toStringValue(entry.event?.agent_action_run_id) || toStringValue(entry.event?.run_id);
+    const eventApprovalId = toStringValue(entry.event?.approval_id);
+    const eventIssueId = toStringValue(entry.event?.issue_id);
+    return (
+      eventRunId === target.runId &&
+      ((target.approvalId && eventApprovalId === target.approvalId) ||
+        (target.issueId && eventIssueId === target.issueId))
+    );
+  });
+  if (exactEvent) return exactEvent;
+
+  if (target.approvalId) {
+    const approvalEvent = eventMatches.find(
+      (entry) => toStringValue(entry.event?.approval_id) === target.approvalId
+    );
+    if (approvalEvent) return approvalEvent;
+  }
+
+  if (target.issueId) {
+    const issueEvent = eventMatches.find(
+      (entry) => toStringValue(entry.event?.issue_id) === target.issueId
+    );
+    if (issueEvent) return issueEvent;
+  }
+
+  if (target.runId) {
+    const runEvent = eventMatches.find((entry) => {
+      const eventRunId =
+        toStringValue(entry.event?.agent_action_run_id) || toStringValue(entry.event?.run_id);
+      return eventRunId === target.runId;
+    });
+    if (runEvent) return runEvent;
   }
 
   return null;
@@ -751,6 +817,8 @@ export default function ControlPlanePage() {
   const [agentTimelineFilter, setAgentTimelineFilter] = useState("all");
   const [agentTimelineSearch, setAgentTimelineSearch] = useState("");
   const [selectedAgentTimelineKey, setSelectedAgentTimelineKey] = useState("");
+  const [pendingAgentTimelineTarget, setPendingAgentTimelineTarget] =
+    useState<PendingAgentTimelineTarget | null>(null);
   const [historySearch, setHistorySearch] = useState("");
   const [entitySearch, setEntitySearch] = useState("");
   const [refreshing, setRefreshing] = useState(false);
@@ -1327,6 +1395,26 @@ export default function ControlPlanePage() {
     if (!selectedRun) return null;
     return selectedRun.results[selectedRunResultIndex] ?? selectedRun.results[0] ?? null;
   }, [selectedRun, selectedRunResultIndex]);
+  const openSelectedRunResultInTimeline = useCallback(() => {
+    if (!selectedRun || !selectedRunResult) return;
+    const runtimeAgentId = outcomeRuntimeAgentId(selectedRunResult);
+    if (!runtimeAgentId) {
+      setErrorMessage("Selected outcome is not linked to a runtime agent.");
+      return;
+    }
+
+    setErrorMessage("");
+    setAgentTimelineFilter("all");
+    setAgentTimelineSearch("");
+    setSelectedAgentTimelineKey("");
+    setSelectedAgentId(runtimeAgentId);
+    setPendingAgentTimelineTarget({
+      runtimeAgentId,
+      runId: selectedRun.id,
+      approvalId: toStringValue(asRecord(selectedRunResult.approval)?.id),
+      issueId: toStringValue(asRecord(selectedRunResult.issue)?.id),
+    });
+  }, [selectedRun, selectedRunResult]);
   const agentScopedRuns = useMemo(() => {
     if (!selectedAgentId) return [] as ExecutionAgentActionRunRecord[];
     return linkedRuns.filter((run) => {
@@ -1508,6 +1596,23 @@ export default function ControlPlanePage() {
         : null,
     [linkedRuns, selectedAgentTimelineEntry]
   );
+  useEffect(() => {
+    if (!pendingAgentTimelineTarget) return;
+    if (!selectedAgentId || pendingAgentTimelineTarget.runtimeAgentId !== selectedAgentId) return;
+    if (!selectedAgent) return;
+
+    const matchedEntry = resolveAgentTimelineEntryFromTarget(
+      agentTimelineEntries,
+      pendingAgentTimelineTarget
+    );
+    if (matchedEntry) {
+      setSelectedAgentTimelineKey(agentTimelineEntryKey(matchedEntry));
+      setNotice("");
+    } else {
+      setNotice("Found runtime agent, but no linked timeline item was available for this outcome.");
+    }
+    setPendingAgentTimelineTarget(null);
+  }, [agentTimelineEntries, pendingAgentTimelineTarget, selectedAgent, selectedAgentId]);
   const selectedControl = selectedSession?.control ?? null;
   const loading = !controlSummary || !sessionSummary;
 
@@ -2041,6 +2146,18 @@ export default function ControlPlanePage() {
                               Selected Outcome
                             </p>
                             <div className="flex flex-wrap items-center gap-2">
+                              {runtimeAgentId && (
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  className="h-8 rounded-lg border-[#e5e5e3] bg-white px-3 text-[12px] text-[#37352f] hover:bg-[#f7f7f5]"
+                                  onClick={() => {
+                                    openSelectedRunResultInTimeline();
+                                  }}
+                                >
+                                  Open in agent timeline
+                                </Button>
+                              )}
                               {runtimeAgentId && (
                                 <Button
                                   size="sm"
