@@ -2,7 +2,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AppSidebar } from "@/components/app-sidebar";
 import { ControlPlaneHeaderSections } from "@/components/control-plane-header-sections";
-import { ControlPlaneWorkspaceSection } from "@/components/control-plane-workspace-section";
+import { ControlPlaneMainSections } from "@/components/control-plane-main-sections";
 import {
   type QueueAdvanceFeedback,
   type QueueAdvanceFocusDelta,
@@ -11,7 +11,6 @@ import {
   type QueueAdvanceReasonDetails,
   type QueueAdvanceSignal,
 } from "@/components/queue-advance-notice";
-import { SessionDrilldownSection } from "@/components/session-drilldown-section";
 import { SelectedOutcomeInspector } from "@/components/selected-outcome-inspector";
 import {
   applyExecutionPlaneOrchestratorSessionControlPlan,
@@ -4482,6 +4481,504 @@ export default function ControlPlanePage() {
     );
   }
 
+  const workspaceSectionProps = {
+    recentControlPasses,
+    totalControlPassCount: controlPasses.length,
+    selectedPassId,
+    formatTimestamp,
+    toStringValue,
+    toNumber,
+    onInspectControlPass: (controlPass: OrchestratorControlPassRecord) => {
+      setSelectedPassId(controlPass.id);
+      if (controlPass.orchestrator_session_id) {
+        setSelectedSessionId(controlPass.orchestrator_session_id);
+      }
+    },
+    selectedActionRunCardProps: {
+      selectedRun,
+      selectedRunResultIndex,
+      onSelectResult: setSelectedRunResultIndex,
+      formatTimestamp,
+      formatScopeList,
+      describeRunResult,
+      toNumber,
+      toStringArray,
+      toStringValue,
+      asRecord,
+      children:
+        selectedRun && selectedRunResult ? (
+          <SelectedOutcomeInspector
+            selectedRun={selectedRun}
+            selectedRunResult={selectedRunResult}
+            selectedRunResultIndex={selectedRunResultIndex}
+            selectedSessionEvents={selectedSession?.events || []}
+            formatJson={formatJson}
+            asRecord={asRecord}
+            toStringValue={toStringValue}
+            sessionEventKey={sessionEventKey}
+            resolveSessionEventFromContext={resolveSessionEventFromContext}
+            outcomeProjectId={outcomeProjectId}
+            outcomeProjectName={outcomeProjectName}
+            outcomeStoryId={outcomeStoryId}
+            outcomeStoryTitle={outcomeStoryTitle}
+            outcomeRuntimeAgentId={outcomeRuntimeAgentId}
+            onOpenInAgentTimeline={openSelectedRunResultInTimeline}
+            onFocusRuntimeAgent={(runtimeAgentId) => {
+              focusRuntimeAgent(runtimeAgentId, true);
+            }}
+            onFindApproval={(approvalId) => {
+              setEntitySearch(approvalId);
+            }}
+            onFindIssue={(issueId) => {
+              setEntitySearch(issueId);
+            }}
+            onSelectRunOutcome={(runId, resultIndex) => {
+              setSelectedRunId(runId);
+              setSelectedRunResultIndex(resultIndex);
+            }}
+            onSyncLinkedSelection={syncLinkedSelection}
+          />
+        ) : null,
+    },
+    sessionLineageSectionProps: {
+      hasSelectedSession: Boolean(selectedSession),
+      sessionEventTotalCount: selectedSession?.events.length || 0,
+      sessionLineageEntries,
+      linkedRunCount: linkedRuns.length,
+      linkedApprovalCount: linkedApprovals.length,
+      linkedIssueCount: linkedIssues.length,
+      linkedAgentCount: linkedAgentIds.length,
+      sessionLineageDecisionCount,
+      sessionLineageEventCount,
+      sessionLineageAgentCount,
+      sessionLineageStatusCounts,
+      filteredSessionLineageEntriesCount: filteredSessionLineageEntries.length,
+      sessionLineageFilter: sessionLineageFilter as
+        | "all"
+        | "attention"
+        | "decisions"
+        | "agent-linked",
+      onSessionLineageFilterChange: (value: "all" | "attention" | "decisions" | "agent-linked") => {
+        setSessionLineageFilter(value);
+      },
+      sessionLineageAttentionCount,
+      sessionLineageAgentLinkedCount,
+      persistedDismissedLineageQueueCount,
+      persistedSnoozedLineageQueueCount,
+      sessionLineagePriorityCounts,
+      hasPersistedLineageQueuePreferences,
+      onExportSessionLineageQueuePreferences: exportSessionLineageQueuePreferences,
+      onResetSessionLineageQueuePreferences: resetSessionLineageQueuePreferences,
+      selectedSessionLineageEntry,
+      selectedSessionLineagePriority,
+      selectedSessionLineageTraits,
+      formatTimestamp,
+      nextBestSessionLineageEntry,
+      attentionSessionLineageEntries,
+      decisionSessionLineageEntries,
+      latestAgentLinkedLineageEntry,
+      onInspectSessionLineageEntry: inspectSessionLineageEntry,
+      onAdvanceSessionLineageQueue: advanceSessionLineageQueue,
+      onFocusSessionLineageEntry: focusSessionLineageEntry,
+      expandedSessionLineageQueues,
+      currentSessionLineageQueue,
+      onExpandAllSessionLineageQueues: expandAllSessionLineageQueues,
+      onCollapseAllSessionLineageQueues: collapseAllSessionLineageQueues,
+      onOpenCurrentSessionLineageQueue: openCurrentSessionLineageQueue,
+      sessionQueueAdvanceFeedback,
+      sessionQueueAdvanceFocusSummary,
+      sessionQueueFocusDelta,
+      sessionQueueAdvanceNoticeActions: sessionQueueAdvanceNoticeActions,
+      attentionQueuePosition,
+      hiddenAttentionQueueCount,
+      attentionSessionLineageQueue,
+      onToggleSessionLineageQueueExpansion: toggleSessionLineageQueueExpansion,
+      onRestoreSessionLineageQueue: restoreSessionLineageQueue,
+      sessionLineagePriority,
+      sessionLineageTraits,
+      onSnoozeSessionLineageQueueEntry: snoozeSessionLineageQueueEntry,
+      onAdvanceSessionLineageQueueFromEntry: advanceSessionLineageQueueFromEntry,
+      onDismissSessionLineageQueueEntry: dismissSessionLineageQueueEntry,
+      onFindSessionLineageEntryInSession: findSessionLineageEntryInSession,
+      onRevealSessionLineageEntryInTimeline: revealSessionLineageEntryInTimeline,
+      decisionQueuePosition,
+      hiddenDecisionQueueCount,
+      decisionSessionLineageQueue,
+      visibleSessionLineageEntries,
+      onSelectRunOutcome: (runId: string, resultIndex: number) => {
+        setSelectedRunId(runId);
+        setSelectedRunResultIndex(resultIndex);
+      },
+    },
+    triageInboxSectionProps: {
+      triageInboxItemCount,
+      triageInboxItems,
+      selectedTriageInboxItem,
+      syncedTriageInboxItem,
+      formatTimestamp,
+      onInspectTriageInboxItem: inspectTriageInboxItem,
+      onInspectAndAdvanceTriageInboxItem: inspectAndAdvanceTriageInboxItem,
+      onAdvanceTriageInboxCursor: advanceTriageInboxCursor,
+      onSyncTriageInboxCursorToSelection: syncTriageInboxCursorToSelection,
+      triageInboxFeedbackHistoryCount: triageInboxFeedbackHistory.length,
+      triageInboxFeedbackFilter,
+      onTriageInboxFeedbackFilterChange: setTriageInboxFeedbackFilter,
+      triageInboxFeedbackCounts,
+      triageInboxFeedback,
+      groupedRecentTriageInboxFeedback,
+      recentTriageInboxFeedbackCount: recentTriageInboxFeedback.length,
+      expandedTriageInboxResultGroups,
+      currentTriageInboxFeedbackGroup,
+      onExpandAllTriageInboxResultGroups: expandAllTriageInboxResultGroups,
+      onCollapseAllTriageInboxResultGroups: collapseAllTriageInboxResultGroups,
+      onOpenCurrentTriageInboxResultGroup: openCurrentTriageInboxResultGroup,
+      onToggleTriageInboxResultGroup: toggleTriageInboxResultGroup,
+      onOpenTriageInboxHistoryGroup: openTriageInboxHistoryGroup,
+      onSnoozeTriageInboxItem: snoozeTriageInboxItem,
+      onDismissTriageInboxItem: dismissTriageInboxItem,
+    },
+    runtimeAgentSectionProps: {
+      selectedAgentId,
+      agentLoading,
+      selectedAgent,
+      busyActionKey,
+      formatTimestamp,
+      toNumber,
+      toStringValue,
+      onFocusRuntimeAgent: (runtimeAgentId: string) => {
+        focusRuntimeAgent(runtimeAgentId, true);
+      },
+      onRunSuggestedCommand: (
+        command: Record<string, unknown>,
+        mode: "execute_now" | "request_approval"
+      ) => {
+        void runAgentSuggestedCommand(command, mode);
+      },
+      activitySectionProps: selectedAgent
+        ? {
+            selectedAgent,
+            agentScopedRuns,
+            agentActivitySearch,
+            onAgentActivitySearchChange: setAgentActivitySearch,
+            agentActivityFilter,
+            onAgentActivityFilterChange: setAgentActivityFilter,
+            filteredAgentScopedRuns,
+            selectedRunId,
+            selectedRunResultIndex,
+            onSelectRun: (runId: string, resultIndex: number) => {
+              setSelectedRunId(runId);
+              setSelectedRunResultIndex(resultIndex);
+            },
+            formatTimestamp,
+            toNumber,
+            describeRunResult,
+            agentScopedOutcomes,
+            filteredAgentScopedOutcomes,
+            outcomeProjectId,
+            outcomeStoryId,
+            toStringValue,
+            asRecord,
+            onFindOutcomeInSession: (runId: string, resultIndex: number) => {
+              setEntitySearch(runId);
+              setSelectedRunId(runId);
+              setSelectedRunResultIndex(resultIndex);
+            },
+          }
+        : null,
+      timelineSectionProps: selectedAgent
+        ? {
+            selectedAgent,
+            activeAgentTimelineEntries,
+            hiddenAgentTimelineEntryCount,
+            agentTimelineSearch,
+            onAgentTimelineSearchChange: setAgentTimelineSearch,
+            agentTimelineFilter: agentTimelineFilter as
+              | "all"
+              | "approvals"
+              | "issues"
+              | "events"
+              | "attention",
+            onAgentTimelineFilterChange: (
+              value: "all" | "approvals" | "issues" | "events" | "attention"
+            ) => {
+              setAgentTimelineFilter(value);
+            },
+            persistedDismissedAgentTimelineCount,
+            persistedSnoozedAgentTimelineCount,
+            agentTimelinePriorityCounts,
+            nextBestAgentTimelineEntry,
+            hasPersistedAgentTimelinePreferences,
+            onInspectAgentTimelineEntry: inspectAgentTimelineEntry,
+            onRestoreAgentTimelineHidden: restoreAgentTimelineHidden,
+            onExportAgentTimelinePreferences: exportAgentTimelinePreferences,
+            onResetAgentTimelinePreferences: resetAgentTimelinePreferences,
+            agentQueueAdvanceFeedback,
+            agentQueueAdvanceFocusSummary,
+            agentQueueFocusDelta,
+            agentQueueAdvanceNoticeActions: agentQueueAdvanceNoticeActions,
+            nextCriticalAgentTimelineEntry,
+            nextHighAgentTimelineEntry,
+            expandedAgentPriorityQueues,
+            currentAgentPriorityQueue,
+            onExpandAllAgentPriorityQueues: expandAllAgentPriorityQueues,
+            onCollapseAllAgentPriorityQueues: collapseAllAgentPriorityQueues,
+            onOpenCurrentAgentPriorityQueue: openCurrentAgentPriorityQueue,
+            criticalAgentTimelineQueue,
+            criticalAgentTimelineTotal: criticalAgentTimelineEntries.length,
+            criticalAgentTimelinePosition,
+            highAgentTimelineQueue,
+            highAgentTimelineTotal: highAgentTimelineEntries.length,
+            highAgentTimelinePosition,
+            onToggleAgentPriorityQueueExpansion: toggleAgentPriorityQueueExpansion,
+            filteredAgentTimelineEntriesCount: filteredAgentTimelineEntries.length,
+            visibleAgentTimelineEntries,
+            selectedAgentTimelineEntry,
+            selectedAgentTimelineRunLink,
+            selectedAgentTimelinePriority,
+            latestAgentIssueEntry,
+            latestAgentApprovalEntry,
+            latestAgentEventEntry,
+            busyActionKey,
+            formatTimestamp,
+            formatJson,
+            toStringValue,
+            toNullableNumber,
+            asRecord,
+            describeRunResult,
+            onSelectTimelineEntry: (entry: AgentTimelineEntry) => {
+              setSelectedAgentTimelineKey(agentTimelineEntryKey(entry));
+            },
+            onSyncLinkedSelection: syncLinkedSelection,
+            onFocusRuntimeAgent: (runtimeAgentId: string) => {
+              focusRuntimeAgent(runtimeAgentId, true);
+            },
+            onSelectRun: (runId: string, resultIndex: number) => {
+              setSelectedRunId(runId);
+              setSelectedRunResultIndex(resultIndex);
+            },
+            onApproveApproval: (approval: ExecutionApprovalRecord) => {
+              void approveApproval(approval);
+            },
+            onRejectApproval: (approval: ExecutionApprovalRecord) => {
+              void rejectApproval(approval);
+            },
+            onApplyApproval: (approval: ExecutionApprovalRecord) => {
+              void applyApproval(approval);
+            },
+            onResolveIssue: (issue: ExecutionIssueRecord) => {
+              void resolveIssue(issue);
+            },
+            onAdvanceCurrentPriorityQueue: (entry: AgentTimelineEntry) => {
+              if (currentAgentPriorityQueue) {
+                advanceAgentPriorityQueueFromEntry(currentAgentPriorityQueue, entry);
+              }
+            },
+            onSearchEntity: setEntitySearch,
+            onFocusAgentTimeline: (
+              filter: "issues" | "approvals" | "events" | "attention",
+              entry?: AgentTimelineEntry
+            ) => {
+              focusAgentTimeline(filter, entry ? { entry } : undefined);
+            },
+            onFilterSessionByToken: (value: string) => {
+              setEventFilter("all");
+              setEntitySearch(value);
+            },
+            onSnoozeAgentTimelineEntry: snoozeAgentTimelineEntry,
+            onDismissAgentTimelineEntry: dismissAgentTimelineEntry,
+            onAdvanceAgentPriorityQueueFromEntry: advanceAgentPriorityQueueFromEntry,
+            onFindAgentTimelineEntryInSession: findAgentTimelineEntryInSession,
+            onRevealAgentTimelineEntry: revealAgentTimelineEntry,
+            agentTimelineEntryKey,
+            agentTimelinePriority,
+            agentTimelineRowDomId,
+          }
+        : null,
+    },
+    controlPlaneOverviewSectionsProps: {
+      controlSummary,
+      recentSessions,
+      totalSessionCount: sessions.length,
+      selectedSessionId,
+      onSelectSession: setSelectedSessionId,
+      sessionSummary,
+    },
+  };
+
+  const sessionDrilldownSectionProps = {
+    selectedSessionId,
+    sessionLoading,
+    selectedSession,
+    controlSectionProps: selectedSession
+      ? {
+          selectedSession,
+          selectedControl,
+          linkedAgentIds,
+          selectedAgentId,
+          onFocusRuntimeAgent: (runtimeAgentId: string) => {
+            focusRuntimeAgent(runtimeAgentId, true);
+          },
+          filteredRunsCount: filteredRuns.length,
+          linkedRunsCount: linkedRuns.length,
+          filteredEventsCount: filteredEvents.length,
+          filteredApprovalsCount: filteredApprovals.length,
+          linkedApprovalsCount: linkedApprovals.length,
+          filteredIssuesCount: filteredIssues.length,
+          linkedIssuesCount: linkedIssues.length,
+          entitySearch,
+          onEntitySearchChange: setEntitySearch,
+          onClearEntitySearch: () => {
+            setEntitySearch("");
+          },
+          sortedProfiles,
+          busyActionKey,
+          onApplyControlPlan: (profile: OrchestratorSessionControlProfile) => {
+            void applyControlPlan(profile);
+          },
+          onApplyRecommendation: (recommendation: OrchestratorSessionControlRecommendation) => {
+            void applyRecommendation(recommendation);
+          },
+        }
+      : null,
+    activitySectionProps: selectedSession
+      ? {
+          selectedSession,
+          selectedControl,
+          linkedRuns,
+          runFilter: runFilter as "all" | "execute" | "preview" | "attention",
+          onRunFilterChange: setRunFilter,
+          getRunFilterCount: (filter: "execute" | "preview" | "attention") =>
+            linkedRuns.filter((run) => matchesRunFilter(run, filter)).length,
+          filteredRuns,
+          selectedRunId,
+          onSelectRun: setSelectedRunId,
+          onFocusRuntimeAgent: (runtimeAgentId: string) => {
+            focusRuntimeAgent(runtimeAgentId, true);
+          },
+          toNumber,
+          eventFilter: eventFilter as
+            | "all"
+            | "control"
+            | "actions"
+            | "decisions"
+            | "attention",
+          onEventFilterChange: setEventFilter,
+          getEventFilterCount: (filter: "control" | "actions" | "decisions" | "attention") =>
+            (selectedSession.events || []).filter((event) => matchesEventFilter(event, filter))
+              .length,
+          filteredEvents,
+          visibleSessionEvents,
+          selectedSessionEventKey,
+          toStringValue,
+          toStringArray,
+          toNullableNumber,
+          formatTimestamp,
+          eventFamily,
+          sessionEventKey,
+          sessionContextRowDomId,
+          onSyncLinkedSelection: syncLinkedSelection,
+          onSearchEntity: setEntitySearch,
+        }
+      : null,
+    selectedControlPassCardProps: {
+      selectedPass,
+      toStringValue,
+      toNumber,
+      onOpenSession: setSelectedSessionId,
+    },
+    linkedDecisionsCardProps: {
+      selectedSession,
+      linkedApprovals,
+      filteredApprovals,
+      visibleSessionApprovals,
+      selectedSessionApprovalId,
+      linkedIssues,
+      filteredIssues,
+      visibleSessionIssues,
+      selectedSessionIssueId,
+      busyActionKey,
+      formatTimestamp,
+      sessionContextRowDomId,
+      onSearchEntity: setEntitySearch,
+      onFocusRuntimeAgent: (runtimeAgentId: string) => {
+        focusRuntimeAgent(runtimeAgentId, true);
+      },
+      onInspectApproval: (approval: ExecutionApprovalRecord) => {
+        syncLinkedSelection({
+          approvalId: approval.id,
+          issueId: approval.issue_id,
+          runtimeAgentId: approval.runtime_agent_ids[0],
+        });
+      },
+      onInspectIssue: (issue: ExecutionIssueRecord) => {
+        syncLinkedSelection({
+          issueId: issue.id,
+          approvalId: issue.approval_id,
+          runtimeAgentId: issue.runtime_agent_ids[0] || issue.runtime_agent_id,
+        });
+      },
+      onApproveApproval: (approval: ExecutionApprovalRecord) => {
+        void approveApproval(approval);
+      },
+      onRejectApproval: (approval: ExecutionApprovalRecord) => {
+        void rejectApproval(approval);
+      },
+      onApplyApproval: (approval: ExecutionApprovalRecord) => {
+        void applyApproval(approval);
+      },
+      onResolveIssue: (issue: ExecutionIssueRecord) => {
+        void resolveIssue(issue);
+      },
+    },
+    selectedSessionContextCardProps: {
+      selectedSession,
+      selectedSessionContext,
+      linkedRuns,
+      busyActionKey,
+      currentSessionLineageQueue,
+      formatTimestamp,
+      formatJson,
+      toStringValue,
+      toStringArray,
+      toNullableNumber,
+      asRecord,
+      eventFamily,
+      describeRunResult,
+      resolveRunLinkFromContext,
+      onRevealSessionRow: revealSelectedSessionContextRow,
+      onRevealInAgentTimeline: revealSelectedSessionContextInAgentTimeline,
+      onOpenRuntimeAgent: (runtimeAgentId: string) => {
+        focusRuntimeAgent(runtimeAgentId, true);
+      },
+      onSyncLinkedSelection: syncLinkedSelection,
+      onOpenRunOutcome: (runId: string, resultIndex: number) => {
+        setSelectedRunId(runId);
+        setSelectedRunResultIndex(resultIndex);
+      },
+      onApproveApproval: (approval: ExecutionApprovalRecord) => {
+        void approveApproval(approval);
+      },
+      onRejectApproval: (approval: ExecutionApprovalRecord) => {
+        void rejectApproval(approval);
+      },
+      onApplyApproval: (approval: ExecutionApprovalRecord) => {
+        void applyApproval(approval);
+      },
+      onResolveIssue: (issue: ExecutionIssueRecord) => {
+        void resolveIssue(issue);
+      },
+      onAdvanceCurrentQueue:
+        currentSessionLineageQueue && selectedSessionLineageEntry
+          ? () => {
+              advanceSessionLineageQueueFromEntry(
+                currentSessionLineageQueue,
+                selectedSessionLineageEntry
+              );
+            }
+          : null,
+    },
+  };
+
   return (
     <div className="flex min-h-screen bg-[#fafaf9]">
       <AppSidebar health={health} projects={visibleProjects} />
@@ -4510,513 +5007,12 @@ export default function ControlPlanePage() {
           totalControlPassCount={controlPasses.length}
         />
 
-        <div className="space-y-6 px-6 py-6">
-          {notice && (
-            <div className="rounded-xl border border-[#d6e9dc] bg-[#eef8f1] px-4 py-3 text-[13px] text-[#2b6e3f]">
-              {notice}
-            </div>
-          )}
-          {errorMessage && (
-            <div className="rounded-xl border border-[#f0d0c9] bg-[#fff6f4] px-4 py-3 text-[13px] text-[#93370d]">
-              {errorMessage}
-            </div>
-          )}
-
-          <ControlPlaneWorkspaceSection
-            recentControlPasses={recentControlPasses}
-            totalControlPassCount={controlPasses.length}
-            selectedPassId={selectedPassId}
-            formatTimestamp={formatTimestamp}
-            toStringValue={toStringValue}
-            toNumber={toNumber}
-            onInspectControlPass={(controlPass) => {
-              setSelectedPassId(controlPass.id);
-              if (controlPass.orchestrator_session_id) {
-                setSelectedSessionId(controlPass.orchestrator_session_id);
-              }
-            }}
-            selectedActionRunCardProps={{
-              selectedRun,
-              selectedRunResultIndex,
-              onSelectResult: setSelectedRunResultIndex,
-              formatTimestamp,
-              formatScopeList,
-              describeRunResult,
-              toNumber,
-              toStringArray,
-              toStringValue,
-              asRecord,
-              children:
-                selectedRun && selectedRunResult ? (
-                  <SelectedOutcomeInspector
-                    selectedRun={selectedRun}
-                    selectedRunResult={selectedRunResult}
-                    selectedRunResultIndex={selectedRunResultIndex}
-                    selectedSessionEvents={selectedSession?.events || []}
-                    formatJson={formatJson}
-                    asRecord={asRecord}
-                    toStringValue={toStringValue}
-                    sessionEventKey={sessionEventKey}
-                    resolveSessionEventFromContext={resolveSessionEventFromContext}
-                    outcomeProjectId={outcomeProjectId}
-                    outcomeProjectName={outcomeProjectName}
-                    outcomeStoryId={outcomeStoryId}
-                    outcomeStoryTitle={outcomeStoryTitle}
-                    outcomeRuntimeAgentId={outcomeRuntimeAgentId}
-                    onOpenInAgentTimeline={openSelectedRunResultInTimeline}
-                    onFocusRuntimeAgent={(runtimeAgentId) => {
-                      focusRuntimeAgent(runtimeAgentId, true);
-                    }}
-                    onFindApproval={(approvalId) => {
-                      setEntitySearch(approvalId);
-                    }}
-                    onFindIssue={(issueId) => {
-                      setEntitySearch(issueId);
-                    }}
-                    onSelectRunOutcome={(runId, resultIndex) => {
-                      setSelectedRunId(runId);
-                      setSelectedRunResultIndex(resultIndex);
-                    }}
-                    onSyncLinkedSelection={syncLinkedSelection}
-                  />
-                ) : null,
-            }}
-            sessionLineageSectionProps={{
-              hasSelectedSession: Boolean(selectedSession),
-              sessionEventTotalCount: selectedSession?.events.length || 0,
-              sessionLineageEntries,
-              linkedRunCount: linkedRuns.length,
-              linkedApprovalCount: linkedApprovals.length,
-              linkedIssueCount: linkedIssues.length,
-              linkedAgentCount: linkedAgentIds.length,
-              sessionLineageDecisionCount: sessionLineageDecisionCount,
-              sessionLineageEventCount: sessionLineageEventCount,
-              sessionLineageAgentCount: sessionLineageAgentCount,
-              sessionLineageStatusCounts,
-              filteredSessionLineageEntriesCount: filteredSessionLineageEntries.length,
-              sessionLineageFilter: sessionLineageFilter as
-                | "all"
-                | "attention"
-                | "decisions"
-                | "agent-linked",
-              onSessionLineageFilterChange: (value) => {
-                setSessionLineageFilter(value);
-              },
-              sessionLineageAttentionCount,
-              sessionLineageAgentLinkedCount,
-              persistedDismissedLineageQueueCount,
-              persistedSnoozedLineageQueueCount,
-              sessionLineagePriorityCounts,
-              hasPersistedLineageQueuePreferences,
-              onExportSessionLineageQueuePreferences: exportSessionLineageQueuePreferences,
-              onResetSessionLineageQueuePreferences: resetSessionLineageQueuePreferences,
-              selectedSessionLineageEntry,
-              selectedSessionLineagePriority,
-              selectedSessionLineageTraits,
-              formatTimestamp,
-              nextBestSessionLineageEntry,
-              attentionSessionLineageEntries,
-              decisionSessionLineageEntries,
-              latestAgentLinkedLineageEntry,
-              onInspectSessionLineageEntry: inspectSessionLineageEntry,
-              onAdvanceSessionLineageQueue: advanceSessionLineageQueue,
-              onFocusSessionLineageEntry: focusSessionLineageEntry,
-              expandedSessionLineageQueues,
-              currentSessionLineageQueue,
-              onExpandAllSessionLineageQueues: expandAllSessionLineageQueues,
-              onCollapseAllSessionLineageQueues: collapseAllSessionLineageQueues,
-              onOpenCurrentSessionLineageQueue: openCurrentSessionLineageQueue,
-              sessionQueueAdvanceFeedback,
-              sessionQueueAdvanceFocusSummary,
-              sessionQueueFocusDelta,
-              sessionQueueAdvanceNoticeActions: sessionQueueAdvanceNoticeActions,
-              attentionQueuePosition,
-              hiddenAttentionQueueCount,
-              attentionSessionLineageQueue,
-              onToggleSessionLineageQueueExpansion: toggleSessionLineageQueueExpansion,
-              onRestoreSessionLineageQueue: restoreSessionLineageQueue,
-              sessionLineagePriority,
-              sessionLineageTraits,
-              onSnoozeSessionLineageQueueEntry: snoozeSessionLineageQueueEntry,
-              onAdvanceSessionLineageQueueFromEntry: advanceSessionLineageQueueFromEntry,
-              onDismissSessionLineageQueueEntry: dismissSessionLineageQueueEntry,
-              onFindSessionLineageEntryInSession: findSessionLineageEntryInSession,
-              onRevealSessionLineageEntryInTimeline: revealSessionLineageEntryInTimeline,
-              decisionQueuePosition,
-              hiddenDecisionQueueCount,
-              decisionSessionLineageQueue,
-              visibleSessionLineageEntries,
-              onSelectRunOutcome: (runId, resultIndex) => {
-                setSelectedRunId(runId);
-                setSelectedRunResultIndex(resultIndex);
-              },
-            }}
-            triageInboxSectionProps={{
-              triageInboxItemCount,
-              triageInboxItems,
-              selectedTriageInboxItem,
-              syncedTriageInboxItem,
-              formatTimestamp,
-              onInspectTriageInboxItem: inspectTriageInboxItem,
-              onInspectAndAdvanceTriageInboxItem: inspectAndAdvanceTriageInboxItem,
-              onAdvanceTriageInboxCursor: advanceTriageInboxCursor,
-              onSyncTriageInboxCursorToSelection: syncTriageInboxCursorToSelection,
-              triageInboxFeedbackHistoryCount: triageInboxFeedbackHistory.length,
-              triageInboxFeedbackFilter,
-              onTriageInboxFeedbackFilterChange: setTriageInboxFeedbackFilter,
-              triageInboxFeedbackCounts,
-              triageInboxFeedback,
-              groupedRecentTriageInboxFeedback,
-              recentTriageInboxFeedbackCount: recentTriageInboxFeedback.length,
-              expandedTriageInboxResultGroups,
-              currentTriageInboxFeedbackGroup,
-              onExpandAllTriageInboxResultGroups: expandAllTriageInboxResultGroups,
-              onCollapseAllTriageInboxResultGroups: collapseAllTriageInboxResultGroups,
-              onOpenCurrentTriageInboxResultGroup: openCurrentTriageInboxResultGroup,
-              onToggleTriageInboxResultGroup: toggleTriageInboxResultGroup,
-              onOpenTriageInboxHistoryGroup: openTriageInboxHistoryGroup,
-              onSnoozeTriageInboxItem: snoozeTriageInboxItem,
-              onDismissTriageInboxItem: dismissTriageInboxItem,
-            }}
-            runtimeAgentSectionProps={{
-              selectedAgentId,
-              agentLoading,
-              selectedAgent,
-              busyActionKey,
-              formatTimestamp,
-              toNumber,
-              toStringValue,
-              onFocusRuntimeAgent: (runtimeAgentId) => {
-                focusRuntimeAgent(runtimeAgentId, true);
-              },
-              onRunSuggestedCommand: (command, mode) => {
-                void runAgentSuggestedCommand(command, mode);
-              },
-              activitySectionProps: selectedAgent
-                ? {
-                    selectedAgent,
-                    agentScopedRuns,
-                    agentActivitySearch,
-                    onAgentActivitySearchChange: setAgentActivitySearch,
-                    agentActivityFilter,
-                    onAgentActivityFilterChange: setAgentActivityFilter,
-                    filteredAgentScopedRuns,
-                    selectedRunId,
-                    selectedRunResultIndex,
-                    onSelectRun: (runId, resultIndex) => {
-                      setSelectedRunId(runId);
-                      setSelectedRunResultIndex(resultIndex);
-                    },
-                    formatTimestamp,
-                    toNumber,
-                    describeRunResult,
-                    agentScopedOutcomes,
-                    filteredAgentScopedOutcomes,
-                    outcomeProjectId,
-                    outcomeStoryId,
-                    toStringValue,
-                    asRecord,
-                    onFindOutcomeInSession: (runId, resultIndex) => {
-                      setEntitySearch(runId);
-                      setSelectedRunId(runId);
-                      setSelectedRunResultIndex(resultIndex);
-                    },
-                  }
-                : null,
-              timelineSectionProps: selectedAgent
-                ? {
-                    selectedAgent,
-                    activeAgentTimelineEntries,
-                    hiddenAgentTimelineEntryCount,
-                    agentTimelineSearch,
-                    onAgentTimelineSearchChange: setAgentTimelineSearch,
-                    agentTimelineFilter: agentTimelineFilter as
-                      | "all"
-                      | "approvals"
-                      | "issues"
-                      | "events"
-                      | "attention",
-                    onAgentTimelineFilterChange: (value) => {
-                      setAgentTimelineFilter(value);
-                    },
-                    persistedDismissedAgentTimelineCount,
-                    persistedSnoozedAgentTimelineCount,
-                    agentTimelinePriorityCounts,
-                    nextBestAgentTimelineEntry,
-                    hasPersistedAgentTimelinePreferences,
-                    onInspectAgentTimelineEntry: inspectAgentTimelineEntry,
-                    onRestoreAgentTimelineHidden: restoreAgentTimelineHidden,
-                    onExportAgentTimelinePreferences: exportAgentTimelinePreferences,
-                    onResetAgentTimelinePreferences: resetAgentTimelinePreferences,
-                    agentQueueAdvanceFeedback,
-                    agentQueueAdvanceFocusSummary,
-                    agentQueueFocusDelta,
-                    agentQueueAdvanceNoticeActions: agentQueueAdvanceNoticeActions,
-                    nextCriticalAgentTimelineEntry,
-                    nextHighAgentTimelineEntry,
-                    expandedAgentPriorityQueues,
-                    currentAgentPriorityQueue,
-                    onExpandAllAgentPriorityQueues: expandAllAgentPriorityQueues,
-                    onCollapseAllAgentPriorityQueues: collapseAllAgentPriorityQueues,
-                    onOpenCurrentAgentPriorityQueue: openCurrentAgentPriorityQueue,
-                    criticalAgentTimelineQueue,
-                    criticalAgentTimelineTotal: criticalAgentTimelineEntries.length,
-                    criticalAgentTimelinePosition,
-                    highAgentTimelineQueue,
-                    highAgentTimelineTotal: highAgentTimelineEntries.length,
-                    highAgentTimelinePosition,
-                    onToggleAgentPriorityQueueExpansion: toggleAgentPriorityQueueExpansion,
-                    filteredAgentTimelineEntriesCount: filteredAgentTimelineEntries.length,
-                    visibleAgentTimelineEntries,
-                    selectedAgentTimelineEntry,
-                    selectedAgentTimelineRunLink,
-                    selectedAgentTimelinePriority,
-                    latestAgentIssueEntry,
-                    latestAgentApprovalEntry,
-                    latestAgentEventEntry,
-                    busyActionKey,
-                    formatTimestamp,
-                    formatJson,
-                    toStringValue,
-                    toNullableNumber,
-                    asRecord,
-                    describeRunResult,
-                    onSelectTimelineEntry: (entry) => {
-                      setSelectedAgentTimelineKey(agentTimelineEntryKey(entry));
-                    },
-                    onSyncLinkedSelection: syncLinkedSelection,
-                    onFocusRuntimeAgent: (runtimeAgentId) => {
-                      focusRuntimeAgent(runtimeAgentId, true);
-                    },
-                    onSelectRun: (runId, resultIndex) => {
-                      setSelectedRunId(runId);
-                      setSelectedRunResultIndex(resultIndex);
-                    },
-                    onApproveApproval: (approval) => {
-                      void approveApproval(approval);
-                    },
-                    onRejectApproval: (approval) => {
-                      void rejectApproval(approval);
-                    },
-                    onApplyApproval: (approval) => {
-                      void applyApproval(approval);
-                    },
-                    onResolveIssue: (issue) => {
-                      void resolveIssue(issue);
-                    },
-                    onAdvanceCurrentPriorityQueue: (entry) => {
-                      if (currentAgentPriorityQueue) {
-                        advanceAgentPriorityQueueFromEntry(currentAgentPriorityQueue, entry);
-                      }
-                    },
-                    onSearchEntity: setEntitySearch,
-                    onFocusAgentTimeline: (filter, entry) => {
-                      focusAgentTimeline(filter, entry ? { entry } : undefined);
-                    },
-                    onFilterSessionByToken: (value) => {
-                      setEventFilter("all");
-                      setEntitySearch(value);
-                    },
-                    onSnoozeAgentTimelineEntry: snoozeAgentTimelineEntry,
-                    onDismissAgentTimelineEntry: dismissAgentTimelineEntry,
-                    onAdvanceAgentPriorityQueueFromEntry: advanceAgentPriorityQueueFromEntry,
-                    onFindAgentTimelineEntryInSession: findAgentTimelineEntryInSession,
-                    onRevealAgentTimelineEntry: revealAgentTimelineEntry,
-                    agentTimelineEntryKey,
-                    agentTimelinePriority,
-                    agentTimelineRowDomId,
-                  }
-                : null,
-            }}
-            controlPlaneOverviewSectionsProps={{
-              controlSummary,
-              recentSessions,
-              totalSessionCount: sessions.length,
-              selectedSessionId,
-              onSelectSession: setSelectedSessionId,
-              sessionSummary,
-            }}
-          />
-
-          <SessionDrilldownSection
-            selectedSessionId={selectedSessionId}
-            sessionLoading={sessionLoading}
-            selectedSession={selectedSession}
-            controlSectionProps={
-              selectedSession
-                ? {
-                    selectedSession,
-                    selectedControl,
-                    linkedAgentIds,
-                    selectedAgentId,
-                    onFocusRuntimeAgent: (runtimeAgentId) => {
-                      focusRuntimeAgent(runtimeAgentId, true);
-                    },
-                    filteredRunsCount: filteredRuns.length,
-                    linkedRunsCount: linkedRuns.length,
-                    filteredEventsCount: filteredEvents.length,
-                    filteredApprovalsCount: filteredApprovals.length,
-                    linkedApprovalsCount: linkedApprovals.length,
-                    filteredIssuesCount: filteredIssues.length,
-                    linkedIssuesCount: linkedIssues.length,
-                    entitySearch,
-                    onEntitySearchChange: setEntitySearch,
-                    onClearEntitySearch: () => {
-                      setEntitySearch("");
-                    },
-                    sortedProfiles,
-                    busyActionKey,
-                    onApplyControlPlan: (profile) => {
-                      void applyControlPlan(profile);
-                    },
-                    onApplyRecommendation: (recommendation) => {
-                      void applyRecommendation(recommendation);
-                    },
-                  }
-                : null
-            }
-            activitySectionProps={
-              selectedSession
-                ? {
-                    selectedSession,
-                    selectedControl,
-                    linkedRuns,
-                    runFilter: runFilter as "all" | "execute" | "preview" | "attention",
-                    onRunFilterChange: setRunFilter,
-                    getRunFilterCount: (filter) =>
-                      linkedRuns.filter((run) => matchesRunFilter(run, filter)).length,
-                    filteredRuns,
-                    selectedRunId,
-                    onSelectRun: setSelectedRunId,
-                    onFocusRuntimeAgent: (runtimeAgentId) => {
-                      focusRuntimeAgent(runtimeAgentId, true);
-                    },
-                    toNumber,
-                    eventFilter: eventFilter as
-                      | "all"
-                      | "control"
-                      | "actions"
-                      | "decisions"
-                      | "attention",
-                    onEventFilterChange: setEventFilter,
-                    getEventFilterCount: (filter) =>
-                      (selectedSession.events || []).filter((event) =>
-                        matchesEventFilter(event, filter)
-                      ).length,
-                    filteredEvents,
-                    visibleSessionEvents,
-                    selectedSessionEventKey,
-                    toStringValue,
-                    toStringArray,
-                    toNullableNumber,
-                    formatTimestamp,
-                    eventFamily,
-                    sessionEventKey,
-                    sessionContextRowDomId,
-                    onSyncLinkedSelection: syncLinkedSelection,
-                    onSearchEntity: setEntitySearch,
-                  }
-                : null
-            }
-            selectedControlPassCardProps={{
-              selectedPass,
-              toStringValue,
-              toNumber,
-              onOpenSession: setSelectedSessionId,
-            }}
-            linkedDecisionsCardProps={{
-              selectedSession,
-              linkedApprovals,
-              filteredApprovals,
-              visibleSessionApprovals,
-              selectedSessionApprovalId,
-              linkedIssues,
-              filteredIssues,
-              visibleSessionIssues,
-              selectedSessionIssueId,
-              busyActionKey,
-              formatTimestamp,
-              sessionContextRowDomId,
-              onSearchEntity: setEntitySearch,
-              onFocusRuntimeAgent: (runtimeAgentId) => {
-                focusRuntimeAgent(runtimeAgentId, true);
-              },
-              onInspectApproval: (approval) => {
-                syncLinkedSelection({
-                  approvalId: approval.id,
-                  issueId: approval.issue_id,
-                  runtimeAgentId: approval.runtime_agent_ids[0],
-                });
-              },
-              onInspectIssue: (issue) => {
-                syncLinkedSelection({
-                  issueId: issue.id,
-                  approvalId: issue.approval_id,
-                  runtimeAgentId: issue.runtime_agent_ids[0] || issue.runtime_agent_id,
-                });
-              },
-              onApproveApproval: (approval) => {
-                void approveApproval(approval);
-              },
-              onRejectApproval: (approval) => {
-                void rejectApproval(approval);
-              },
-              onApplyApproval: (approval) => {
-                void applyApproval(approval);
-              },
-              onResolveIssue: (issue) => {
-                void resolveIssue(issue);
-              },
-            }}
-            selectedSessionContextCardProps={{
-              selectedSession,
-              selectedSessionContext,
-              linkedRuns,
-              busyActionKey,
-              currentSessionLineageQueue,
-              formatTimestamp,
-              formatJson,
-              toStringValue,
-              toStringArray,
-              toNullableNumber,
-              asRecord,
-              eventFamily,
-              describeRunResult,
-              resolveRunLinkFromContext,
-              onRevealSessionRow: revealSelectedSessionContextRow,
-              onRevealInAgentTimeline: revealSelectedSessionContextInAgentTimeline,
-              onOpenRuntimeAgent: (runtimeAgentId) => {
-                focusRuntimeAgent(runtimeAgentId, true);
-              },
-              onSyncLinkedSelection: syncLinkedSelection,
-              onOpenRunOutcome: (runId, resultIndex) => {
-                setSelectedRunId(runId);
-                setSelectedRunResultIndex(resultIndex);
-              },
-              onApproveApproval: (approval) => {
-                void approveApproval(approval);
-              },
-              onRejectApproval: (approval) => {
-                void rejectApproval(approval);
-              },
-              onApplyApproval: (approval) => {
-                void applyApproval(approval);
-              },
-              onResolveIssue: (issue) => {
-                void resolveIssue(issue);
-              },
-              onAdvanceCurrentQueue:
-                currentSessionLineageQueue && selectedSessionLineageEntry
-                  ? () => {
-                      advanceSessionLineageQueueFromEntry(
-                        currentSessionLineageQueue,
-                        selectedSessionLineageEntry
-                      );
-                    }
-                  : null,
-            }}
-          />
-        </div>
+        <ControlPlaneMainSections
+          notice={notice}
+          errorMessage={errorMessage}
+          workspaceSectionProps={workspaceSectionProps}
+          sessionDrilldownSectionProps={sessionDrilldownSectionProps}
+        />
       </main>
     </div>
   );
