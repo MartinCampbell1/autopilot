@@ -191,6 +191,7 @@ type QueueAdvanceSignal = {
   key: string;
   label: string;
   className: string;
+  focusFilter?: string;
 };
 type QueueAdvanceFeedback = {
   title: string;
@@ -812,9 +813,10 @@ function triagePriorityLabel(priority: TriagePriority): string {
 function queueAdvanceSignal(
   key: string,
   label: string,
-  className: string
+  className: string,
+  focusFilter?: string
 ): QueueAdvanceSignal {
-  return { key, label, className };
+  return { key, label, className, focusFilter };
 }
 
 function sessionLineagePriority(entry: SessionLineageEntry): TriagePriority {
@@ -876,7 +878,8 @@ function describeSessionQueueAdvanceReason(entry: SessionLineageEntry): {
         queueAdvanceSignal(
           "issue",
           "Issue-linked",
-          "border-[#f0d0c9] bg-[#fff0ed] text-[#93370d]"
+          "border-[#f0d0c9] bg-[#fff0ed] text-[#93370d]",
+          "decisions"
         ),
       ],
     };
@@ -889,7 +892,8 @@ function describeSessionQueueAdvanceReason(entry: SessionLineageEntry): {
         queueAdvanceSignal(
           "run-status",
           `Run ${status}`,
-          "border-[#f0d0c9] bg-[#fff0ed] text-[#93370d]"
+          "border-[#f0d0c9] bg-[#fff0ed] text-[#93370d]",
+          "attention"
         ),
       ],
     };
@@ -902,12 +906,14 @@ function describeSessionQueueAdvanceReason(entry: SessionLineageEntry): {
         queueAdvanceSignal(
           "event-status",
           `Event ${eventStatus}`,
-          "border-[#f0d0c9] bg-[#fff0ed] text-[#93370d]"
+          "border-[#f0d0c9] bg-[#fff0ed] text-[#93370d]",
+          "attention"
         ),
         queueAdvanceSignal(
           "event-linked",
           "Event-linked",
-          "border-[#d6e9dc] bg-[#eef8f1] text-[#2b6e3f]"
+          "border-[#d6e9dc] bg-[#eef8f1] text-[#2b6e3f]",
+          "all"
         ),
       ],
     };
@@ -920,7 +926,8 @@ function describeSessionQueueAdvanceReason(entry: SessionLineageEntry): {
         queueAdvanceSignal(
           "approval",
           "Approval-linked",
-          "border-[#d3e5ef] bg-[#eef7fb] text-[#2a6690]"
+          "border-[#d3e5ef] bg-[#eef7fb] text-[#2a6690]",
+          "decisions"
         ),
       ],
     };
@@ -933,7 +940,8 @@ function describeSessionQueueAdvanceReason(entry: SessionLineageEntry): {
         queueAdvanceSignal(
           "attention",
           "Attention",
-          "border-[#f4e0c4] bg-[#fff6e8] text-[#9a6700]"
+          "border-[#f4e0c4] bg-[#fff6e8] text-[#9a6700]",
+          "attention"
         ),
       ],
     };
@@ -946,7 +954,8 @@ function describeSessionQueueAdvanceReason(entry: SessionLineageEntry): {
         queueAdvanceSignal(
           "agent",
           "Agent-linked",
-          "border-[#e5e5e3] bg-white text-[#37352f]"
+          "border-[#e5e5e3] bg-white text-[#37352f]",
+          "agent-linked"
         ),
       ],
     };
@@ -958,7 +967,8 @@ function describeSessionQueueAdvanceReason(entry: SessionLineageEntry): {
       queueAdvanceSignal(
         "queue-order",
         "Queue order",
-        "border-[#e5e5e3] bg-[#fafaf9] text-[#37352f]"
+        "border-[#e5e5e3] bg-[#fafaf9] text-[#37352f]",
+        "all"
       ),
     ],
   };
@@ -979,7 +989,8 @@ function describeAgentQueueAdvanceReason(entry: AgentTimelineEntry): {
         queueAdvanceSignal(
           "issue",
           "Open issue",
-          "border-[#f0d0c9] bg-[#fff0ed] text-[#93370d]"
+          "border-[#f0d0c9] bg-[#fff0ed] text-[#93370d]",
+          "issues"
         ),
       ],
     };
@@ -992,12 +1003,14 @@ function describeAgentQueueAdvanceReason(entry: AgentTimelineEntry): {
         queueAdvanceSignal(
           "event-status",
           `Event ${status}`,
-          "border-[#f0d0c9] bg-[#fff0ed] text-[#93370d]"
+          "border-[#f0d0c9] bg-[#fff0ed] text-[#93370d]",
+          "attention"
         ),
         queueAdvanceSignal(
           "runtime-event",
           "Runtime event",
-          "border-[#d6e9dc] bg-[#eef8f1] text-[#2b6e3f]"
+          "border-[#d6e9dc] bg-[#eef8f1] text-[#2b6e3f]",
+          "events"
         ),
       ],
     };
@@ -1010,7 +1023,8 @@ function describeAgentQueueAdvanceReason(entry: AgentTimelineEntry): {
         queueAdvanceSignal(
           "approval-status",
           `Approval ${status}`,
-          "border-[#d3e5ef] bg-[#eef7fb] text-[#2a6690]"
+          "border-[#d3e5ef] bg-[#eef7fb] text-[#2a6690]",
+          "approvals"
         ),
       ],
     };
@@ -1023,12 +1037,14 @@ function describeAgentQueueAdvanceReason(entry: AgentTimelineEntry): {
         queueAdvanceSignal(
           "event-status",
           `Event ${status}`,
-          "border-[#f4e0c4] bg-[#fff6e8] text-[#9a6700]"
+          "border-[#f4e0c4] bg-[#fff6e8] text-[#9a6700]",
+          "attention"
         ),
         queueAdvanceSignal(
           "runtime-event",
           "Runtime event",
-          "border-[#d6e9dc] bg-[#eef8f1] text-[#2b6e3f]"
+          "border-[#d6e9dc] bg-[#eef8f1] text-[#2b6e3f]",
+          "events"
         ),
       ],
     };
@@ -1040,7 +1056,8 @@ function describeAgentQueueAdvanceReason(entry: AgentTimelineEntry): {
       queueAdvanceSignal(
         "queue-order",
         "Queue order",
-        "border-[#e5e5e3] bg-[#fafaf9] text-[#37352f]"
+        "border-[#e5e5e3] bg-[#fafaf9] text-[#37352f]",
+        "all"
       ),
     ],
   };
@@ -1867,11 +1884,13 @@ function QueueAdvanceNotice({
   feedback,
   onOpenSelectedNext,
   onReopenPrevious,
+  onSignalClick,
 }: {
   label: string;
   feedback: QueueAdvanceFeedback | null;
   onOpenSelectedNext?: (() => void) | undefined;
   onReopenPrevious?: (() => void) | undefined;
+  onSignalClick?: ((signal: QueueAdvanceSignal) => void) | undefined;
 }) {
   if (!feedback) return null;
 
@@ -1903,13 +1922,20 @@ function QueueAdvanceNotice({
           {feedback.signals?.length ? (
             <div className="mt-2 flex flex-wrap gap-1.5">
               {feedback.signals.map((signal) => (
-                <Badge
+                <button
                   key={signal.key}
-                  variant="outline"
-                  className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${signal.className}`}
+                  type="button"
+                  className={`rounded-full border px-2 py-0.5 text-[10px] font-medium transition hover:opacity-90 ${signal.className} ${
+                    onSignalClick && signal.focusFilter ? "cursor-pointer" : "cursor-default"
+                  }`}
+                  onClick={() => {
+                    if (!signal.focusFilter || !onSignalClick) return;
+                    onSignalClick(signal);
+                  }}
+                  disabled={!signal.focusFilter || !onSignalClick}
                 >
                   {signal.label}
-                </Badge>
+                </button>
               ))}
             </div>
           ) : null}
@@ -4125,6 +4151,23 @@ export default function ControlPlanePage() {
     },
     [inspectAgentTimelineEntry, restoreAgentTimelineEntryVisibility, revealAgentTimelineEntry]
   );
+  const focusSessionQueueAdvanceSignal = useCallback(
+    (signal: QueueAdvanceSignal) => {
+      const target = sessionQueueAdvanceFeedback?.nextTarget;
+      if (!target || target.kind !== "session-lineage") return;
+      focusSessionLineageEntry(target.entry, signal.focusFilter || target.filter);
+    },
+    [focusSessionLineageEntry, sessionQueueAdvanceFeedback]
+  );
+  const focusAgentQueueAdvanceSignal = useCallback(
+    (signal: QueueAdvanceSignal) => {
+      const target = agentQueueAdvanceFeedback?.nextTarget;
+      if (!target || target.kind !== "agent-timeline") return;
+      focusAgentTimeline(signal.focusFilter || "all", { entry: target.entry });
+      inspectAgentTimelineEntry(target.entry);
+    },
+    [agentQueueAdvanceFeedback, focusAgentTimeline, inspectAgentTimelineEntry]
+  );
   const triageInboxItems = useMemo(
     () =>
       [
@@ -5732,6 +5775,11 @@ export default function ControlPlanePage() {
                                   }
                                 : undefined
                             }
+                            onSignalClick={
+                              sessionQueueAdvanceFeedback?.nextTarget
+                                ? focusSessionQueueAdvanceSignal
+                                : undefined
+                            }
                           />
                           <div className="grid gap-3 xl:grid-cols-2">
                             <CollapsibleQueuePanel
@@ -7305,6 +7353,11 @@ export default function ControlPlanePage() {
                                       agentQueueAdvanceFeedback.previousTarget
                                     );
                                   }
+                                : undefined
+                            }
+                            onSignalClick={
+                              agentQueueAdvanceFeedback?.nextTarget
+                                ? focusAgentQueueAdvanceSignal
                                 : undefined
                             }
                           />
