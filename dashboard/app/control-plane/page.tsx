@@ -31,6 +31,7 @@ import { LinkedDecisionsCard } from "@/components/linked-decisions-card";
 import { SelectedOutcomeInspector } from "@/components/selected-outcome-inspector";
 import { SelectedSessionContextCard } from "@/components/selected-session-context-card";
 import { RuntimeAgentActivitySection } from "@/components/runtime-agent-activity-section";
+import { RuntimeAgentInspectorColumn } from "@/components/runtime-agent-inspector-column";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -6727,804 +6728,274 @@ export default function ControlPlanePage() {
                         ) : (
                           <div className="mt-4 grid gap-4 lg:grid-cols-2">
                             <div className="space-y-3">
-                            {visibleAgentTimelineEntries.map((entry) => {
-                              const selected =
-                                selectedAgentTimelineEntry &&
-                                agentTimelineEntryKey(selectedAgentTimelineEntry) ===
-                                  agentTimelineEntryKey(entry);
-                              const eventApprovalId = toStringValue(entry.event?.approval_id);
-                              const eventIssueId = toStringValue(entry.event?.issue_id);
-                              const eventToken =
-                                toStringValue(entry.event?.event) ||
-                                toStringValue(entry.event?.message) ||
-                                entry.id;
+                              {visibleAgentTimelineEntries.map((entry) => {
+                                const selected =
+                                  selectedAgentTimelineEntry &&
+                                  agentTimelineEntryKey(selectedAgentTimelineEntry) ===
+                                    agentTimelineEntryKey(entry);
+                                const eventApprovalId = toStringValue(entry.event?.approval_id);
+                                const eventIssueId = toStringValue(entry.event?.issue_id);
+                                const eventToken =
+                                  toStringValue(entry.event?.event) ||
+                                  toStringValue(entry.event?.message) ||
+                                  entry.id;
 
-                              return (
-                                <div
-                                  key={`${selectedAgent.runtime_agent_id}-timeline-${entry.kind}-${entry.id}`}
-                                  id={agentTimelineRowDomId(
-                                    selectedAgent.runtime_agent_id,
-                                    agentTimelineEntryKey(entry)
-                                  )}
-                                  className={`rounded-xl border p-3 ${
-                                    selected
-                                      ? "border-[#d3e5ef] bg-[#f7fbfd]"
-                                      : "border-[#ecebe8] bg-white"
-                                  }`}
-                                >
-                                  <div className="flex flex-wrap items-center justify-between gap-2">
-                                    <div className="flex flex-wrap items-center gap-2">
-                                      <Badge
-                                        variant="outline"
-                                        className="rounded-full border-[#e5e5e3] bg-[#fafaf9] px-2.5 py-1 text-[11px] font-medium capitalize text-[#37352f]"
-                                      >
-                                        {entry.kind}
-                                      </Badge>
-                                      <Badge
-                                        variant="outline"
-                                        className={`rounded-full px-2.5 py-1 text-[11px] font-medium ${triagePriorityClass(agentTimelinePriority(entry))}`}
-                                      >
-                                        {agentTimelinePriority(entry)}
-                                      </Badge>
-                                      <p className="text-[13px] font-semibold text-[#37352f]">
-                                        {entry.title}
-                                      </p>
+                                return (
+                                  <div
+                                    key={`${selectedAgent.runtime_agent_id}-timeline-${entry.kind}-${entry.id}`}
+                                    id={agentTimelineRowDomId(
+                                      selectedAgent.runtime_agent_id,
+                                      agentTimelineEntryKey(entry)
+                                    )}
+                                    className={`rounded-xl border p-3 ${
+                                      selected
+                                        ? "border-[#d3e5ef] bg-[#f7fbfd]"
+                                        : "border-[#ecebe8] bg-white"
+                                    }`}
+                                  >
+                                    <div className="flex flex-wrap items-center justify-between gap-2">
+                                      <div className="flex flex-wrap items-center gap-2">
+                                        <Badge
+                                          variant="outline"
+                                          className="rounded-full border-[#e5e5e3] bg-[#fafaf9] px-2.5 py-1 text-[11px] font-medium capitalize text-[#37352f]"
+                                        >
+                                          {entry.kind}
+                                        </Badge>
+                                        <Badge
+                                          variant="outline"
+                                          className={`rounded-full px-2.5 py-1 text-[11px] font-medium ${triagePriorityClass(agentTimelinePriority(entry))}`}
+                                        >
+                                          {agentTimelinePriority(entry)}
+                                        </Badge>
+                                        <p className="text-[13px] font-semibold text-[#37352f]">
+                                          {entry.title}
+                                        </p>
+                                      </div>
+                                      <div className="flex flex-wrap items-center gap-2">
+                                        <Badge
+                                          variant="outline"
+                                          className={`rounded-full px-2.5 py-1 text-[11px] font-semibold capitalize ${
+                                            entry.kind === "approval"
+                                              ? approvalStatusClass(entry.status)
+                                              : entry.kind === "issue"
+                                                ? passStatusClass(entry.status === "open" ? "partial" : "ok")
+                                                : passStatusClass(entry.status)
+                                          }`}
+                                        >
+                                          {entry.status}
+                                        </Badge>
+                                        <p className="text-[11px] text-[#9b9a97]">
+                                          {formatTimestamp(entry.timestamp)}
+                                        </p>
+                                        <Button
+                                          size="sm"
+                                          variant={selected ? "default" : "outline"}
+                                          className={`h-7 rounded-lg px-2 text-[11px] ${
+                                            selected
+                                              ? "bg-[#1a1a1a] text-white hover:bg-[#333]"
+                                              : "border-[#e5e5e3] bg-white text-[#37352f] hover:bg-[#f7f7f5]"
+                                          }`}
+                                          onClick={() => {
+                                            inspectAgentTimelineEntry(entry);
+                                          }}
+                                        >
+                                          {selected ? "Selected" : "Inspect"}
+                                        </Button>
+                                      </div>
                                     </div>
-                                    <div className="flex flex-wrap items-center gap-2">
-                                      <Badge
-                                        variant="outline"
-                                        className={`rounded-full px-2.5 py-1 text-[11px] font-semibold capitalize ${
-                                          entry.kind === "approval"
-                                            ? approvalStatusClass(entry.status)
-                                            : entry.kind === "issue"
-                                              ? passStatusClass(entry.status === "open" ? "partial" : "ok")
-                                              : passStatusClass(entry.status)
-                                        }`}
-                                      >
-                                        {entry.status}
-                                      </Badge>
-                                      <p className="text-[11px] text-[#9b9a97]">{formatTimestamp(entry.timestamp)}</p>
-                                      <Button
-                                        size="sm"
-                                        variant={selected ? "default" : "outline"}
-                                        className={`h-7 rounded-lg px-2 text-[11px] ${
-                                          selected
-                                            ? "bg-[#1a1a1a] text-white hover:bg-[#333]"
-                                            : "border-[#e5e5e3] bg-white text-[#37352f] hover:bg-[#f7f7f5]"
-                                        }`}
-                                        onClick={() => {
-                                          inspectAgentTimelineEntry(entry);
-                                        }}
-                                      >
-                                        {selected ? "Selected" : "Inspect"}
-                                      </Button>
-                                    </div>
-                                  </div>
 
-                                  <p className="mt-2 text-[12px] text-[#787774]">{entry.subtitle}</p>
-                                  <p className="mt-2 text-[12px] text-[#6b6b6b]">{entry.message}</p>
+                                    <p className="mt-2 text-[12px] text-[#787774]">{entry.subtitle}</p>
+                                    <p className="mt-2 text-[12px] text-[#6b6b6b]">{entry.message}</p>
 
-                                  <div className="mt-3 flex flex-wrap gap-2">
-                                    {entry.approval?.status === "pending" && (
-                                      <>
+                                    <div className="mt-3 flex flex-wrap gap-2">
+                                      {entry.approval?.status === "pending" && (
+                                        <>
+                                          <Button
+                                            size="sm"
+                                            className="h-7 rounded-full bg-[#1a1a1a] px-2.5 text-[11px] text-white hover:bg-[#333]"
+                                            disabled={Boolean(busyActionKey)}
+                                            onClick={() => {
+                                              void approveApproval(entry.approval!);
+                                            }}
+                                          >
+                                            {busyActionKey === `approval-approve:${entry.approval.id}`
+                                              ? "Approving..."
+                                              : "Approve"}
+                                          </Button>
+                                          <Button
+                                            size="sm"
+                                            variant="outline"
+                                            className="h-7 rounded-full border-[#e5e5e3] bg-white px-2.5 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
+                                            disabled={Boolean(busyActionKey)}
+                                            onClick={() => {
+                                              void rejectApproval(entry.approval!);
+                                            }}
+                                          >
+                                            {busyActionKey === `approval-reject:${entry.approval.id}`
+                                              ? "Rejecting..."
+                                              : "Reject"}
+                                          </Button>
+                                        </>
+                                      )}
+                                      {entry.approval?.status === "approved" && (
                                         <Button
                                           size="sm"
                                           className="h-7 rounded-full bg-[#1a1a1a] px-2.5 text-[11px] text-white hover:bg-[#333]"
                                           disabled={Boolean(busyActionKey)}
                                           onClick={() => {
-                                            void approveApproval(entry.approval!);
+                                            void applyApproval(entry.approval!);
                                           }}
                                         >
-                                          {busyActionKey === `approval-approve:${entry.approval.id}` ? "Approving..." : "Approve"}
+                                          {busyActionKey === `approval-apply:${entry.approval.id}`
+                                            ? "Applying..."
+                                            : "Apply"}
                                         </Button>
+                                      )}
+                                      {entry.issue?.status === "open" && (
                                         <Button
                                           size="sm"
                                           variant="outline"
                                           className="h-7 rounded-full border-[#e5e5e3] bg-white px-2.5 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
                                           disabled={Boolean(busyActionKey)}
                                           onClick={() => {
-                                            void rejectApproval(entry.approval!);
+                                            void resolveIssue(entry.issue!);
                                           }}
                                         >
-                                          {busyActionKey === `approval-reject:${entry.approval.id}` ? "Rejecting..." : "Reject"}
+                                          {busyActionKey === `issue-resolve:${entry.issue.id}`
+                                            ? "Resolving..."
+                                            : "Resolve"}
                                         </Button>
-                                      </>
-                                    )}
-                                    {entry.approval?.status === "approved" && (
-                                      <Button
-                                        size="sm"
-                                        className="h-7 rounded-full bg-[#1a1a1a] px-2.5 text-[11px] text-white hover:bg-[#333]"
-                                        disabled={Boolean(busyActionKey)}
-                                        onClick={() => {
-                                          void applyApproval(entry.approval!);
-                                        }}
-                                      >
-                                        {busyActionKey === `approval-apply:${entry.approval.id}` ? "Applying..." : "Apply"}
-                                      </Button>
-                                    )}
-                                    {entry.issue?.status === "open" && (
-                                      <Button
-                                        size="sm"
-                                        variant="outline"
-                                        className="h-7 rounded-full border-[#e5e5e3] bg-white px-2.5 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
-                                        disabled={Boolean(busyActionKey)}
-                                        onClick={() => {
-                                          void resolveIssue(entry.issue!);
-                                        }}
-                                      >
-                                        {busyActionKey === `issue-resolve:${entry.issue.id}` ? "Resolving..." : "Resolve"}
-                                      </Button>
-                                    )}
-                                    {(entry.approval?.id || entry.issue?.id) && (
-                                      <Button
-                                        size="sm"
-                                        variant="outline"
-                                        className="h-7 rounded-full border-[#d3e5ef] bg-[#eef7fb] px-2.5 text-[11px] text-[#2a6690] hover:bg-[#e3f2f8]"
-                                        onClick={() => {
-                                          setEntitySearch(entry.approval?.id || entry.issue?.id || "");
-                                        }}
-                                      >
-                                        Find in session
-                                      </Button>
-                                    )}
-                                    {eventApprovalId && (
-                                      <Button
-                                        size="sm"
-                                        variant="outline"
-                                        className="h-7 rounded-full border-[#d3e5ef] bg-[#eef7fb] px-2.5 text-[11px] text-[#2a6690] hover:bg-[#e3f2f8]"
-                                        onClick={() => {
-                                          setEntitySearch(eventApprovalId);
-                                        }}
-                                      >
-                                        Find approval
-                                      </Button>
-                                    )}
-                                    {eventIssueId && (
-                                      <Button
-                                        size="sm"
-                                        variant="outline"
-                                        className="h-7 rounded-full border-[#f4e0c4] bg-[#fff6e8] px-2.5 text-[11px] text-[#9a6700] hover:bg-[#fff0d9]"
-                                        onClick={() => {
-                                          setEntitySearch(eventIssueId);
-                                        }}
-                                      >
-                                        Find issue
-                                      </Button>
-                                    )}
-                                    {entry.kind === "event" && (
+                                      )}
+                                      {(entry.approval?.id || entry.issue?.id) && (
+                                        <Button
+                                          size="sm"
+                                          variant="outline"
+                                          className="h-7 rounded-full border-[#d3e5ef] bg-[#eef7fb] px-2.5 text-[11px] text-[#2a6690] hover:bg-[#e3f2f8]"
+                                          onClick={() => {
+                                            setEntitySearch(entry.approval?.id || entry.issue?.id || "");
+                                          }}
+                                        >
+                                          Find in session
+                                        </Button>
+                                      )}
+                                      {eventApprovalId && (
+                                        <Button
+                                          size="sm"
+                                          variant="outline"
+                                          className="h-7 rounded-full border-[#d3e5ef] bg-[#eef7fb] px-2.5 text-[11px] text-[#2a6690] hover:bg-[#e3f2f8]"
+                                          onClick={() => {
+                                            setEntitySearch(eventApprovalId);
+                                          }}
+                                        >
+                                          Find approval
+                                        </Button>
+                                      )}
+                                      {eventIssueId && (
+                                        <Button
+                                          size="sm"
+                                          variant="outline"
+                                          className="h-7 rounded-full border-[#f4e0c4] bg-[#fff6e8] px-2.5 text-[11px] text-[#9a6700] hover:bg-[#fff0d9]"
+                                          onClick={() => {
+                                            setEntitySearch(eventIssueId);
+                                          }}
+                                        >
+                                          Find issue
+                                        </Button>
+                                      )}
+                                      {entry.kind === "event" && (
+                                        <Button
+                                          size="sm"
+                                          variant="outline"
+                                          className="h-7 rounded-full border-[#e5e5e3] bg-white px-2.5 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
+                                          onClick={() => {
+                                            setEventFilter("all");
+                                            setEntitySearch(eventToken);
+                                          }}
+                                        >
+                                          Filter session
+                                        </Button>
+                                      )}
                                       <Button
                                         size="sm"
                                         variant="outline"
                                         className="h-7 rounded-full border-[#e5e5e3] bg-white px-2.5 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
                                         onClick={() => {
-                                          setEventFilter("all");
-                                          setEntitySearch(eventToken);
+                                          snoozeAgentTimelineEntry(entry);
                                         }}
                                       >
-                                        Filter session
+                                        Snooze 15m
                                       </Button>
-                                    )}
-                                    <Button
-                                      size="sm"
-                                      variant="outline"
-                                      className="h-7 rounded-full border-[#e5e5e3] bg-white px-2.5 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
-                                      onClick={() => {
-                                        snoozeAgentTimelineEntry(entry);
-                                      }}
-                                    >
-                                      Snooze 15m
-                                    </Button>
-                                    <Button
-                                      size="sm"
-                                      variant="outline"
-                                      className="h-7 rounded-full border-[#e5e5e3] bg-white px-2.5 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
-                                      onClick={() => {
-                                        dismissAgentTimelineEntry(entry);
-                                      }}
-                                    >
-                                      Dismiss
-                                    </Button>
+                                      <Button
+                                        size="sm"
+                                        variant="outline"
+                                        className="h-7 rounded-full border-[#e5e5e3] bg-white px-2.5 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
+                                        onClick={() => {
+                                          dismissAgentTimelineEntry(entry);
+                                        }}
+                                      >
+                                        Dismiss
+                                      </Button>
+                                    </div>
                                   </div>
-                                </div>
-                              );
-                            })}
+                                );
+                              })}
                             </div>
 
-                            {selectedAgentTimelineEntry && (
-                              <div className="rounded-xl border border-[#ecebe8] bg-white p-4">
-                                {(() => {
-                                  const entry = selectedAgentTimelineEntry;
-                                  const workspaceProjectId =
-                                    entry.approval?.project_id ||
-                                    entry.issue?.project_id ||
-                                    toStringValue(entry.event?.project_id);
-                                  const workspaceStoryId =
-                                    entry.issue?.story_id ?? toNullableNumber(entry.event?.story_id);
-                                  const workspaceHref =
-                                    workspaceProjectId && workspaceStoryId
-                                      ? `/projects/${workspaceProjectId}?storyId=${workspaceStoryId}`
-                                      : workspaceProjectId
-                                        ? `/projects/${workspaceProjectId}`
-                                        : "";
-                                  const relatedApprovalId =
-                                    entry.approval?.id ||
-                                    entry.issue?.approval_id ||
-                                    toStringValue(entry.event?.approval_id);
-                                  const relatedIssueId =
-                                    entry.issue?.id || toStringValue(entry.event?.issue_id);
-                                  const relatedRunLink = selectedAgentTimelineRunLink;
-                                  const relatedRunResult =
-                                    relatedRunLink && relatedRunLink.run.results[relatedRunLink.resultIndex]
-                                      ? asRecord(relatedRunLink.run.results[relatedRunLink.resultIndex])
-                                      : null;
-                                  const relatedRunOutcome = relatedRunResult
-                                    ? describeRunResult(relatedRunResult)
-                                    : null;
-                                  const payload =
-                                    entry.approval || entry.issue || entry.event || {
-                                      id: entry.id,
-                                      kind: entry.kind,
-                                      timestamp: entry.timestamp,
-                                      status: entry.status,
-                                      title: entry.title,
-                                      subtitle: entry.subtitle,
-                                      message: entry.message,
-                                    };
-
-                                  return (
-                                    <>
-                                      <div className="flex flex-wrap items-center justify-between gap-3">
-                                        <div>
-                                          <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#9b9a97]">
-                                            Selected Timeline Item
-                                          </p>
-                                          <p className="mt-2 text-[14px] font-semibold text-[#37352f]">
-                                            {entry.title}
-                                          </p>
-                                        </div>
-                                        <div className="flex flex-wrap items-center gap-2">
-                                          <Badge
-                                            variant="outline"
-                                            className="rounded-full border-[#e5e5e3] bg-[#fafaf9] px-2.5 py-1 text-[11px] font-medium capitalize text-[#37352f]"
-                                          >
-                                            {entry.kind}
-                                          </Badge>
-                                          {selectedAgentTimelinePriority ? (
-                                            <Badge
-                                              variant="outline"
-                                              className={`rounded-full px-2.5 py-1 text-[11px] font-medium ${triagePriorityClass(selectedAgentTimelinePriority)}`}
-                                            >
-                                              {selectedAgentTimelinePriority}
-                                            </Badge>
-                                          ) : null}
-                                          <Badge
-                                            variant="outline"
-                                            className={`rounded-full px-2.5 py-1 text-[11px] font-semibold capitalize ${
-                                              entry.kind === "approval"
-                                                ? approvalStatusClass(entry.status)
-                                                : entry.kind === "issue"
-                                                  ? passStatusClass(entry.status === "open" ? "partial" : "ok")
-                                                  : passStatusClass(entry.status)
-                                            }`}
-                                          >
-                                            {entry.status}
-                                          </Badge>
-                                        </div>
-                                      </div>
-
-                                      <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                                        <SessionMetric
-                                          label="Timestamp"
-                                          value={formatTimestamp(entry.timestamp)}
-                                          detail={entry.id}
-                                        />
-                                        <SessionMetric
-                                          label="Scope"
-                                          value={entry.subtitle || "No scope metadata"}
-                                          detail={workspaceProjectId || "No project linkage"}
-                                        />
-                                        <SessionMetric
-                                          label="Related Run"
-                                          value={relatedRunLink?.run.id || "No linked run"}
-                                          detail={
-                                            relatedRunLink
-                                              ? `${relatedRunLink.run.run_kind} · ${relatedRunLink.run.status}`
-                                              : "No related action run found"
-                                          }
-                                        />
-                                        <SessionMetric
-                                          label="Outcome"
-                                          value={
-                                            relatedRunResult
-                                              ? toStringValue(
-                                                  relatedRunResult.status,
-                                                  `result #${relatedRunLink?.resultIndex ?? 0}`
-                                                )
-                                              : "No linked outcome"
-                                          }
-                                          detail={
-                                            relatedRunOutcome?.title ||
-                                            (relatedRunLink ? "Related run found without a specific outcome match" : "No outcome linkage")
-                                          }
-                                        />
-                                      </div>
-
-                                      <RelationshipStrip
-                                        label="Relationship Strip"
-                                        items={[
-                                          {
-                                            key: `timeline-${entry.kind}-${entry.id}`,
-                                            label: `${entry.kind} ${entry.id}`,
-                                            tone:
-                                              entry.kind === "approval"
-                                                ? "approval"
-                                                : entry.kind === "issue"
-                                                  ? "issue"
-                                                  : "event",
-                                            active: true,
-                                            onClick: () => {
-                                              setSelectedAgentTimelineKey(agentTimelineEntryKey(entry));
-                                            },
-                                          },
-                                          relatedRunLink
-                                            ? {
-                                                key: `run-${relatedRunLink.run.id}`,
-                                                label: `run ${relatedRunLink.run.id}`,
-                                                tone: "run" as const,
-                                                onClick: () => {
-                                                  setSelectedRunId(relatedRunLink.run.id);
-                                                  setSelectedRunResultIndex(0);
-                                                },
-                                              }
-                                            : null,
-                                          relatedRunLink && relatedRunResult
-                                            ? {
-                                                key: `outcome-${relatedRunLink.run.id}-${relatedRunLink.resultIndex}`,
-                                                label: `outcome ${relatedRunLink.resultIndex + 1}`,
-                                                tone: "outcome" as const,
-                                                onClick: () => {
-                                                  setSelectedRunId(relatedRunLink.run.id);
-                                                  setSelectedRunResultIndex(relatedRunLink.resultIndex);
-                                                },
-                                              }
-                                            : null,
-                                          relatedApprovalId && entry.kind !== "approval"
-                                            ? {
-                                                key: `approval-${relatedApprovalId}`,
-                                                label: `approval ${relatedApprovalId}`,
-                                                tone: "approval" as const,
-                                                onClick: () => {
-                                                  syncLinkedSelection({
-                                                    runId: relatedRunLink?.run.id,
-                                                    resultIndex: relatedRunLink?.resultIndex,
-                                                    approvalId: relatedApprovalId,
-                                                    issueId: relatedIssueId,
-                                                    runtimeAgentId: selectedAgent.runtime_agent_id,
-                                                    event: entry.event || null,
-                                                  });
-                                                },
-                                              }
-                                            : null,
-                                          relatedIssueId && entry.kind !== "issue"
-                                            ? {
-                                                key: `issue-${relatedIssueId}`,
-                                                label: `issue ${relatedIssueId}`,
-                                                tone: "issue" as const,
-                                                onClick: () => {
-                                                  syncLinkedSelection({
-                                                    runId: relatedRunLink?.run.id,
-                                                    resultIndex: relatedRunLink?.resultIndex,
-                                                    approvalId: relatedApprovalId,
-                                                    issueId: relatedIssueId,
-                                                    runtimeAgentId: selectedAgent.runtime_agent_id,
-                                                    event: entry.event || null,
-                                                  });
-                                                },
-                                              }
-                                            : null,
-                                          {
-                                            key: `agent-${selectedAgent.runtime_agent_id}`,
-                                            label: `agent ${selectedAgent.runtime_agent_id}`,
-                                            tone: "agent",
-                                            onClick: () => {
-                                              focusRuntimeAgent(selectedAgent.runtime_agent_id, true);
-                                            },
-                                          },
-                                        ].filter(Boolean) as RelationshipStripItem[]}
-                                      />
-
-                                      <p className="mt-4 text-[13px] leading-relaxed text-[#6b6b6b]">
-                                        {entry.message}
-                                      </p>
-
-                                      <div className="mt-4 flex flex-wrap gap-2">
-                                        {entry.approval?.status === "pending" && (
-                                          <>
-                                            <Button
-                                              size="sm"
-                                              className="h-8 rounded-lg bg-[#1a1a1a] text-[12px] hover:bg-[#333]"
-                                              disabled={Boolean(busyActionKey)}
-                                              onClick={() => {
-                                                void approveApproval(entry.approval!);
-                                              }}
-                                            >
-                                              {busyActionKey === `approval-approve:${entry.approval.id}` ? "Approving..." : "Approve"}
-                                            </Button>
-                                            <Button
-                                              size="sm"
-                                              variant="outline"
-                                              className="h-8 rounded-lg border-[#e5e5e3] bg-white text-[12px] text-[#37352f] hover:bg-[#f7f7f5]"
-                                              disabled={Boolean(busyActionKey)}
-                                              onClick={() => {
-                                                void rejectApproval(entry.approval!);
-                                              }}
-                                            >
-                                              {busyActionKey === `approval-reject:${entry.approval.id}` ? "Rejecting..." : "Reject"}
-                                            </Button>
-                                          </>
-                                        )}
-                                        {entry.approval?.status === "approved" && (
-                                          <Button
-                                            size="sm"
-                                            className="h-8 rounded-lg bg-[#1a1a1a] text-[12px] hover:bg-[#333]"
-                                            disabled={Boolean(busyActionKey)}
-                                            onClick={() => {
-                                              void applyApproval(entry.approval!);
-                                            }}
-                                          >
-                                            {busyActionKey === `approval-apply:${entry.approval.id}` ? "Applying..." : "Apply"}
-                                          </Button>
-                                        )}
-                                        {entry.issue?.status === "open" && (
-                                          <Button
-                                            size="sm"
-                                            variant="outline"
-                                            className="h-8 rounded-lg border-[#e5e5e3] bg-white text-[12px] text-[#37352f] hover:bg-[#f7f7f5]"
-                                            disabled={Boolean(busyActionKey)}
-                                            onClick={() => {
-                                              void resolveIssue(entry.issue!);
-                                            }}
-                                          >
-                                            {busyActionKey === `issue-resolve:${entry.issue.id}` ? "Resolving..." : "Resolve"}
-                                          </Button>
-                                        )}
-                                        {currentAgentPriorityQueue ? (
-                                          <Button
-                                            size="sm"
-                                            variant="outline"
-                                            className="h-8 rounded-lg border-[#d3e5ef] bg-[#eef7fb] text-[12px] text-[#2a6690] hover:bg-[#e3f2f8]"
-                                            onClick={() => {
-                                              advanceAgentPriorityQueueFromEntry(
-                                                currentAgentPriorityQueue,
-                                                entry
-                                              );
-                                            }}
-                                          >
-                                            {currentAgentPriorityQueue === "critical"
-                                              ? "Next critical"
-                                              : "Next high"}
-                                          </Button>
-                                        ) : null}
-                                        {relatedApprovalId && (
-                                          <Button
-                                            size="sm"
-                                            variant="outline"
-                                            className="h-8 rounded-lg border-[#d3e5ef] bg-[#eef7fb] text-[12px] text-[#2a6690] hover:bg-[#e3f2f8]"
-                                            onClick={() => {
-                                              setEntitySearch(relatedApprovalId);
-                                            }}
-                                          >
-                                            Find approval
-                                          </Button>
-                                        )}
-                                        {relatedIssueId && (
-                                          <Button
-                                            size="sm"
-                                            variant="outline"
-                                            className="h-8 rounded-lg border-[#f4e0c4] bg-[#fff6e8] text-[12px] text-[#9a6700] hover:bg-[#fff0d9]"
-                                            onClick={() => {
-                                              setEntitySearch(relatedIssueId);
-                                            }}
-                                          >
-                                            Find issue
-                                          </Button>
-                                        )}
-                                        {workspaceHref && (
-                                          <Link
-                                            href={workspaceHref}
-                                            className="inline-flex h-8 items-center rounded-lg border border-[#e5e5e3] bg-white px-3 text-[12px] font-medium text-[#37352f] transition-colors hover:bg-[#f7f7f5]"
-                                          >
-                                            Open workspace
-                                          </Link>
-                                        )}
-                                        {relatedRunLink && (
-                                          <Button
-                                            size="sm"
-                                            variant="outline"
-                                            className="h-8 rounded-lg border-[#e5e5e3] bg-white text-[12px] text-[#37352f] hover:bg-[#f7f7f5]"
-                                            onClick={() => {
-                                              setSelectedRunId(relatedRunLink.run.id);
-                                              setSelectedRunResultIndex(0);
-                                            }}
-                                          >
-                                            Open related run
-                                          </Button>
-                                        )}
-                                        {relatedRunLink && relatedRunResult && (
-                                          <Button
-                                            size="sm"
-                                            variant="outline"
-                                            className="h-8 rounded-lg border-[#d3e5ef] bg-[#eef7fb] text-[12px] text-[#2a6690] hover:bg-[#e3f2f8]"
-                                            onClick={() => {
-                                              setSelectedRunId(relatedRunLink.run.id);
-                                              setSelectedRunResultIndex(relatedRunLink.resultIndex);
-                                            }}
-                                          >
-                                            Open related outcome
-                                          </Button>
-                                        )}
-                                      </div>
-
-                                      <div className="mt-4 rounded-xl border border-[#ecebe8] bg-[#fbfbf9] p-3">
-                                        <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#9b9a97]">
-                                          Payload
-                                        </p>
-                                        <pre className="mt-3 overflow-x-auto rounded-lg bg-white p-3 text-[11px] leading-relaxed text-[#37352f]">
-                                          {formatJson(payload)}
-                                        </pre>
-                                      </div>
-                                    </>
-                                  );
-                                })()}
-                              </div>
-                            )}
+                            <RuntimeAgentInspectorColumn
+                              selectedAgent={selectedAgent}
+                              selectedAgentTimelineEntry={selectedAgentTimelineEntry}
+                              selectedAgentTimelineRunLink={selectedAgentTimelineRunLink}
+                              selectedAgentTimelinePriority={selectedAgentTimelinePriority}
+                              currentAgentPriorityQueue={currentAgentPriorityQueue || null}
+                              latestAgentIssueEntry={latestAgentIssueEntry}
+                              latestAgentApprovalEntry={latestAgentApprovalEntry}
+                              latestAgentEventEntry={latestAgentEventEntry}
+                              busyActionKey={busyActionKey}
+                              formatTimestamp={formatTimestamp}
+                              formatJson={formatJson}
+                              toStringValue={toStringValue}
+                              toNullableNumber={toNullableNumber}
+                              asRecord={asRecord}
+                              describeRunResult={describeRunResult}
+                              onSelectTimelineEntry={(entry) => {
+                                setSelectedAgentTimelineKey(agentTimelineEntryKey(entry));
+                              }}
+                              onSyncLinkedSelection={syncLinkedSelection}
+                              onFocusRuntimeAgent={(runtimeAgentId) => {
+                                focusRuntimeAgent(runtimeAgentId, true);
+                              }}
+                              onSelectRun={(runId, resultIndex) => {
+                                setSelectedRunId(runId);
+                                setSelectedRunResultIndex(resultIndex);
+                              }}
+                              onApproveApproval={(approval) => {
+                                void approveApproval(approval as ExecutionApprovalRecord);
+                              }}
+                              onRejectApproval={(approval) => {
+                                void rejectApproval(approval as ExecutionApprovalRecord);
+                              }}
+                              onApplyApproval={(approval) => {
+                                void applyApproval(approval as ExecutionApprovalRecord);
+                              }}
+                              onResolveIssue={(issue) => {
+                                void resolveIssue(issue as ExecutionIssueRecord);
+                              }}
+                              onAdvanceCurrentPriorityQueue={(entry) => {
+                                if (currentAgentPriorityQueue) {
+                                  advanceAgentPriorityQueueFromEntry(currentAgentPriorityQueue, entry);
+                                }
+                              }}
+                              onSearchEntity={setEntitySearch}
+                              onFocusAgentTimeline={(filter, entry) => {
+                                focusAgentTimeline(filter, entry ? { entry } : undefined);
+                              }}
+                              onFilterSessionByToken={(value) => {
+                                setEventFilter("all");
+                                setEntitySearch(value);
+                              }}
+                            />
                           </div>
                         )}
-                      </div>
-
-                      <div className="grid gap-4 lg:grid-cols-3">
-                        <div className="rounded-2xl border border-[#ecebe8] bg-[#fbfbf9] p-4">
-                          <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#9b9a97]">
-                            Issues Summary
-                          </p>
-                          <div className="mt-3 grid gap-3">
-                            <SessionMetric
-                              label="Open Issues"
-                              value={String(selectedAgent.history.open_issue_count)}
-                              detail={`${selectedAgent.history.issue_count} total issues`}
-                            />
-                          </div>
-                          {!latestAgentIssueEntry ? (
-                            <p className="mt-3 text-[13px] text-[#9b9a97]">No issue history for this agent.</p>
-                          ) : (
-                            <div className="mt-3 rounded-xl border border-[#ecebe8] bg-white p-3">
-                              <div className="flex flex-wrap items-center justify-between gap-2">
-                                <p className="font-mono text-[11px] text-[#37352f]">
-                                  {latestAgentIssueEntry.issue?.id || latestAgentIssueEntry.id}
-                                </p>
-                                <Badge
-                                  variant="outline"
-                                  className={`rounded-full px-2.5 py-1 text-[11px] font-semibold capitalize ${passStatusClass(latestAgentIssueEntry.status === "open" ? "partial" : "ok")}`}
-                                >
-                                  {latestAgentIssueEntry.status}
-                                </Badge>
-                              </div>
-                              <p className="mt-2 text-[12px] text-[#6b6b6b]">
-                                {latestAgentIssueEntry.title}
-                              </p>
-                              <p className="mt-1 text-[11px] text-[#9b9a97]">
-                                {formatTimestamp(latestAgentIssueEntry.timestamp)}
-                              </p>
-                              <div className="mt-3 flex flex-wrap gap-2">
-                                <Button
-                                  size="sm"
-                                  variant="outline"
-                                  className="h-7 rounded-full border-[#e5e5e3] bg-white px-2.5 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
-                                  onClick={() => {
-                                    focusAgentTimeline("issues", { entry: latestAgentIssueEntry });
-                                  }}
-                                >
-                                  Open in timeline
-                                </Button>
-                                {latestAgentIssueEntry.issue?.status === "open" && (
-                                  <Button
-                                    size="sm"
-                                    variant="outline"
-                                    className="h-7 rounded-full border-[#e5e5e3] bg-white px-2.5 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
-                                    disabled={Boolean(busyActionKey)}
-                                    onClick={() => {
-                                      void resolveIssue(latestAgentIssueEntry.issue!);
-                                    }}
-                                  >
-                                    {busyActionKey === `issue-resolve:${latestAgentIssueEntry.issue.id}` ? "Resolving..." : "Resolve"}
-                                  </Button>
-                                )}
-                                {latestAgentIssueEntry.issue?.id && (
-                                  <Button
-                                    size="sm"
-                                    variant="outline"
-                                    className="h-7 rounded-full border-[#f4e0c4] bg-[#fff6e8] px-2.5 text-[11px] text-[#9a6700] hover:bg-[#fff0d9]"
-                                    onClick={() => {
-                                      setEntitySearch(latestAgentIssueEntry.issue?.id || "");
-                                    }}
-                                  >
-                                    Find in session
-                                  </Button>
-                                )}
-                              </div>
-                            </div>
-                          )}
-                        </div>
-
-                        <div className="rounded-2xl border border-[#ecebe8] bg-[#fbfbf9] p-4">
-                          <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#9b9a97]">
-                            Approvals Summary
-                          </p>
-                          <div className="mt-3 grid gap-3">
-                            <SessionMetric
-                              label="Pending Approvals"
-                              value={String(selectedAgent.history.pending_approval_count)}
-                              detail={`${selectedAgent.history.approval_count} total approvals`}
-                            />
-                          </div>
-                          {!latestAgentApprovalEntry ? (
-                            <p className="mt-3 text-[13px] text-[#9b9a97]">No approval history for this agent.</p>
-                          ) : (
-                            <div className="mt-3 rounded-xl border border-[#ecebe8] bg-white p-3">
-                              <div className="flex flex-wrap items-center justify-between gap-2">
-                                <p className="font-mono text-[11px] text-[#37352f]">
-                                  {latestAgentApprovalEntry.approval?.id || latestAgentApprovalEntry.id}
-                                </p>
-                                <Badge
-                                  variant="outline"
-                                  className={`rounded-full px-2.5 py-1 text-[11px] font-semibold capitalize ${approvalStatusClass(latestAgentApprovalEntry.status)}`}
-                                >
-                                  {latestAgentApprovalEntry.status}
-                                </Badge>
-                              </div>
-                              <p className="mt-2 text-[12px] text-[#6b6b6b]">
-                                {latestAgentApprovalEntry.title}
-                              </p>
-                              <p className="mt-1 text-[11px] text-[#9b9a97]">
-                                {formatTimestamp(latestAgentApprovalEntry.timestamp)}
-                              </p>
-                              <div className="mt-3 flex flex-wrap gap-2">
-                                <Button
-                                  size="sm"
-                                  variant="outline"
-                                  className="h-7 rounded-full border-[#e5e5e3] bg-white px-2.5 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
-                                  onClick={() => {
-                                    focusAgentTimeline("approvals", { entry: latestAgentApprovalEntry });
-                                  }}
-                                >
-                                  Open in timeline
-                                </Button>
-                                {latestAgentApprovalEntry.approval?.status === "pending" && (
-                                  <>
-                                    <Button
-                                      size="sm"
-                                      className="h-7 rounded-full bg-[#1a1a1a] px-2.5 text-[11px] text-white hover:bg-[#333]"
-                                      disabled={Boolean(busyActionKey)}
-                                      onClick={() => {
-                                        void approveApproval(latestAgentApprovalEntry.approval!);
-                                      }}
-                                    >
-                                      {busyActionKey === `approval-approve:${latestAgentApprovalEntry.approval.id}` ? "Approving..." : "Approve"}
-                                    </Button>
-                                    <Button
-                                      size="sm"
-                                      variant="outline"
-                                      className="h-7 rounded-full border-[#e5e5e3] bg-white px-2.5 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
-                                      disabled={Boolean(busyActionKey)}
-                                      onClick={() => {
-                                        void rejectApproval(latestAgentApprovalEntry.approval!);
-                                      }}
-                                    >
-                                      {busyActionKey === `approval-reject:${latestAgentApprovalEntry.approval.id}` ? "Rejecting..." : "Reject"}
-                                    </Button>
-                                  </>
-                                )}
-                                {latestAgentApprovalEntry.approval?.status === "approved" && (
-                                  <Button
-                                    size="sm"
-                                    className="h-7 rounded-full bg-[#1a1a1a] px-2.5 text-[11px] text-white hover:bg-[#333]"
-                                    disabled={Boolean(busyActionKey)}
-                                    onClick={() => {
-                                      void applyApproval(latestAgentApprovalEntry.approval!);
-                                    }}
-                                  >
-                                    {busyActionKey === `approval-apply:${latestAgentApprovalEntry.approval.id}` ? "Applying..." : "Apply"}
-                                  </Button>
-                                )}
-                                {latestAgentApprovalEntry.approval?.id && (
-                                  <Button
-                                    size="sm"
-                                    variant="outline"
-                                    className="h-7 rounded-full border-[#d3e5ef] bg-[#eef7fb] px-2.5 text-[11px] text-[#2a6690] hover:bg-[#e3f2f8]"
-                                    onClick={() => {
-                                      setEntitySearch(latestAgentApprovalEntry.approval?.id || "");
-                                    }}
-                                  >
-                                    Find in session
-                                  </Button>
-                                )}
-                              </div>
-                            </div>
-                          )}
-                        </div>
-
-                        <div className="rounded-2xl border border-[#ecebe8] bg-[#fbfbf9] p-4">
-                          <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#9b9a97]">
-                            Events Summary
-                          </p>
-                          <div className="mt-3 grid gap-3">
-                            <SessionMetric
-                              label="Events"
-                              value={String(selectedAgent.history.event_count)}
-                              detail={formatTimestamp(selectedAgent.history.last_event_at)}
-                            />
-                          </div>
-                          {!latestAgentEventEntry ? (
-                            <p className="mt-3 text-[13px] text-[#9b9a97]">No event history for this agent.</p>
-                          ) : (
-                            <div className="mt-3 rounded-xl border border-[#ecebe8] bg-white p-3">
-                              <div className="flex flex-wrap items-center justify-between gap-2">
-                                <p className="font-mono text-[11px] text-[#37352f]">
-                                  {latestAgentEventEntry.title}
-                                </p>
-                                <Badge
-                                  variant="outline"
-                                  className={`rounded-full px-2.5 py-1 text-[11px] font-medium capitalize ${passStatusClass(latestAgentEventEntry.status)}`}
-                                >
-                                  {latestAgentEventEntry.status}
-                                </Badge>
-                              </div>
-                              <p className="mt-2 text-[12px] text-[#6b6b6b]">
-                                {latestAgentEventEntry.message}
-                              </p>
-                              <p className="mt-1 text-[11px] text-[#9b9a97]">
-                                {formatTimestamp(latestAgentEventEntry.timestamp)}
-                              </p>
-                              <div className="mt-3 flex flex-wrap gap-2">
-                                <Button
-                                  size="sm"
-                                  variant="outline"
-                                  className="h-7 rounded-full border-[#e5e5e3] bg-white px-2.5 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
-                                  onClick={() => {
-                                    focusAgentTimeline("events", { entry: latestAgentEventEntry });
-                                  }}
-                                >
-                                  Open in timeline
-                                </Button>
-                                <Button
-                                  size="sm"
-                                  variant="outline"
-                                  className="h-7 rounded-full border-[#f4e0c4] bg-[#fff6e8] px-2.5 text-[11px] text-[#9a6700] hover:bg-[#fff0d9]"
-                                  onClick={() => {
-                                    focusAgentTimeline("attention");
-                                  }}
-                                >
-                                  Show attention
-                                </Button>
-                                <Button
-                                  size="sm"
-                                  variant="outline"
-                                  className="h-7 rounded-full border-[#e5e5e3] bg-white px-2.5 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
-                                  onClick={() => {
-                                    setEventFilter("all");
-                                    setEntitySearch(
-                                      toStringValue(latestAgentEventEntry.event?.event) ||
-                                        toStringValue(latestAgentEventEntry.event?.message) ||
-                                        latestAgentEventEntry.id
-                                    );
-                                  }}
-                                >
-                                  Filter session
-                                </Button>
-                              </div>
-                            </div>
-                          )}
-                        </div>
                       </div>
                     </div>
                   )}
