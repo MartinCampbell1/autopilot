@@ -26,6 +26,7 @@ import {
   QueueItemCard,
 } from "@/components/queue-panels";
 import { SelectedActionRunCard } from "@/components/selected-action-run-card";
+import { SelectedOutcomeInspector } from "@/components/selected-outcome-inspector";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -4787,327 +4788,37 @@ export default function ControlPlanePage() {
                 asRecord={asRecord}
               >
                 {selectedRun && selectedRunResult && (
-                        <div className="rounded-2xl border border-[#ecebe8] bg-[#fbfbf9] p-4">
-                          {(() => {
-                            const actionPayload = asRecord(selectedRunResult.action);
-                            const commandResultPayload = asRecord(selectedRunResult.command_result);
-                            const projectId = outcomeProjectId(selectedRunResult);
-                            const projectName = outcomeProjectName(selectedRunResult);
-                            const storyId = outcomeStoryId(selectedRunResult);
-                            const storyTitle = outcomeStoryTitle(selectedRunResult);
-                            const runtimeAgentId = outcomeRuntimeAgentId(selectedRunResult);
-                            const commandName = toStringValue(
-                              actionPayload?.command,
-                              toStringValue(commandResultPayload?.command)
-                            );
-                            const linkedApprovalId = toStringValue(asRecord(selectedRunResult.approval)?.id);
-                            const linkedIssueId = toStringValue(asRecord(selectedRunResult.issue)?.id);
-                            const linkedEvent =
-                              resolveSessionEventFromContext(selectedSession?.events || [], {
-                                runId: selectedRun.id,
-                                approvalId: linkedApprovalId,
-                                issueId: linkedIssueId,
-                                runtimeAgentId,
-                              })?.event ?? null;
-                            const workspaceHref =
-                              projectId && storyId
-                                ? `/projects/${projectId}?storyId=${storyId}`
-                                : projectId
-                                  ? `/projects/${projectId}`
-                                  : "";
-                            return (
-                              <>
-                          <div className="flex flex-wrap items-center justify-between gap-3">
-                            <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#9b9a97]">
-                              Selected Outcome
-                            </p>
-                            <div className="flex flex-wrap items-center gap-2">
-                              {runtimeAgentId && (
-                                <Button
-                                  size="sm"
-                                  variant="outline"
-                                  className="h-8 rounded-lg border-[#e5e5e3] bg-white px-3 text-[12px] text-[#37352f] hover:bg-[#f7f7f5]"
-                                  onClick={() => {
-                                    openSelectedRunResultInTimeline();
-                                  }}
-                                >
-                                  Open in agent timeline
-                                </Button>
-                              )}
-                              {runtimeAgentId && (
-                                <Button
-                                  size="sm"
-                                  variant="outline"
-                                  className="h-8 rounded-lg border-[#e5e5e3] bg-white px-3 text-[12px] text-[#37352f] hover:bg-[#f7f7f5]"
-                                  onClick={() => {
-                                    focusRuntimeAgent(runtimeAgentId, true);
-                                  }}
-                                >
-                                  Find agent
-                                </Button>
-                              )}
-                              {toStringValue(asRecord(selectedRunResult.approval)?.id) && (
-                                <Button
-                                  size="sm"
-                                  variant="outline"
-                                  className="h-8 rounded-lg border-[#e5e5e3] bg-white px-3 text-[12px] text-[#37352f] hover:bg-[#f7f7f5]"
-                                  onClick={() => {
-                                    setEntitySearch(toStringValue(asRecord(selectedRunResult.approval)?.id));
-                                  }}
-                                >
-                                  Find approval
-                                </Button>
-                              )}
-                              {toStringValue(asRecord(selectedRunResult.issue)?.id) && (
-                                <Button
-                                  size="sm"
-                                  variant="outline"
-                                  className="h-8 rounded-lg border-[#e5e5e3] bg-white px-3 text-[12px] text-[#37352f] hover:bg-[#f7f7f5]"
-                                  onClick={() => {
-                                    setEntitySearch(toStringValue(asRecord(selectedRunResult.issue)?.id));
-                                  }}
-                                >
-                                  Find issue
-                                </Button>
-                              )}
-                              {workspaceHref && (
-                                <Link
-                                  href={workspaceHref}
-                                  className="inline-flex h-8 items-center rounded-lg border border-[#e5e5e3] bg-white px-3 text-[12px] font-medium text-[#37352f] transition-colors hover:bg-[#f7f7f5]"
-                                >
-                                  Open workspace
-                                </Link>
-                              )}
-                              <Badge
-                                variant="outline"
-                                className={`rounded-full px-2.5 py-1 text-[11px] font-semibold capitalize ${passStatusClass(toStringValue(selectedRunResult.status, "unknown"))}`}
-                              >
-                                {toStringValue(selectedRunResult.status, "unknown")}
-                              </Badge>
-                            </div>
-                          </div>
-
-                          <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                            <SessionMetric
-                              label="Action"
-                              value={toStringValue(
-                                asRecord(selectedRunResult.action)?.action_key,
-                                toStringValue(asRecord(selectedRunResult.action)?.command, "unknown")
-                              )}
-                              detail={toStringValue(
-                                asRecord(selectedRunResult.action)?.action_type,
-                                "No action type"
-                              )}
-                            />
-                            <SessionMetric
-                              label="Mode"
-                              value={toStringValue(
-                                selectedRunResult.planned_mode,
-                                toStringValue(selectedRun.mode, "auto")
-                              )}
-                              detail={toStringValue(
-                                asRecord(selectedRunResult.command_result)?.status,
-                                "No command result"
-                              )}
-                            />
-                          </div>
-
-                          <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                            <SessionMetric
-                              label="Project"
-                              value={projectName || "Unknown project"}
-                              detail={projectId || "No project id in payload"}
-                            />
-                            <SessionMetric
-                              label="Story"
-                              value={storyTitle || (storyId ? `Story ${storyId}` : "No story context")}
-                              detail={storyId ? `story_id ${storyId}` : "Outcome is not story-scoped"}
-                            />
-                            <SessionMetric
-                              label="Command"
-                              value={commandName || "No command recorded"}
-                              detail={toStringValue(
-                                commandResultPayload?.status,
-                                toStringValue(selectedRunResult.planned_mode, "No command status")
-                              )}
-                            />
-                            <SessionMetric
-                              label="Runtime Agent"
-                              value={runtimeAgentId || "No agent linkage"}
-                              detail={toStringValue(actionPayload?.role, "No execution role")}
-                            />
-                          </div>
-
-                          {(projectId || storyId || runtimeAgentId) && (
-                            <div className="mt-4 flex flex-wrap gap-2">
-                              {projectId && (
-                                <Badge
-                                  variant="outline"
-                                  className="rounded-full border-[#e5e5e3] bg-white px-2.5 py-1 text-[11px] font-medium text-[#37352f]"
-                                >
-                                  project {projectId}
-                                </Badge>
-                              )}
-                              {storyId && (
-                                <Badge
-                                  variant="outline"
-                                  className="rounded-full border-[#d3e5ef] bg-[#eef7fb] px-2.5 py-1 text-[11px] font-medium text-[#2a6690]"
-                                >
-                                  story {storyId}
-                                </Badge>
-                              )}
-                              {runtimeAgentId && (
-                                <Badge
-                                  variant="outline"
-                                  className="rounded-full border-[#e5e5e3] bg-[#fafaf9] px-2.5 py-1 text-[11px] font-medium text-[#37352f]"
-                                >
-                                  agent {runtimeAgentId}
-                                </Badge>
-                              )}
-                            </div>
-                          )}
-
-                          <RelationshipStrip
-                            label="Relationship Strip"
-                            items={[
-                              {
-                                key: `run-${selectedRun.id}`,
-                                label: `run ${selectedRun.id}`,
-                                tone: "run",
-                                onClick: () => {
-                                  setSelectedRunId(selectedRun.id);
-                                  setSelectedRunResultIndex(0);
-                                },
-                              },
-                              {
-                                key: `outcome-${selectedRun.id}-${selectedRunResultIndex}`,
-                                label: `outcome ${selectedRunResultIndex + 1}`,
-                                tone: "outcome",
-                                active: true,
-                                onClick: () => {
-                                  setSelectedRunId(selectedRun.id);
-                                  setSelectedRunResultIndex(selectedRunResultIndex);
-                                },
-                              },
-                              linkedApprovalId
-                                ? {
-                                    key: `approval-${linkedApprovalId}`,
-                                    label: `approval ${linkedApprovalId}`,
-                                    tone: "approval" as const,
-                                    onClick: () => {
-                                      syncLinkedSelection({
-                                        runId: selectedRun.id,
-                                        resultIndex: selectedRunResultIndex,
-                                        approvalId: linkedApprovalId,
-                                        issueId: linkedIssueId,
-                                        runtimeAgentId,
-                                      });
-                                    },
-                                  }
-                                : null,
-                              linkedIssueId
-                                ? {
-                                    key: `issue-${linkedIssueId}`,
-                                    label: `issue ${linkedIssueId}`,
-                                    tone: "issue" as const,
-                                    onClick: () => {
-                                      syncLinkedSelection({
-                                        runId: selectedRun.id,
-                                        resultIndex: selectedRunResultIndex,
-                                        approvalId: linkedApprovalId,
-                                        issueId: linkedIssueId,
-                                        runtimeAgentId,
-                                      });
-                                    },
-                                  }
-                                : null,
-                              linkedEvent
-                                ? {
-                                    key: `event-${sessionEventKey(linkedEvent)}`,
-                                    label: `event ${toStringValue(linkedEvent.event, "event")}`,
-                                    tone: "event" as const,
-                                    onClick: () => {
-                                      syncLinkedSelection({
-                                        runId: selectedRun.id,
-                                        resultIndex: selectedRunResultIndex,
-                                        approvalId: linkedApprovalId,
-                                        issueId: linkedIssueId,
-                                        runtimeAgentId,
-                                        event: linkedEvent,
-                                      });
-                                    },
-                                  }
-                                : null,
-                              runtimeAgentId
-                                ? {
-                                    key: `agent-${runtimeAgentId}`,
-                                    label: `agent ${runtimeAgentId}`,
-                                    tone: "agent" as const,
-                                    onClick: () => {
-                                      openSelectedRunResultInTimeline();
-                                    },
-                                  }
-                                : null,
-                            ].filter(Boolean) as RelationshipStripItem[]}
-                          />
-
-                          <p className="mt-4 text-[13px] leading-relaxed text-[#6b6b6b]">
-                            {toStringValue(
-                              selectedRunResult.message,
-                              toStringValue(
-                                asRecord(selectedRunResult.command_result)?.message,
-                                "No additional outcome message."
-                              )
-                            )}
-                          </p>
-
-                          <div className="mt-4 space-y-3">
-                            <div className="rounded-xl border border-[#ecebe8] bg-white p-3">
-                              <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#9b9a97]">
-                                Action Payload
-                              </p>
-                              <pre className="mt-3 overflow-x-auto rounded-lg bg-[#fafaf9] p-3 text-[11px] leading-relaxed text-[#37352f]">
-                                {formatJson(asRecord(selectedRunResult.action) || selectedRunResult)}
-                              </pre>
-                            </div>
-
-                            {asRecord(selectedRunResult.command_result) && (
-                              <div className="rounded-xl border border-[#ecebe8] bg-white p-3">
-                                <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#9b9a97]">
-                                  Command Result Payload
-                                </p>
-                                <pre className="mt-3 overflow-x-auto rounded-lg bg-[#fafaf9] p-3 text-[11px] leading-relaxed text-[#37352f]">
-                                  {formatJson(asRecord(selectedRunResult.command_result))}
-                                </pre>
-                              </div>
-                            )}
-
-                            {asRecord(selectedRunResult.approval) && (
-                              <div className="rounded-xl border border-[#d3e5ef] bg-[#eef7fb] p-3">
-                                <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#2a6690]">
-                                  Linked Approval
-                                </p>
-                                <pre className="mt-3 overflow-x-auto rounded-lg bg-white p-3 text-[11px] leading-relaxed text-[#2a6690]">
-                                  {formatJson(asRecord(selectedRunResult.approval))}
-                                </pre>
-                              </div>
-                            )}
-
-                            {asRecord(selectedRunResult.issue) && (
-                              <div className="rounded-xl border border-[#f4e0c4] bg-[#fff6e8] p-3">
-                                <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#9a6700]">
-                                  Linked Issue
-                                </p>
-                                <pre className="mt-3 overflow-x-auto rounded-lg bg-white p-3 text-[11px] leading-relaxed text-[#9a6700]">
-                                  {formatJson(asRecord(selectedRunResult.issue))}
-                                </pre>
-                              </div>
-                            )}
-                          </div>
-                              </>
-                            );
-                          })()}
-                        </div>
+                  <SelectedOutcomeInspector
+                    selectedRun={selectedRun}
+                    selectedRunResult={selectedRunResult}
+                    selectedRunResultIndex={selectedRunResultIndex}
+                    selectedSessionEvents={selectedSession?.events || []}
+                    formatJson={formatJson}
+                    asRecord={asRecord}
+                    toStringValue={toStringValue}
+                    sessionEventKey={sessionEventKey}
+                    resolveSessionEventFromContext={resolveSessionEventFromContext}
+                    outcomeProjectId={outcomeProjectId}
+                    outcomeProjectName={outcomeProjectName}
+                    outcomeStoryId={outcomeStoryId}
+                    outcomeStoryTitle={outcomeStoryTitle}
+                    outcomeRuntimeAgentId={outcomeRuntimeAgentId}
+                    onOpenInAgentTimeline={openSelectedRunResultInTimeline}
+                    onFocusRuntimeAgent={(runtimeAgentId) => {
+                      focusRuntimeAgent(runtimeAgentId, true);
+                    }}
+                    onFindApproval={(approvalId) => {
+                      setEntitySearch(approvalId);
+                    }}
+                    onFindIssue={(issueId) => {
+                      setEntitySearch(issueId);
+                    }}
+                    onSelectRunOutcome={(runId, resultIndex) => {
+                      setSelectedRunId(runId);
+                      setSelectedRunResultIndex(resultIndex);
+                    }}
+                    onSyncLinkedSelection={syncLinkedSelection}
+                  />
                 )}
               </SelectedActionRunCard>
 
