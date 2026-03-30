@@ -96,6 +96,14 @@ type LinkedSelectionContext = {
 };
 
 type SessionContextKind = "" | "approval" | "issue" | "event";
+type RelationshipTone = "run" | "outcome" | "approval" | "issue" | "event" | "agent";
+type RelationshipStripItem = {
+  key: string;
+  label: string;
+  tone: RelationshipTone;
+  active?: boolean;
+  onClick?: () => void;
+};
 
 function agentTimelineEntryKey(entry: AgentTimelineEntry): string {
   return `${entry.kind}:${entry.id}`;
@@ -869,6 +877,25 @@ function recommendationActionLabel(recommendation: OrchestratorSessionControlRec
   return "Apply";
 }
 
+function relationshipToneClass(tone: RelationshipTone): string {
+  switch (tone) {
+    case "run":
+      return "border-[#e5e5e3] bg-white text-[#37352f] hover:bg-[#f7f7f5]";
+    case "outcome":
+      return "border-[#e5e5e3] bg-[#fafaf9] text-[#37352f] hover:bg-[#f3f3f1]";
+    case "approval":
+      return "border-[#d3e5ef] bg-[#eef7fb] text-[#2a6690] hover:bg-[#e3f2f8]";
+    case "issue":
+      return "border-[#f4e0c4] bg-[#fff6e8] text-[#9a6700] hover:bg-[#fff0d9]";
+    case "event":
+      return "border-[#d6e9dc] bg-[#eef8f1] text-[#2b6e3f] hover:bg-[#e4f3e8]";
+    case "agent":
+      return "border-[#e5e5e3] bg-white text-[#37352f] hover:bg-[#f7f7f5]";
+    default:
+      return "border-[#e5e5e3] bg-white text-[#37352f] hover:bg-[#f7f7f5]";
+  }
+}
+
 function FilterChip({
   label,
   active,
@@ -894,6 +921,56 @@ function FilterChip({
       {label}
       {typeof count === "number" ? ` · ${count}` : ""}
     </Button>
+  );
+}
+
+function RelationshipStrip({
+  label,
+  items,
+}: {
+  label: string;
+  items: RelationshipStripItem[];
+}) {
+  const visibleItems = items.filter((item) => item.label);
+  if (visibleItems.length === 0) return null;
+
+  return (
+    <div className="rounded-xl border border-[#ecebe8] bg-[#fbfbf9] p-3">
+      <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#9b9a97]">
+        {label}
+      </p>
+      <div className="mt-3 flex flex-wrap gap-2">
+        {visibleItems.map((item) =>
+          item.onClick ? (
+            <Button
+              key={item.key}
+              size="sm"
+              variant="outline"
+              className={`h-7 rounded-full px-2.5 text-[11px] ${
+                item.active
+                  ? "border-[#1a1a1a] bg-[#1a1a1a] text-white hover:bg-[#333]"
+                  : relationshipToneClass(item.tone)
+              }`}
+              onClick={item.onClick}
+            >
+              {item.label}
+            </Button>
+          ) : (
+            <Badge
+              key={item.key}
+              variant="outline"
+              className={`rounded-full px-2.5 py-1 text-[11px] font-medium ${
+                item.active
+                  ? "border-[#1a1a1a] bg-[#1a1a1a] text-white"
+                  : relationshipToneClass(item.tone).replace(" hover:bg-[#f7f7f5]", "").replace(" hover:bg-[#f3f3f1]", "").replace(" hover:bg-[#e3f2f8]", "").replace(" hover:bg-[#fff0d9]", "").replace(" hover:bg-[#e4f3e8]", "")
+              }`}
+            >
+              {item.label}
+            </Badge>
+          )
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -2565,6 +2642,15 @@ export default function ControlPlanePage() {
                               actionPayload?.command,
                               toStringValue(commandResultPayload?.command)
                             );
+                            const linkedApprovalId = toStringValue(asRecord(selectedRunResult.approval)?.id);
+                            const linkedIssueId = toStringValue(asRecord(selectedRunResult.issue)?.id);
+                            const linkedEvent =
+                              resolveSessionEventFromContext(selectedSession?.events || [], {
+                                runId: selectedRun.id,
+                                approvalId: linkedApprovalId,
+                                issueId: linkedIssueId,
+                                runtimeAgentId,
+                              })?.event ?? null;
                             const workspaceHref =
                               projectId && storyId
                                 ? `/projects/${projectId}?storyId=${storyId}`
@@ -2722,6 +2808,90 @@ export default function ControlPlanePage() {
                               )}
                             </div>
                           )}
+
+                          <RelationshipStrip
+                            label="Relationship Strip"
+                            items={[
+                              {
+                                key: `run-${selectedRun.id}`,
+                                label: `run ${selectedRun.id}`,
+                                tone: "run",
+                                onClick: () => {
+                                  setSelectedRunId(selectedRun.id);
+                                  setSelectedRunResultIndex(0);
+                                },
+                              },
+                              {
+                                key: `outcome-${selectedRun.id}-${selectedRunResultIndex}`,
+                                label: `outcome ${selectedRunResultIndex + 1}`,
+                                tone: "outcome",
+                                active: true,
+                                onClick: () => {
+                                  setSelectedRunId(selectedRun.id);
+                                  setSelectedRunResultIndex(selectedRunResultIndex);
+                                },
+                              },
+                              linkedApprovalId
+                                ? {
+                                    key: `approval-${linkedApprovalId}`,
+                                    label: `approval ${linkedApprovalId}`,
+                                    tone: "approval" as const,
+                                    onClick: () => {
+                                      syncLinkedSelection({
+                                        runId: selectedRun.id,
+                                        resultIndex: selectedRunResultIndex,
+                                        approvalId: linkedApprovalId,
+                                        issueId: linkedIssueId,
+                                        runtimeAgentId,
+                                      });
+                                    },
+                                  }
+                                : null,
+                              linkedIssueId
+                                ? {
+                                    key: `issue-${linkedIssueId}`,
+                                    label: `issue ${linkedIssueId}`,
+                                    tone: "issue" as const,
+                                    onClick: () => {
+                                      syncLinkedSelection({
+                                        runId: selectedRun.id,
+                                        resultIndex: selectedRunResultIndex,
+                                        approvalId: linkedApprovalId,
+                                        issueId: linkedIssueId,
+                                        runtimeAgentId,
+                                      });
+                                    },
+                                  }
+                                : null,
+                              linkedEvent
+                                ? {
+                                    key: `event-${sessionEventKey(linkedEvent)}`,
+                                    label: `event ${toStringValue(linkedEvent.event, "event")}`,
+                                    tone: "event" as const,
+                                    onClick: () => {
+                                      syncLinkedSelection({
+                                        runId: selectedRun.id,
+                                        resultIndex: selectedRunResultIndex,
+                                        approvalId: linkedApprovalId,
+                                        issueId: linkedIssueId,
+                                        runtimeAgentId,
+                                        event: linkedEvent,
+                                      });
+                                    },
+                                  }
+                                : null,
+                              runtimeAgentId
+                                ? {
+                                    key: `agent-${runtimeAgentId}`,
+                                    label: `agent ${runtimeAgentId}`,
+                                    tone: "agent" as const,
+                                    onClick: () => {
+                                      openSelectedRunResultInTimeline();
+                                    },
+                                  }
+                                : null,
+                            ].filter(Boolean) as RelationshipStripItem[]}
+                          />
 
                           <p className="mt-4 text-[13px] leading-relaxed text-[#6b6b6b]">
                             {toStringValue(
@@ -3612,6 +3782,90 @@ export default function ControlPlanePage() {
                                           }
                                         />
                                       </div>
+
+                                      <RelationshipStrip
+                                        label="Relationship Strip"
+                                        items={[
+                                          {
+                                            key: `timeline-${entry.kind}-${entry.id}`,
+                                            label: `${entry.kind} ${entry.id}`,
+                                            tone:
+                                              entry.kind === "approval"
+                                                ? "approval"
+                                                : entry.kind === "issue"
+                                                  ? "issue"
+                                                  : "event",
+                                            active: true,
+                                            onClick: () => {
+                                              setSelectedAgentTimelineKey(agentTimelineEntryKey(entry));
+                                            },
+                                          },
+                                          relatedRunLink
+                                            ? {
+                                                key: `run-${relatedRunLink.run.id}`,
+                                                label: `run ${relatedRunLink.run.id}`,
+                                                tone: "run" as const,
+                                                onClick: () => {
+                                                  setSelectedRunId(relatedRunLink.run.id);
+                                                  setSelectedRunResultIndex(0);
+                                                },
+                                              }
+                                            : null,
+                                          relatedRunLink && relatedRunResult
+                                            ? {
+                                                key: `outcome-${relatedRunLink.run.id}-${relatedRunLink.resultIndex}`,
+                                                label: `outcome ${relatedRunLink.resultIndex + 1}`,
+                                                tone: "outcome" as const,
+                                                onClick: () => {
+                                                  setSelectedRunId(relatedRunLink.run.id);
+                                                  setSelectedRunResultIndex(relatedRunLink.resultIndex);
+                                                },
+                                              }
+                                            : null,
+                                          relatedApprovalId && entry.kind !== "approval"
+                                            ? {
+                                                key: `approval-${relatedApprovalId}`,
+                                                label: `approval ${relatedApprovalId}`,
+                                                tone: "approval" as const,
+                                                onClick: () => {
+                                                  syncLinkedSelection({
+                                                    runId: relatedRunLink?.run.id,
+                                                    resultIndex: relatedRunLink?.resultIndex,
+                                                    approvalId: relatedApprovalId,
+                                                    issueId: relatedIssueId,
+                                                    runtimeAgentId: selectedAgent.runtime_agent_id,
+                                                    event: entry.event || null,
+                                                  });
+                                                },
+                                              }
+                                            : null,
+                                          relatedIssueId && entry.kind !== "issue"
+                                            ? {
+                                                key: `issue-${relatedIssueId}`,
+                                                label: `issue ${relatedIssueId}`,
+                                                tone: "issue" as const,
+                                                onClick: () => {
+                                                  syncLinkedSelection({
+                                                    runId: relatedRunLink?.run.id,
+                                                    resultIndex: relatedRunLink?.resultIndex,
+                                                    approvalId: relatedApprovalId,
+                                                    issueId: relatedIssueId,
+                                                    runtimeAgentId: selectedAgent.runtime_agent_id,
+                                                    event: entry.event || null,
+                                                  });
+                                                },
+                                              }
+                                            : null,
+                                          {
+                                            key: `agent-${selectedAgent.runtime_agent_id}`,
+                                            label: `agent ${selectedAgent.runtime_agent_id}`,
+                                            tone: "agent",
+                                            onClick: () => {
+                                              focusRuntimeAgent(selectedAgent.runtime_agent_id, true);
+                                            },
+                                          },
+                                        ].filter(Boolean) as RelationshipStripItem[]}
+                                      />
 
                                       <p className="mt-4 text-[13px] leading-relaxed text-[#6b6b6b]">
                                         {entry.message}
@@ -5464,6 +5718,88 @@ export default function ControlPlanePage() {
                               detail={storyId ? `story ${storyId}` : "No story linkage"}
                             />
                           </div>
+
+                          <RelationshipStrip
+                            label="Relationship Strip"
+                            items={[
+                              {
+                                key: `context-${contextKind}-${contextId}`,
+                                label: `${contextKind} ${contextId}`,
+                                tone:
+                                  contextKind === "approval"
+                                    ? "approval"
+                                    : contextKind === "issue"
+                                      ? "issue"
+                                      : "event",
+                                active: true,
+                                onClick: () => {
+                                  revealSelectedSessionContextRow();
+                                },
+                              },
+                              relatedRunLink
+                                ? {
+                                    key: `run-${relatedRunLink.run.id}`,
+                                    label: `run ${relatedRunLink.run.id}`,
+                                    tone: "run" as const,
+                                    onClick: () => {
+                                      setSelectedRunId(relatedRunLink.run.id);
+                                      setSelectedRunResultIndex(0);
+                                    },
+                                  }
+                                : null,
+                              relatedRunLink && relatedRunResult
+                                ? {
+                                    key: `outcome-${relatedRunLink.run.id}-${relatedRunLink.resultIndex}`,
+                                    label: `outcome ${relatedRunLink.resultIndex + 1}`,
+                                    tone: "outcome" as const,
+                                    onClick: () => {
+                                      setSelectedRunId(relatedRunLink.run.id);
+                                      setSelectedRunResultIndex(relatedRunLink.resultIndex);
+                                    },
+                                  }
+                                : null,
+                              relatedApprovalId && contextKind !== "approval"
+                                ? {
+                                    key: `approval-${relatedApprovalId}`,
+                                    label: `approval ${relatedApprovalId}`,
+                                    tone: "approval" as const,
+                                    onClick: () => {
+                                      syncLinkedSelection({
+                                        approvalId: relatedApprovalId,
+                                        issueId: relatedIssueId,
+                                        runtimeAgentId,
+                                        event: eventContext,
+                                      });
+                                    },
+                                  }
+                                : null,
+                              relatedIssueId && contextKind !== "issue"
+                                ? {
+                                    key: `issue-${relatedIssueId}`,
+                                    label: `issue ${relatedIssueId}`,
+                                    tone: "issue" as const,
+                                    onClick: () => {
+                                      syncLinkedSelection({
+                                        approvalId: relatedApprovalId,
+                                        issueId: relatedIssueId,
+                                        runtimeAgentId,
+                                        event: eventContext,
+                                      });
+                                    },
+                                  }
+                                : null,
+                              runtimeAgentId
+                                ? {
+                                    key: `agent-${runtimeAgentId}`,
+                                    label: `agent ${runtimeAgentId}`,
+                                    tone: "agent" as const,
+                                    onClick: () => {
+                                      revealSelectedSessionContextInAgentTimeline();
+                                    },
+                                  }
+                                : null,
+                            ].filter(Boolean) as RelationshipStripItem[]}
+                          />
 
                           {(projectId || storyId || runtimeAgentId || relatedApprovalId || relatedIssueId) && (
                             <div className="flex flex-wrap gap-2">
