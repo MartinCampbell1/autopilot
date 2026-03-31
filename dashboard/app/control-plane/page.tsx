@@ -1,5 +1,4 @@
 "use client";
-import { useCallback } from "react";
 import { ControlPlaneLayout } from "@/components/control-plane-layout";
 import { ControlPlaneLoadingShell } from "@/components/control-plane-loading-shell";
 import {
@@ -21,9 +20,6 @@ import {
 } from "@/lib/control-plane-data";
 import { buildRuntimeAgentSectionProps } from "@/lib/control-plane-runtime-agent-props";
 import { buildSessionDrilldownSectionProps } from "@/lib/control-plane-session-drilldown-props";
-import {
-  type QueueAdvanceTarget,
-} from "@/lib/control-plane-models";
 import {
   agentTimelineEntryKey,
   agentTimelineRowDomId,
@@ -54,6 +50,7 @@ import { useControlPlaneDataLoader } from "@/lib/use-control-plane-data-loader";
 import { useControlPlaneLinkedSelection } from "@/lib/use-control-plane-linked-selection";
 import { useControlPlaneOperatorPersistence } from "@/lib/use-control-plane-operator-persistence";
 import { useControlPlaneQueueAdvance } from "@/lib/use-control-plane-queue-advance";
+import { useControlPlaneQueueTargetNavigation } from "@/lib/use-control-plane-queue-target-navigation";
 import { useControlPlaneRevealFlows } from "@/lib/use-control-plane-reveal-flows";
 import { useControlPlaneRunSelection } from "@/lib/use-control-plane-run-selection";
 import { useControlPlaneRuntimeAgentModel } from "@/lib/use-control-plane-runtime-agent-model";
@@ -578,22 +575,13 @@ export default function ControlPlanePage() {
     setSelectedRunResultIndex,
     setNotice,
   });
-  const openSessionQueueAdvanceTarget = useCallback(
-    (target: QueueAdvanceTarget | null | undefined) => {
-      if (!target || target.kind !== "session-lineage") return;
-      focusSessionLineageEntry(target.entry, target.filter);
-    },
-    [focusSessionLineageEntry]
-  );
-  const openAgentQueueAdvanceTarget = useCallback(
-    (target: QueueAdvanceTarget | null | undefined) => {
-      if (!target || target.kind !== "agent-timeline") return;
-      restoreAgentTimelineEntryVisibility(agentTimelineEntryKey(target.entry));
-      revealAgentTimelineEntry(target.entry);
-      inspectAgentTimelineEntry(target.entry);
-    },
-    [inspectAgentTimelineEntry, restoreAgentTimelineEntryVisibility, revealAgentTimelineEntry]
-  );
+  const { openSessionQueueAdvanceTarget, openAgentQueueAdvanceTarget } =
+    useControlPlaneQueueTargetNavigation({
+      focusSessionLineageEntry,
+      restoreAgentTimelineEntryVisibility,
+      revealAgentTimelineEntry,
+      inspectAgentTimelineEntry,
+    });
   const {
     sessionQueueAdvanceFocusSummary,
     agentQueueAdvanceFocusSummary,
