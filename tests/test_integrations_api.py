@@ -55,6 +55,8 @@ def test_github_issue_trigger_creates_project_and_links_tracker_ref(tmp_path: Pa
     assert project is not None
     assert project["tracker_refs"][0]["provider"] == "github"
     assert project["tracker_refs"][0]["external_id"] == "101"
+    assert project["task_source"]["source_kind"] == "github_issue"
+    assert project["task_source"]["branch_policy"] == "isolated_worktree"
 
 
 def test_github_issue_trigger_reuses_existing_project_for_same_issue(tmp_path: Path, monkeypatch) -> None:
@@ -138,6 +140,8 @@ def test_generic_tracker_trigger_creates_project_and_links_tracker_ref(tmp_path:
     assert project is not None
     assert project["tracker_refs"][0]["provider"] == "linear"
     assert project["tracker_refs"][0]["external_id"] == "ENG-42"
+    assert project["task_source"]["source_kind"] == "tracker_item"
+    assert project["task_source"]["branch_policy"] == "isolated_worktree"
 
 
 def test_generic_tracker_trigger_reuses_existing_project_for_same_item(tmp_path: Path, monkeypatch) -> None:

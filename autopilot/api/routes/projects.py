@@ -6,7 +6,7 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from autopilot.api.deps import get_account_manager, get_config
-from autopilot.core.execution_brief import ExecutionBrief
+from autopilot.core.execution_brief import ExecutionBrief, TaskSource
 from autopilot.core.execution_plane import build_execution_plane_project_detail, ingest_execution_brief_project
 from autopilot.core.project_bootstrap import create_project_from_prd
 from autopilot.core.project_store import (
@@ -34,6 +34,7 @@ class CreateProjectRequest(BaseModel):
     project_name: str | None = None
     project_path: str | None = None
     priority: str = "normal"
+    task_source: TaskSource | None = None
 
 
 class GuidanceRequest(BaseModel):
@@ -175,6 +176,7 @@ async def create_project(request: CreateProjectRequest) -> dict[str, str | bool]
         project_path=request.project_path,
         priority=request.priority,
         launch=False,
+        task_source=request.task_source.model_dump() if request.task_source else None,
     )
     return {
         "status": "ok",

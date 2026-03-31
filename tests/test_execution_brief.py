@@ -23,6 +23,13 @@ def test_render_execution_brief_as_spec_includes_initiative_and_orchestration_se
             "project_ref": "founderos/proj_1",
             "requested_launch_preset": "parallel",
         },
+        task_source={
+            "source_kind": "execution_brief",
+            "external_id": "init_1",
+            "repo": "/tmp/founderos",
+            "branch_policy": "isolated_worktree",
+            "brief_ref": ".agents/tasks/execution-brief.json",
+        },
     )
 
     rendered = render_execution_brief_as_spec(brief)
@@ -31,4 +38,6 @@ def test_render_execution_brief_as_spec_includes_initiative_and_orchestration_se
     assert "- Initiative id: init_1" in rendered
     assert "## Orchestration Context" in rendered
     assert "- Orchestrator: founderos" in rendered
+    assert "## Task Source" in rendered
+    assert "- Branch policy: isolated_worktree" in rendered
     assert "- Use `blocked_by` when a story must wait for another story to complete." in rendered

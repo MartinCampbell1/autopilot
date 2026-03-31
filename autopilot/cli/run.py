@@ -43,6 +43,7 @@ from autopilot.core.project_store import (
     requeue_recoverable_stuck_stories,
     record_discovery_markers,
     register_project,
+    resolve_project_task_source,
     save_project_state,
     update_project_runtime,
     update_story_runtime,
@@ -258,6 +259,26 @@ def _set_pipeline_stage_status(
 
 def _is_git_worktree_ready(project_path: Path) -> bool:
     return (project_path / ".git").exists()
+
+
+def _project_branch_policy(project_entry: dict[str, Any]) -> str:
+    task_source = resolve_project_task_source(project_entry)
+    branch_policy = str(task_source.get("branch_policy") or "").strip()
+    return branch_policy or "shared_main"
+
+
+def _should_use_story_worktree(
+    project_entry: dict[str, Any],
+    project_path: Path,
+    launch_profile: Any,
+    *,
+    parallel_slot: bool,
+) -> bool:
+    if not _is_git_worktree_ready(project_path):
+        return False
+    if parallel_slot and launch_profile.project_concurrency_mode == "parallel":
+        return True
+    return _project_branch_policy(project_entry) == "isolated_worktree"
 
 
 def _next_open_story(project_entry: dict, state: dict) -> dict | None:
@@ -597,6 +618,14 @@ def _run_impl(
             event="parallel_fallback",
             status="paused",
             message="Parallel mode requested, but the repo is not git-ready. Falling back to Team mode.",
+        )
+    elif _project_branch_policy(project_entry) == "isolated_worktree" and not _is_git_worktree_ready(project):
+        emit_project_event(
+            config,
+            project_id,
+            event="workspace_policy_fallback",
+            status="warning",
+            message="Isolated worktree policy requested, but the repo is not git-ready. Using the shared project checkout.",
         )
 
     if not state.get("pid"):
@@ -1008,8 +1037,14 @@ def _run_impl(
         planned_checkout_path = project
         planned_checkout_mode = "shared_main"
         story_lease = None
+        use_story_worktree = _should_use_story_worktree(
+            project_entry,
+            project,
+            launch_profile,
+            parallel_slot=parallel_slot,
+        )
 
-        if parallel_slot and launch_profile.project_concurrency_mode == "parallel":
+        if use_story_worktree:
             branch_name = planned_story_branch
             planned_checkout_path = worktree_path(project, story_id)
             planned_checkout_mode = "worktree"
@@ -1067,7 +1102,7 @@ def _run_impl(
             )
             raise RuntimeError(message) from exc
 
-        if parallel_slot and launch_profile.project_concurrency_mode == "parallel":
+        if use_story_worktree:
             try:
                 execution_path = create_worktree(project, story_id, branch_name=branch_name)
                 apply_autopilot_ralph_overrides(execution_path)
