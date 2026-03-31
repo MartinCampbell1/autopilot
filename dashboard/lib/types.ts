@@ -564,8 +564,32 @@ export interface ExecutionAgentActionExecuteResult {
   approval?: ExecutionApprovalRecord;
   issue?: ExecutionIssueRecord;
   project?: Record<string, unknown>;
+  diff_summary?: Record<string, unknown>;
+  patch_bundle?: Record<string, unknown>;
+  preview_id?: string;
+  artifact_ref?: string;
+  approval_required?: boolean;
+  apply_mode?: string;
   run?: ExecutionAgentActionRunRecord;
   idempotent_replay?: boolean;
+}
+
+export interface ExecutionAgentActionBatchResult {
+  status: string;
+  selection: Record<string, unknown>;
+  policy: Record<string, unknown>;
+  summary: ExecutionAgentActionRunSummary;
+  diff_summary?: Record<string, unknown>;
+  patch_bundle?: Record<string, unknown>;
+  preview_id?: string;
+  artifact_ref?: string;
+  approval_required?: boolean;
+  apply_mode?: string;
+  dry_run: boolean;
+  results: Array<Record<string, unknown>>;
+  run: ExecutionAgentActionRunRecord;
+  idempotent_replay?: boolean;
+  session_id?: string;
 }
 
 export interface OrchestratorSessionDetail extends OrchestratorSessionRecord {

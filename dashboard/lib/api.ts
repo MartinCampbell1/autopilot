@@ -6,7 +6,9 @@ import type {
   AccountsByProvider,
   ConnectorValidationResult,
   CreateProjectResult,
+  ExecutionAgentActionBatchResult,
   ExecutionAgentActionExecuteResult,
+  ExecutionAgentActionRunRecord,
   IssueResolutionResult,
   IntakeSession,
   SpecBootstrap,
@@ -192,6 +194,145 @@ export async function executeExecutionPlaneAgentAction(payload: {
     res,
     `Failed to execute runtime agent action: ${res.status}`
   );
+}
+
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.map((item) => (typeof item === "string" ? item.trim() : "")).filter(Boolean)
+    : [];
+}
+
+function numberValue(value: unknown, fallback: number): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function buildExecutionPreviewApplyPayload(
+  run: ExecutionAgentActionRunRecord,
+  payload?: { actor?: string; reason?: string }
+) {
+  const selectedActionKeys = stringArray(run.selection?.selected_action_keys);
+  const previewId = run.preview_id || run.id;
+  return {
+    action_keys: selectedActionKeys,
+    preview_id: previewId,
+    orchestrator_session_id: run.orchestrator_session_id || "",
+    actor: payload?.actor ?? "dashboard-control-plane",
+    mode: run.mode || "auto",
+    reason:
+      payload?.reason ??
+      (run.approval_required
+        ? `Dashboard requested approval from preview ${previewId}`
+        : `Dashboard applied preview ${previewId}`),
+    policy_profile: run.policy_profile || null,
+    include_non_executable: Boolean(run.selection?.include_non_executable),
+    limit: Math.max(selectedActionKeys.length, numberValue(run.selection?.limit, selectedActionKeys.length || 20)),
+    continue_on_error: true,
+  };
+}
+
+export async function executeExecutionPlaneAgentActionBatch(payload: {
+  actionKeys?: string[];
+  previewId?: string;
+  orchestratorSessionId?: string;
+  actor?: string;
+  mode?: string;
+  reason?: string;
+  policyProfile?: string | null;
+  includeNonExecutable?: boolean;
+  limit?: number;
+  continueOnError?: boolean;
+}): Promise<ExecutionAgentActionBatchResult> {
+  const res = await fetch(`${API_BASE}/execution-plane/agents/actions/execute-batch`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      action_keys: payload.actionKeys ?? [],
+      preview_id: payload.previewId ?? "",
+      orchestrator_session_id: payload.orchestratorSessionId ?? "",
+      actor: payload.actor ?? "dashboard-control-plane",
+      mode: payload.mode ?? "auto",
+      reason: payload.reason ?? "",
+      policy_profile: payload.policyProfile ?? null,
+      include_non_executable: payload.includeNonExecutable ?? false,
+      limit: payload.limit ?? 20,
+      continue_on_error: payload.continueOnError ?? true,
+    }),
+  });
+  return jsonOrThrow<ExecutionAgentActionBatchResult>(
+    res,
+    `Failed to execute runtime agent action batch: ${res.status}`
+  );
+}
+
+export async function executeExecutionPlaneOrchestratorSessionActions(
+  sessionId: string,
+  payload: {
+    actionKeys?: string[];
+    previewId?: string;
+    actor?: string;
+    mode?: string;
+    reason?: string;
+    policyProfile?: string | null;
+    includeNonExecutable?: boolean;
+    limit?: number;
+    continueOnError?: boolean;
+  }
+): Promise<ExecutionAgentActionBatchResult> {
+  const res = await fetch(
+    `${API_BASE}/execution-plane/orchestrator-sessions/${encodeURIComponent(sessionId)}/actions/execute`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action_keys: payload.actionKeys ?? [],
+        preview_id: payload.previewId ?? "",
+        actor: payload.actor ?? "dashboard-control-plane",
+        mode: payload.mode ?? "auto",
+        reason: payload.reason ?? "",
+        policy_profile: payload.policyProfile ?? null,
+        include_non_executable: payload.includeNonExecutable ?? false,
+        limit: payload.limit ?? 20,
+        continue_on_error: payload.continueOnError ?? true,
+      }),
+    }
+  );
+  return jsonOrThrow<ExecutionAgentActionBatchResult>(
+    res,
+    `Failed to execute orchestrator session actions: ${res.status}`
+  );
+}
+
+export async function applyExecutionPlanePreviewRun(
+  run: ExecutionAgentActionRunRecord,
+  payload?: { actor?: string; reason?: string }
+): Promise<ExecutionAgentActionBatchResult> {
+  const request = buildExecutionPreviewApplyPayload(run, payload);
+  if (run.orchestrator_session_id) {
+    return executeExecutionPlaneOrchestratorSessionActions(run.orchestrator_session_id, {
+      actionKeys: request.action_keys,
+      previewId: request.preview_id,
+      actor: request.actor,
+      mode: request.mode,
+      reason: request.reason,
+      policyProfile: request.policy_profile,
+      includeNonExecutable: request.include_non_executable,
+      limit: request.limit,
+      continueOnError: request.continue_on_error,
+    });
+  }
+  return executeExecutionPlaneAgentActionBatch({
+    actionKeys: request.action_keys,
+    previewId: request.preview_id,
+    orchestratorSessionId: request.orchestrator_session_id,
+    actor: request.actor,
+    mode: request.mode,
+    reason: request.reason,
+    policyProfile: request.policy_profile,
+    includeNonExecutable: request.include_non_executable,
+    limit: request.limit,
+    continueOnError: request.continue_on_error,
+  });
 }
 
 export async function fetchExecutionPlaneControlPasses(
