@@ -600,6 +600,9 @@ def test_build_project_summary_includes_latest_handoff(tmp_path: Path) -> None:
     assert summary["delivery_loop"]["artifact"]["artifact_type"] == "github_pr"
     assert summary["delivery_loop"]["artifact"]["ref_label"] == "PR #12"
     assert summary["delivery_loop"]["artifact"]["present"] is False
+    assert summary["delivery_status"]["stage"] == "handoff"
+    assert summary["delivery_status"]["status"] == "ready_to_merge"
+    assert summary["delivery_status"]["handoff_ref"] == "PR #12"
 
 
 def test_emit_project_event_records_task_source_and_handoff(tmp_path: Path) -> None:

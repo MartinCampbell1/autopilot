@@ -117,6 +117,17 @@ export interface ProjectDeliveryLoop {
   artifact?: ProjectHandoffArtifact | null;
 }
 
+export interface ProjectDeliveryStatus {
+  stage: string;
+  status: string;
+  headline: string;
+  detail: string;
+  next_step: string;
+  handoff_ref: string;
+  artifact_present: boolean;
+  brief_present: boolean;
+}
+
 export interface LaunchPreset {
   id: string;
   label: string;
@@ -312,6 +323,7 @@ export interface ProjectSummary {
   task_source?: TaskSource;
   latest_handoff?: ProjectHandoffSummary | null;
   delivery_loop?: ProjectDeliveryLoop;
+  delivery_status?: ProjectDeliveryStatus;
   budget_policy?: RuntimeBudgetPolicy;
   budget_usage?: RuntimeBudgetUsage;
 }
