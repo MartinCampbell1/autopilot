@@ -597,6 +597,9 @@ def test_build_project_summary_includes_latest_handoff(tmp_path: Path) -> None:
     assert summary["latest_handoff"]["merge_state"] == "ready"
     assert summary["delivery_loop"]["source"]["source_kind"] == "manual"
     assert summary["delivery_loop"]["handoff"]["number"] == 12
+    assert summary["delivery_loop"]["artifact"]["artifact_type"] == "github_pr"
+    assert summary["delivery_loop"]["artifact"]["ref_label"] == "PR #12"
+    assert summary["delivery_loop"]["artifact"]["present"] is False
 
 
 def test_emit_project_event_records_task_source_and_handoff(tmp_path: Path) -> None:
@@ -645,11 +648,19 @@ def test_emit_project_event_records_task_source_and_handoff(tmp_path: Path) -> N
 
     detail = build_project_detail(config, project["id"])
     event = detail["timeline"][-1]
+    artifact_path = project_dir / ".agents" / "tasks" / "handoff-artifact.json"
 
     assert event["task_source"]["source_kind"] == "github_issue"
     assert event["task_source"]["external_id"] == "42"
     assert event["handoff"]["number"] == 21
     assert event["handoff"]["handoff_status"] == "approved_and_green"
+    assert artifact_path.exists()
+    persisted = json.loads(artifact_path.read_text())
+    assert persisted["ref_label"] == "PR #21"
+    assert persisted["task_source"]["source_kind"] == "github_issue"
+    assert detail["delivery_loop"]["artifact"]["present"] is True
+    assert detail["delivery_loop"]["artifact"]["path"] == str(artifact_path.resolve())
+    assert detail["stories"][0]["handoff_artifact"]["ref_label"] == "PR #21"
 
 
 def test_update_project_budget_policy_persists_changes(tmp_path: Path) -> None:

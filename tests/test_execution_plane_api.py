@@ -788,6 +788,8 @@ def test_execution_plane_github_pr_sync_and_reaction_routes(
     sync_payload = sync_response.json()
     assert sync_payload["github_pr"]["number"] == 12
     assert sync_payload["github_pr"]["state"] == "open"
+    assert sync_payload["project"]["delivery_loop"]["artifact"]["ref_label"] == "PR #12"
+    assert sync_payload["project"]["delivery_loop"]["artifact"]["present"] is True
 
     reaction_response = client.post(
         f"/api/execution-plane/projects/{project_id}/stories/1/github-reactions",
@@ -801,6 +803,7 @@ def test_execution_plane_github_pr_sync_and_reaction_routes(
     reaction_payload = reaction_response.json()
     assert reaction_payload["github_pr"]["review_status"] == "changes_requested"
     assert reaction_payload["project"]["stories"][0]["github_pr"]["handoff_status"] == "changes_requested"
+    assert reaction_payload["project"]["stories"][0]["handoff_artifact"]["ref_label"] == "PR #12"
 
     issues_response = client.get(
         f"/api/execution-plane/projects/{project_id}/issues",
