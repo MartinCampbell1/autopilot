@@ -43,7 +43,6 @@ import {
 import {
   agentTimelineEntryKey,
   agentTimelineRowDomId,
-  resolveAgentTimelineRunLink,
   resolveRunLinkFromContext,
   resolveSessionEventFromContext,
   sessionContextRowDomId,
@@ -66,6 +65,7 @@ import {
   type PendingLineageAutoAdvance,
   useControlPlaneActions,
 } from "@/lib/use-control-plane-actions";
+import { useControlPlaneAgentNavigation } from "@/lib/use-control-plane-agent-navigation";
 import { useControlPlaneAgentPriorityQueues } from "@/lib/use-control-plane-agent-priority-queues";
 import { useControlPlaneBootstrap } from "@/lib/use-control-plane-bootstrap";
 import { useControlPlaneDataLoader } from "@/lib/use-control-plane-data-loader";
@@ -192,20 +192,6 @@ export default function ControlPlanePage() {
     setSelectedPassId,
   });
 
-  const focusAgentTimeline = useCallback(
-    (
-      filter: string,
-      options?: {
-        entry?: AgentTimelineEntry | null;
-        search?: string;
-      }
-    ) => {
-      setAgentTimelineFilter(filter);
-      setAgentTimelineSearch(options?.search ?? "");
-      setSelectedAgentTimelineKey(options?.entry ? agentTimelineEntryKey(options.entry) : "");
-    },
-    []
-  );
   const {
     refresh,
     recordTriageInboxFeedback,
@@ -515,27 +501,18 @@ export default function ControlPlanePage() {
     setExpandedAgentPriorityQueues,
     selectedAgentTimelineEntryRef,
   });
-  const inspectAgentTimelineEntry = useCallback(
-    (entry: AgentTimelineEntry) => {
-      const relatedRunLink = resolveAgentTimelineRunLink(entry, linkedRuns);
-      setSelectedAgentTimelineKey(agentTimelineEntryKey(entry));
-      syncLinkedSelection({
-        runId:
-          relatedRunLink?.run.id ||
-          toStringValue(entry.event?.agent_action_run_id) ||
-          toStringValue(entry.event?.run_id),
-        resultIndex: relatedRunLink?.resultIndex,
-        approvalId:
-          entry.approval?.id ||
-          entry.issue?.approval_id ||
-          toStringValue(entry.event?.approval_id),
-        issueId: entry.issue?.id || toStringValue(entry.event?.issue_id),
-        runtimeAgentId: selectedAgent?.runtime_agent_id || selectedAgentId,
-        event: entry.event || null,
-      });
-    },
-    [linkedRuns, selectedAgent, selectedAgentId, syncLinkedSelection]
-  );
+  const {
+    focusAgentTimeline,
+    inspectAgentTimelineEntry,
+  } = useControlPlaneAgentNavigation({
+    linkedRuns,
+    selectedAgent,
+    selectedAgentId,
+    syncLinkedSelection,
+    setAgentTimelineFilter,
+    setAgentTimelineSearch,
+    setSelectedAgentTimelineKey,
+  });
   const {
     toggleAgentPriorityQueueExpansion,
     expandAllAgentPriorityQueues,
