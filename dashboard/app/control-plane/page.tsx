@@ -107,6 +107,7 @@ import {
   type PendingLineageAutoAdvance,
   useControlPlaneActions,
 } from "@/lib/use-control-plane-actions";
+import { useControlPlaneBootstrap } from "@/lib/use-control-plane-bootstrap";
 import { useControlPlaneLinkedSelection } from "@/lib/use-control-plane-linked-selection";
 import { useControlPlaneOperatorPersistence } from "@/lib/use-control-plane-operator-persistence";
 import { useControlPlaneQueueAdvance } from "@/lib/use-control-plane-queue-advance";
@@ -291,174 +292,6 @@ export default function ControlPlanePage() {
   );
 
   useEffect(() => {
-    if (sessions.length === 0) {
-      setSelectedSessionId("");
-      setSelectedAgentId("");
-      setSelectedRunId("");
-      setSelectedAgent(null);
-      setSelectedSession(null);
-      return;
-    }
-    setSelectedSessionId((current) =>
-      sessions.some((session) => session.id === current) ? current : sessions[0].id
-    );
-  }, [sessions]);
-  useEffect(() => {
-    if (controlPasses.length === 0) {
-      setSelectedPassId("");
-      return;
-    }
-    setSelectedPassId((current) =>
-      controlPasses.some((controlPass) => controlPass.id === current)
-        ? current
-        : controlPasses[0].id
-    );
-  }, [controlPasses]);
-
-  useEffect(() => {
-    if (!selectedSessionId) {
-      setSelectedAgentId("");
-      setSelectedRunId("");
-      setSelectedAgent(null);
-      setSelectedSessionApprovalId("");
-      setSelectedSessionIssueId("");
-      setSelectedSessionEventKey("");
-      setSelectedSessionContextKind("");
-      setEntitySearch("");
-      setSelectedSession(null);
-      return;
-    }
-
-    let cancelled = false;
-    setSessionLoading(true);
-    fetchExecutionPlaneOrchestratorSession(selectedSessionId, { eventLimit: 12 })
-      .then((detail) => {
-        if (cancelled) return;
-        setSelectedSession(detail);
-        setSelectedRunId((current) => {
-          if (current && detail.runs.some((run) => run.id === current)) {
-            return current;
-          }
-          return detail.runs[0]?.id ?? "";
-        });
-        setSelectedPassId((current) => {
-          if (current && detail.control_passes.some((controlPass) => controlPass.id === current)) {
-            return current;
-          }
-          return detail.control_passes[0]?.id ?? current;
-        });
-        setErrorMessage("");
-      })
-      .catch((error) => {
-        if (cancelled) return;
-        setSelectedSession(null);
-        setErrorMessage(
-          error instanceof Error ? error.message : "Failed to load orchestrator session detail."
-        );
-      })
-      .finally(() => {
-        if (!cancelled) setSessionLoading(false);
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [selectedSessionId]);
-
-  useEffect(() => {
-    setEntitySearch("");
-    setSelectedSessionApprovalId("");
-    setSelectedSessionIssueId("");
-    setSelectedSessionEventKey("");
-    setSelectedSessionContextKind("");
-    setSessionQueueAdvanceFeedback(null);
-    setSessionQueueFocusDelta(null);
-    setPendingLineageAutoAdvance(null);
-    setLineageQueueNow(Date.now());
-  }, [selectedSessionId]);
-
-  useEffect(() => {
-    if (!selectedSession) {
-      setSelectedAgentId("");
-      setSelectedAgent(null);
-      return;
-    }
-
-    const sessionRuns = (selectedSession.runs || []) as ExecutionAgentActionRunRecord[];
-    const currentRun = sessionRuns.find((run) => run.id === selectedRunId) ?? sessionRuns[0] ?? null;
-    const currentRunResult =
-      currentRun?.results[selectedRunResultIndex] ??
-      currentRun?.results[0] ??
-      null;
-    const sessionApprovals = selectedSession.approvals || [];
-    const sessionIssues = selectedSession.issues || [];
-    const candidateIds = [
-      currentRunResult && typeof currentRunResult === "object"
-        ? outcomeRuntimeAgentId(currentRunResult as Record<string, unknown>)
-        : "",
-      ...selectedSession.linked_runtime_agent_ids,
-      ...sessionRuns.flatMap((run) => run.runtime_agent_ids || []),
-      ...sessionApprovals.flatMap((approval) => approval.runtime_agent_ids || []),
-      ...sessionIssues.flatMap((issue) =>
-        issue.runtime_agent_ids.length > 0
-          ? issue.runtime_agent_ids
-          : issue.runtime_agent_id
-            ? [issue.runtime_agent_id]
-            : []
-      ),
-    ].filter(Boolean);
-    const uniqueIds = [...new Set(candidateIds)];
-    if (!uniqueIds.length) {
-      setSelectedAgentId("");
-      setSelectedAgent(null);
-      return;
-    }
-    setSelectedAgentId((current) => (current && uniqueIds.includes(current) ? current : uniqueIds[0]));
-  }, [selectedRunId, selectedRunResultIndex, selectedSession]);
-
-  useEffect(() => {
-    if (!selectedAgentId) {
-      setSelectedAgent(null);
-      return;
-    }
-    let cancelled = false;
-    setAgentLoading(true);
-    loadAgentDetail(selectedAgentId)
-      .then((detail) => {
-        if (cancelled) return;
-        setSelectedAgent(detail);
-      })
-      .catch((error) => {
-        if (cancelled) return;
-        setSelectedAgent(null);
-        setErrorMessage(
-          error instanceof Error ? error.message : "Failed to load runtime agent detail."
-        );
-      })
-      .finally(() => {
-        if (!cancelled) setAgentLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [loadAgentDetail, selectedAgentId]);
-
-  useEffect(() => {
-    setSelectedRunResultIndex(0);
-  }, [selectedRunId]);
-
-  useEffect(() => {
-    setAgentActivityFilter("all");
-    setAgentActivitySearch("");
-    setAgentTimelineFilter("all");
-    setAgentTimelineSearch("");
-    setSelectedAgentTimelineKey("");
-    setAgentQueueAdvanceFeedback(null);
-    setAgentQueueFocusDelta(null);
-    setPendingAgentPriorityAutoAdvance(null);
-  }, [selectedAgentId]);
-
-  useEffect(() => {
     const visibleRuns = ((selectedSession?.runs || []) as ExecutionAgentActionRunRecord[]).filter(
       (run) => matchesRunFilter(run, runFilter) && runMatchesSearch(run, entitySearch)
     );
@@ -481,14 +314,6 @@ export default function ControlPlanePage() {
       setSelectedRunResultIndex(0);
     }
   }, [selectedRunId, selectedRunResultIndex, selectedSession]);
-
-  const focusRuntimeAgent = useCallback((runtimeAgentId: string, syncSearch = false) => {
-    if (!runtimeAgentId) return;
-    setSelectedAgentId(runtimeAgentId);
-    if (syncSearch) {
-      setEntitySearch(runtimeAgentId);
-    }
-  }, []);
 
   const focusAgentTimeline = useCallback(
     (
@@ -557,6 +382,45 @@ export default function ControlPlanePage() {
     setSnoozedAgentTimelineUntil,
     agentQueueFocusDelta,
     setAgentQueueFocusDelta,
+  });
+
+  const { focusRuntimeAgent } = useControlPlaneBootstrap({
+    sessions,
+    controlPasses,
+    selectedSessionId,
+    selectedAgentId,
+    selectedRunId,
+    selectedRunResultIndex,
+    selectedSession,
+    loadSessionDetail,
+    loadAgentDetail,
+    setSelectedSessionId,
+    setSelectedAgentId,
+    setSelectedRunId,
+    setSelectedRunResultIndex,
+    setSelectedPassId,
+    setSelectedAgent,
+    setSelectedSession,
+    setSelectedSessionApprovalId,
+    setSelectedSessionIssueId,
+    setSelectedSessionEventKey,
+    setSelectedSessionContextKind,
+    setEntitySearch,
+    setSessionQueueAdvanceFeedback,
+    setSessionQueueFocusDelta,
+    setPendingLineageAutoAdvance,
+    setLineageQueueNow,
+    setSessionLoading,
+    setAgentLoading,
+    setErrorMessage,
+    setAgentActivityFilter,
+    setAgentActivitySearch,
+    setAgentTimelineFilter,
+    setAgentTimelineSearch,
+    setSelectedAgentTimelineKey,
+    setAgentQueueAdvanceFeedback,
+    setAgentQueueFocusDelta,
+    setPendingAgentPriorityAutoAdvance,
   });
 
   const visibleProjects = useMemo(
