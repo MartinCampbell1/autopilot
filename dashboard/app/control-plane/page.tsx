@@ -67,7 +67,6 @@ import {
   SESSION_LINEAGE_QUEUE_KEYS,
   type AgentScopedOutcome,
   type AgentTimelineEntry,
-  type LinkedSelectionContext,
   type LineageQueueKind,
   type PendingAgentTimelineTarget,
   type QueueAdvanceTarget,
@@ -123,6 +122,7 @@ import {
   type PendingLineageAutoAdvance,
   useControlPlaneActions,
 } from "@/lib/use-control-plane-actions";
+import { useControlPlaneLinkedSelection } from "@/lib/use-control-plane-linked-selection";
 import { useControlPlaneTriageInbox } from "@/lib/use-control-plane-triage-inbox";
 import { useSSE } from "@/lib/sse";
 import type {
@@ -1255,79 +1255,41 @@ export default function ControlPlanePage() {
   useEffect(() => {
     sessionLineageFilterRef.current = sessionLineageFilter;
   }, [sessionLineageFilter]);
-  const syncLinkedSelection = useCallback(
-    (context: LinkedSelectionContext) => {
-      const approvalId = toStringValue(context.approvalId);
-      const issueId = toStringValue(context.issueId);
-      const resolvedRunLink = resolveRunLinkFromContext(linkedRuns, context);
-      const runId = resolvedRunLink?.run.id || toStringValue(context.runId);
-      const resultIndex =
-        resolvedRunLink?.resultIndex ??
-        (typeof context.resultIndex === "number" ? context.resultIndex : 0);
-      const resolvedRunResult =
-        resolvedRunLink && resolvedRunLink.run.results[resolvedRunLink.resultIndex]
-          ? asRecord(resolvedRunLink.run.results[resolvedRunLink.resultIndex])
-          : null;
-      const runtimeAgentId =
-        toStringValue(context.runtimeAgentId) ||
-        outcomeRuntimeAgentId(resolvedRunResult || {}) ||
-        toStringValue(context.event?.runtime_agent_id) ||
-        toStringArray(context.event?.runtime_agent_ids)[0];
-      const matchedEvent = resolveSessionEventFromContext(selectedSession?.events || [], {
-        ...context,
-        runId,
-        approvalId,
-        issueId,
-        runtimeAgentId,
-      });
-
-      setSelectedSessionApprovalId(approvalId);
-      setSelectedSessionIssueId(issueId);
-      setSelectedSessionEventKey(matchedEvent?.key || "");
-      setSelectedSessionContextKind(
-        context.event ? "event" : issueId ? "issue" : approvalId ? "approval" : matchedEvent ? "event" : ""
-      );
-
-      if (runId) {
-        setSelectedRunId(runId);
-        setSelectedRunResultIndex(resultIndex);
-      }
-
-      if (runtimeAgentId) {
-        setSelectedAgentId(runtimeAgentId);
-        setAgentTimelineFilter("all");
-        setAgentTimelineSearch("");
-        setSelectedAgentTimelineKey("");
-        setPendingAgentTimelineTarget({
-          runtimeAgentId,
-          runId,
-          approvalId,
-          issueId,
-        });
-      }
-    },
-    [linkedRuns, selectedSession]
-  );
-  const inspectSessionLineageEntry = useCallback(
-    (entry: SessionLineageEntry) => {
-      syncLinkedSelection({
-        runId: entry.runId,
-        resultIndex: entry.resultIndex,
-        approvalId: entry.approvalId,
-        issueId: entry.issueId,
-        runtimeAgentId: entry.runtimeAgentId,
-        event: entry.event,
-      });
-    },
-    [syncLinkedSelection]
-  );
-  const focusSessionLineageEntry = useCallback(
-    (entry: SessionLineageEntry, filter: string) => {
-      setSessionLineageFilter(filter);
-      inspectSessionLineageEntry(entry);
-    },
-    [inspectSessionLineageEntry]
-  );
+  const {
+    syncLinkedSelection,
+    inspectSessionLineageEntry,
+    focusSessionLineageEntry,
+    openSelectedRunResultInTimeline,
+    selectedSessionContext,
+    revealSelectedSessionContextRow,
+    revealSelectedSessionContextInAgentTimeline,
+  } = useControlPlaneLinkedSelection({
+    linkedRuns,
+    selectedSession,
+    selectedSessionApproval,
+    selectedSessionIssue,
+    selectedSessionEvent,
+    selectedSessionEventKey,
+    selectedSessionContextKind,
+    selectedRun,
+    selectedRunResult,
+    setSelectedSessionApprovalId,
+    setSelectedSessionIssueId,
+    setSelectedSessionEventKey,
+    setSelectedSessionContextKind,
+    setSelectedRunId,
+    setSelectedRunResultIndex,
+    setSelectedAgentId,
+    setAgentTimelineFilter,
+    setAgentTimelineSearch,
+    setSelectedAgentTimelineKey,
+    setPendingAgentTimelineTarget,
+    setPendingSessionRowDomId,
+    setEntitySearch,
+    setEventFilter,
+    setErrorMessage,
+    setSessionLineageFilter,
+  });
   const advanceSessionLineageQueue = useCallback(
     (filter: "attention" | "decisions") => {
       const entries =
@@ -1611,65 +1573,6 @@ export default function ControlPlanePage() {
     focusSessionLineageEntry,
     pendingLineageAutoAdvance,
   ]);
-  useEffect(() => {
-    if (!selectedRun || !selectedRunResult) {
-      setSelectedSessionApprovalId("");
-      setSelectedSessionIssueId("");
-      setSelectedSessionEventKey("");
-      return;
-    }
-    const approvalId = toStringValue(asRecord(selectedRunResult.approval)?.id);
-    const issueId = toStringValue(asRecord(selectedRunResult.issue)?.id);
-    const runtimeAgentId = outcomeRuntimeAgentId(selectedRunResult);
-    const matchedEvent = resolveSessionEventFromContext(selectedSession?.events || [], {
-      runId: selectedRun.id,
-      approvalId,
-      issueId,
-      runtimeAgentId,
-    });
-
-    setSelectedSessionApprovalId(approvalId);
-    setSelectedSessionIssueId(issueId);
-    setSelectedSessionEventKey(matchedEvent?.key || "");
-    setSelectedSessionContextKind((current) => {
-      if (current === "event" && matchedEvent) return "event";
-      if (current === "issue" && issueId) return "issue";
-      if (current === "approval" && approvalId) return "approval";
-      if (issueId) return "issue";
-      if (approvalId) return "approval";
-      if (matchedEvent) return "event";
-      return "";
-    });
-
-    if (runtimeAgentId) {
-      setPendingAgentTimelineTarget({
-        runtimeAgentId,
-        runId: selectedRun.id,
-        approvalId,
-        issueId,
-      });
-    }
-  }, [selectedRun, selectedRunResult, selectedSession]);
-  const openSelectedRunResultInTimeline = useCallback(() => {
-    if (!selectedRun || !selectedRunResult) return;
-    const runtimeAgentId = outcomeRuntimeAgentId(selectedRunResult);
-    if (!runtimeAgentId) {
-      setErrorMessage("Selected outcome is not linked to a runtime agent.");
-      return;
-    }
-
-    setErrorMessage("");
-    setAgentTimelineFilter("all");
-    setAgentTimelineSearch("");
-    setSelectedAgentTimelineKey("");
-    setSelectedAgentId(runtimeAgentId);
-    setPendingAgentTimelineTarget({
-      runtimeAgentId,
-      runId: selectedRun.id,
-      approvalId: toStringValue(asRecord(selectedRunResult.approval)?.id),
-      issueId: toStringValue(asRecord(selectedRunResult.issue)?.id),
-    });
-  }, [selectedRun, selectedRunResult]);
   const agentScopedRuns = useMemo(() => {
     if (!selectedAgentId) return [] as ExecutionAgentActionRunRecord[];
     return linkedRuns.filter((run) => {
@@ -2424,91 +2327,6 @@ export default function ControlPlanePage() {
     inspectAgentTimelineEntry,
     pendingAgentPriorityAutoAdvance,
   ]);
-  const selectedSessionContext = useMemo(() => {
-    if (selectedSessionContextKind === "issue" && selectedSessionIssue) {
-      return { kind: "issue" as const, issue: selectedSessionIssue };
-    }
-    if (selectedSessionContextKind === "approval" && selectedSessionApproval) {
-      return { kind: "approval" as const, approval: selectedSessionApproval };
-    }
-    if (selectedSessionContextKind === "event" && selectedSessionEvent) {
-      return { kind: "event" as const, event: selectedSessionEvent };
-    }
-    if (selectedSessionIssue) {
-      return { kind: "issue" as const, issue: selectedSessionIssue };
-    }
-    if (selectedSessionApproval) {
-      return { kind: "approval" as const, approval: selectedSessionApproval };
-    }
-    if (selectedSessionEvent) {
-      return { kind: "event" as const, event: selectedSessionEvent };
-    }
-    return null;
-  }, [
-    selectedSessionApproval,
-    selectedSessionContextKind,
-    selectedSessionEvent,
-    selectedSessionIssue,
-  ]);
-  const revealSelectedSessionContextRow = useCallback(() => {
-    if (!selectedSessionContext) return;
-    setEntitySearch("");
-    if (selectedSessionContext.kind === "event") {
-      setEventFilter("all");
-      setPendingSessionRowDomId(
-        sessionContextRowDomId("event", selectedSessionEventKey || sessionEventKey(selectedSessionContext.event))
-      );
-      return;
-    }
-    if (selectedSessionContext.kind === "approval") {
-      setPendingSessionRowDomId(
-        sessionContextRowDomId("approval", selectedSessionContext.approval.id)
-      );
-      return;
-    }
-    setPendingSessionRowDomId(sessionContextRowDomId("issue", selectedSessionContext.issue.id));
-  }, [selectedSessionContext, selectedSessionEventKey]);
-  const revealSelectedSessionContextInAgentTimeline = useCallback(() => {
-    if (!selectedSessionContext) return;
-    const approvalId =
-      selectedSessionContext.kind === "approval"
-        ? selectedSessionContext.approval.id
-        : selectedSessionContext.kind === "issue"
-          ? selectedSessionContext.issue.approval_id
-          : toStringValue(selectedSessionContext.event.approval_id);
-    const issueId =
-      selectedSessionContext.kind === "issue"
-        ? selectedSessionContext.issue.id
-        : selectedSessionContext.kind === "approval"
-          ? selectedSessionContext.approval.issue_id
-          : toStringValue(selectedSessionContext.event.issue_id);
-    const runtimeAgentId =
-      selectedSessionContext.kind === "approval"
-        ? selectedSessionContext.approval.runtime_agent_ids[0]
-        : selectedSessionContext.kind === "issue"
-          ? selectedSessionContext.issue.runtime_agent_ids[0] ||
-            selectedSessionContext.issue.runtime_agent_id
-          : toStringValue(selectedSessionContext.event.runtime_agent_id) ||
-            toStringArray(selectedSessionContext.event.runtime_agent_ids)[0];
-
-    if (!runtimeAgentId) {
-      setErrorMessage("Selected session context is not linked to a runtime agent.");
-      return;
-    }
-
-    setErrorMessage("");
-    syncLinkedSelection({
-      approvalId,
-      issueId,
-      runtimeAgentId,
-      runId:
-        selectedSessionContext.kind === "event"
-          ? toStringValue(selectedSessionContext.event.agent_action_run_id) ||
-            toStringValue(selectedSessionContext.event.run_id)
-          : "",
-      event: selectedSessionContext.kind === "event" ? selectedSessionContext.event : null,
-    });
-  }, [selectedSessionContext, syncLinkedSelection]);
   useEffect(() => {
     if (!pendingAgentTimelineTarget) return;
     if (!selectedAgentId || pendingAgentTimelineTarget.runtimeAgentId !== selectedAgentId) return;
