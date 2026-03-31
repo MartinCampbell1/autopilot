@@ -76,6 +76,8 @@ jobs:
         run: npm run build
 
       - name: Smoke `autopilot dashboard --no-browser`
+        env:
+          AUTOPILOT_PYTHON_BIN: python
         run: |
           set -euo pipefail
           autopilot dashboard --no-browser > /tmp/autopilot-dashboard.log 2>&1 &
