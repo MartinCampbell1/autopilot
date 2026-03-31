@@ -159,22 +159,26 @@ function ControlPlanePageInner({
 }
 
 function ControlPlanePageContent() {
-  const pathname = usePathname();
+  const pathname = usePathname() ?? "";
   const searchParams = useSearchParams();
-  const searchParamsString = searchParams.toString();
+  const resolvedSearchParams = useMemo(
+    () => searchParams ?? new URLSearchParams(),
+    [searchParams]
+  );
+  const searchParamsString = resolvedSearchParams.toString();
   const initialSelection = useMemo<ControlPlaneViewSelection>(
     () => ({
-      sessionId: searchParams.get("session"),
-      agentId: searchParams.get("agent"),
-      runId: searchParams.get("run"),
-      resultIndex: parseResultIndex(searchParams.get("result")),
-      passId: searchParams.get("pass"),
-      sessionContextKind: parseSessionContextKind(searchParams.get("context")),
-      approvalId: searchParams.get("approval"),
-      issueId: searchParams.get("issue"),
-      eventKey: searchParams.get("event"),
+      sessionId: resolvedSearchParams.get("session") ?? null,
+      agentId: resolvedSearchParams.get("agent") ?? null,
+      runId: resolvedSearchParams.get("run") ?? null,
+      resultIndex: parseResultIndex(resolvedSearchParams.get("result") ?? null),
+      passId: resolvedSearchParams.get("pass") ?? null,
+      sessionContextKind: parseSessionContextKind(resolvedSearchParams.get("context") ?? null),
+      approvalId: resolvedSearchParams.get("approval") ?? null,
+      issueId: resolvedSearchParams.get("issue") ?? null,
+      eventKey: resolvedSearchParams.get("event") ?? null,
     }),
-    [searchParams]
+    [resolvedSearchParams]
   );
   const selectionKey = useMemo(
     () =>

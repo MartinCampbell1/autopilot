@@ -2,6 +2,7 @@
 
 import subprocess
 from pathlib import Path
+from stat import S_IXUSR
 from unittest.mock import MagicMock, patch
 
 from autopilot.core.gates import run_gates, run_single_gate
@@ -30,6 +31,19 @@ class TestRunSingleGate:
         assert result.passed is False
         assert "timeout" in result.output.lower()
 
+    def test_gate_uses_project_local_venv_bin(self, tmp_path: Path) -> None:
+        marker = tmp_path / "local-ruff-used"
+        bin_dir = tmp_path / ".venv" / "bin"
+        bin_dir.mkdir(parents=True)
+        script = bin_dir / "ruff"
+        script.write_text(f"#!/bin/sh\ntouch {marker}\nexit 0\n")
+        script.chmod(script.stat().st_mode | S_IXUSR)
+
+        result = run_single_gate("lint", "ruff check .", tmp_path, required=True)
+
+        assert result.passed is True
+        assert marker.exists()
+
 
 class TestRunGates:
     @patch("autopilot.core.gates.run_single_gate")
@@ -46,7 +60,13 @@ class TestRunGates:
 
     @patch("autopilot.core.gates.run_single_gate")
     def test_required_fails(self, mock_gate: MagicMock) -> None:
-        def side_effect(name: str, cmd: str, workdir: Path, required: bool) -> GateResult:
+        def side_effect(
+            name: str,
+            cmd: str,
+            workdir: Path,
+            required: bool,
+            base_env: dict[str, str] | None = None,
+        ) -> GateResult:
             if name == "test":
                 return GateResult(name=name, cmd=cmd, passed=False, output="fail", required=True)
             return GateResult(name=name, cmd=cmd, passed=True, output="ok", required=required)
@@ -62,7 +82,13 @@ class TestRunGates:
 
     @patch("autopilot.core.gates.run_single_gate")
     def test_optional_fails_still_passes(self, mock_gate: MagicMock) -> None:
-        def side_effect(name: str, cmd: str, workdir: Path, required: bool) -> GateResult:
+        def side_effect(
+            name: str,
+            cmd: str,
+            workdir: Path,
+            required: bool,
+            base_env: dict[str, str] | None = None,
+        ) -> GateResult:
             if name == "lint":
                 return GateResult(name=name, cmd=cmd, passed=False, output="warn", required=False)
             return GateResult(name=name, cmd=cmd, passed=True, output="ok", required=required)
@@ -103,3 +129,15 @@ class TestRunGates:
         assert all_passed is False
         assert results[0].baseline_passed is None
         assert results[0].regression is False
+
+    @patch("autopilot.core.gates.run_single_gate")
+    def test_run_gates_forwards_base_env(self, mock_gate: MagicMock) -> None:
+        mock_gate.return_value = GateResult(name="lint", cmd="ruff check .", passed=True, output="ok", required=True)
+
+        run_gates(
+            [{"name": "lint", "cmd": "ruff check .", "required": True}],
+            Path("/tmp"),
+            base_env={"PATH": "/tmp/bin"},
+        )
+
+        assert mock_gate.call_args.kwargs["base_env"] == {"PATH": "/tmp/bin"}

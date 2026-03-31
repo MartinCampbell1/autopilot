@@ -15,13 +15,17 @@ from rich.console import Console
 console = Console()
 
 
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parents[2]
+
+
 def dashboard(
     port: int = typer.Option(8420, help="API server port"),
     frontend_port: int = typer.Option(3020, help="Frontend server port"),
     no_browser: bool = typer.Option(False, help="Don't open browser"),
 ) -> None:
     """Start the dashboard frontend and API server."""
-    repo_root = Path(__file__).resolve().parents[2]
+    repo_root = _repo_root()
     dashboard_dir = repo_root / "dashboard"
 
     if not dashboard_dir.exists():
@@ -32,6 +36,7 @@ def dashboard(
     console.print(f"[dim]Frontend: http://localhost:{frontend_port}[/dim]")
     console.print(f"[dim]API: http://localhost:{port}[/dim]")
 
+    process: subprocess.Popen[bytes] | None = None
     try:
         env = os.environ.copy()
         env["AUTOPILOT_API_PORT"] = str(port)
@@ -53,4 +58,5 @@ def dashboard(
         process.wait()
     except KeyboardInterrupt:
         console.print("\n[yellow]Shutting down...[/yellow]")
-        process.send_signal(signal.SIGINT)
+        if process is not None:
+            process.send_signal(signal.SIGINT)
