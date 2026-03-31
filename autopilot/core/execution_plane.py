@@ -125,6 +125,7 @@ class ExecutionPlaneProjectSnapshot(BaseModel):
     task_source: TaskSource = Field(default_factory=TaskSource)
     execution_brief_path: str | None = None
     delivery_loop: dict[str, Any] = Field(default_factory=dict)
+    delivery_status: dict[str, Any] = Field(default_factory=dict)
     initiative: InitiativeContext = Field(default_factory=InitiativeContext)
     orchestration: OrchestrationContext = Field(default_factory=OrchestrationContext)
     provenance: ProvenanceContext = Field(default_factory=ProvenanceContext)
@@ -1434,6 +1435,7 @@ def build_execution_plane_project_snapshot(
         task_source=task_source,
         execution_brief_path=brief_path,
         delivery_loop=summary.get("delivery_loop") or {},
+        delivery_status=summary.get("delivery_status") or {},
         initiative=InitiativeContext.model_validate(context["initiative"]),
         orchestration=OrchestrationContext.model_validate(context["orchestration"]),
         provenance=ProvenanceContext.model_validate(context["provenance"]),
@@ -1525,6 +1527,7 @@ def build_execution_plane_project_detail(
         task_source=task_source,
         execution_brief_path=brief_path,
         delivery_loop=detail.get("delivery_loop") or {},
+        delivery_status=detail.get("delivery_status") or {},
         initiative=InitiativeContext.model_validate(context["initiative"]),
         orchestration=OrchestrationContext.model_validate(context["orchestration"]),
         provenance=ProvenanceContext.model_validate(context["provenance"]),
