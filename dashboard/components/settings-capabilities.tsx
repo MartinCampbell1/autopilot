@@ -330,6 +330,8 @@ export function SettingsCapabilitiesManager() {
     connector_types: [],
     routing_policies: [],
     launch_presets: [],
+    provider_configs: [],
+    runtime_profiles: [],
   });
   const [activeTab, setActiveTab] = useState<"connectors" | "skill-packs" | "routing">("connectors");
   const [selectedConnectorId, setSelectedConnectorId] = useState<string>("");
