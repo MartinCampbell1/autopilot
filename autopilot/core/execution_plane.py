@@ -22,6 +22,7 @@ from autopilot.core.execution_brief import (
     InitiativeContext,
     OrchestrationContext,
     ProvenanceContext,
+    TaskSource,
     render_execution_brief_as_spec,
 )
 from autopilot.core.github_prs import normalize_story_github_pr
@@ -39,6 +40,7 @@ from autopilot.core.project_store import (
     load_project_state,
     merge_project_stories,
     pause_project_run,
+    resolve_project_task_source,
     resume_project_run,
     update_project_budget_policy,
     update_project_entry,
@@ -120,6 +122,7 @@ class ExecutionPlaneProjectSnapshot(BaseModel):
     created_at: str | None = None
     last_opened_at: str | None = None
     source_kind: str = "manual"
+    task_source: TaskSource = Field(default_factory=TaskSource)
     execution_brief_path: str | None = None
     initiative: InitiativeContext = Field(default_factory=InitiativeContext)
     orchestration: OrchestrationContext = Field(default_factory=OrchestrationContext)
@@ -201,6 +204,7 @@ def persist_execution_brief(
 def _brief_control_plane_metadata(brief: ExecutionBrief, *, brief_relpath: str) -> dict[str, Any]:
     return {
         "source_kind": "execution_brief",
+        "task_source": brief.task_source.model_dump(),
         "execution_brief": {
             "version": brief.version,
             "relpath": brief_relpath,
@@ -274,8 +278,9 @@ def _resolve_control_plane_context(project: dict[str, Any], brief: ExecutionBrie
         if not source_kind:
             source_kind = "execution_brief"
 
+    task_source = resolve_project_task_source(project)
     if not source_kind:
-        source_kind = "manual"
+        source_kind = str(task_source.get("source_kind") or "").strip() or "manual"
 
     return (
         source_kind,
@@ -285,6 +290,34 @@ def _resolve_control_plane_context(project: dict[str, Any], brief: ExecutionBrie
             "orchestration": OrchestrationContext.model_validate(orchestration_payload or {}).model_dump(),
             "provenance": ProvenanceContext.model_validate(provenance_payload or {}).model_dump(),
         },
+    )
+
+
+def _resolve_execution_brief_task_source(brief: ExecutionBrief) -> TaskSource:
+    """Return the canonical TaskSource contract for an execution brief."""
+
+    current = brief.task_source
+    source_kind = current.source_kind.strip() or "execution_brief"
+    external_id = (
+        current.external_id.strip()
+        or brief.initiative.id.strip()
+        or brief.orchestration.project_ref.strip()
+        or brief.provenance.source_session_id.strip()
+    )
+    repo = current.repo.strip() or next(
+        (str(repo).strip() for repo in brief.execution.existing_repos if str(repo).strip()),
+        "",
+    )
+    branch_policy = current.branch_policy.strip() or "isolated_worktree"
+    if branch_policy not in {"shared_main", "isolated_worktree"}:
+        branch_policy = "isolated_worktree"
+    brief_ref = current.brief_ref.strip() or EXECUTION_BRIEF_RELPATH
+    return TaskSource(
+        source_kind=source_kind,
+        external_id=external_id,
+        repo=repo,
+        branch_policy=branch_policy,
+        brief_ref=brief_ref,
     )
 
 
@@ -1386,6 +1419,7 @@ def build_execution_plane_project_snapshot(
     command_policy = load_project_command_policy(config, project["id"])
     runtime_agents = build_execution_plane_runtime_agents(config, project, stories)
     open_issues = list_issues(config, project_id=project["id"], status="open")
+    task_source = TaskSource.model_validate(resolve_project_task_source(project))
     snapshot = ExecutionPlaneProjectSnapshot(
         project_id=project["id"],
         name=project["name"],
@@ -1396,6 +1430,7 @@ def build_execution_plane_project_snapshot(
         created_at=project.get("created_at"),
         last_opened_at=project.get("last_opened_at"),
         source_kind=source_kind,
+        task_source=task_source,
         execution_brief_path=brief_path,
         initiative=InitiativeContext.model_validate(context["initiative"]),
         orchestration=OrchestrationContext.model_validate(context["orchestration"]),
@@ -1446,6 +1481,7 @@ def build_execution_plane_project_detail(
     command_policy = load_project_command_policy(config, project_id)
     issues = [issue.model_dump() for issue in list_issues(config, project_id=project_id)]
     approvals = [approval.model_dump() for approval in list_approvals(config, project_id=project_id)]
+    task_source = TaskSource.model_validate(resolve_project_task_source(project))
     runtime_agents = [
         _decorate_runtime_agent(
             config,
@@ -1484,6 +1520,7 @@ def build_execution_plane_project_detail(
         created_at=project.get("created_at"),
         last_opened_at=project.get("last_opened_at"),
         source_kind=source_kind,
+        task_source=task_source,
         execution_brief_path=brief_path,
         initiative=InitiativeContext.model_validate(context["initiative"]),
         orchestration=OrchestrationContext.model_validate(context["orchestration"]),
@@ -4332,6 +4369,7 @@ def ingest_execution_brief_project(
 ) -> IngestedExecutionProject:
     """Convert a typed execution brief into a registered Autopilot project."""
 
+    effective_brief = brief.model_copy(update={"task_source": _resolve_execution_brief_task_source(brief)})
     profile = manager.get_next("codex")
     if profile is None:
         raise RuntimeError("No available accounts for execution brief planning")
@@ -4342,7 +4380,7 @@ def ingest_execution_brief_project(
         skill_packs=load_skill_packs_registry(config),
         role_templates=load_role_templates(),
     )
-    spec = render_execution_brief_as_spec(brief)
+    spec = render_execution_brief_as_spec(effective_brief)
     prd = generate_prd_from_spec(
         spec,
         provider="codex",
@@ -4358,9 +4396,10 @@ def ingest_execution_brief_project(
         project_path=project_path,
         priority=priority,
         launch=False,
+        task_source=effective_brief.task_source.model_dump(),
     )
-    brief_path = persist_execution_brief(created.path, brief)
-    attach_execution_brief_metadata(config, project_id=created.project_id, brief=brief)
+    brief_path = persist_execution_brief(created.path, effective_brief)
+    attach_execution_brief_metadata(config, project_id=created.project_id, brief=effective_brief)
 
     launched = False
     log_path: Path | None = None

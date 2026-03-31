@@ -82,6 +82,16 @@ class OrchestrationContext(BaseModel):
     requested_launch_preset: str = ""
 
 
+class TaskSource(BaseModel):
+    """Stable upstream task/brief reference for one execution project."""
+
+    source_kind: str = ""
+    external_id: str = ""
+    repo: str = ""
+    branch_policy: str = ""
+    brief_ref: str = ""
+
+
 class ExecutionBrief(BaseModel):
     """Typed handoff object from research/orchestration into execution."""
 
@@ -98,6 +108,7 @@ class ExecutionBrief(BaseModel):
     initiative: InitiativeContext = Field(default_factory=InitiativeContext)
     orchestration: OrchestrationContext = Field(default_factory=OrchestrationContext)
     provenance: ProvenanceContext = Field(default_factory=ProvenanceContext)
+    task_source: TaskSource = Field(default_factory=TaskSource)
 
 
 def _render_list(title: str, items: list[str]) -> list[str]:
@@ -220,6 +231,21 @@ def render_execution_brief_as_spec(brief: ExecutionBrief) -> str:
             lines.append(f"- Upstream project ref: {orchestration.project_ref.strip()}")
         if orchestration.requested_launch_preset.strip():
             lines.append(f"- Requested launch preset: {orchestration.requested_launch_preset.strip()}")
+        lines.append("")
+
+    task_source = brief.task_source
+    if any((task_source.source_kind, task_source.external_id, task_source.repo, task_source.branch_policy, task_source.brief_ref)):
+        lines.extend(["## Task Source"])
+        if task_source.source_kind.strip():
+            lines.append(f"- Source kind: {task_source.source_kind.strip()}")
+        if task_source.external_id.strip():
+            lines.append(f"- External id: {task_source.external_id.strip()}")
+        if task_source.repo.strip():
+            lines.append(f"- Repo: {task_source.repo.strip()}")
+        if task_source.branch_policy.strip():
+            lines.append(f"- Branch policy: {task_source.branch_policy.strip()}")
+        if task_source.brief_ref.strip():
+            lines.append(f"- Brief ref: {task_source.brief_ref.strip()}")
         lines.append("")
 
     provenance = brief.provenance

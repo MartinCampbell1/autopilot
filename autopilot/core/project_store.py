@@ -35,6 +35,7 @@ from autopilot.core.capability_store import (
 )
 from autopilot.core.config import AutopilotConfig
 from autopilot.core.cost_accounting import default_cost_usage, ensure_cost_state
+from autopilot.core.execution_brief import TaskSource
 from autopilot.core.github_prs import normalize_story_github_pr
 from autopilot.core.loop_runner import apply_autopilot_ralph_overrides, check_ralph_installed, init_ralph_project
 from autopilot.core.models import normalize_story_blocked_by, resolve_story_blocked_on, validate_story_dependencies
@@ -60,6 +61,7 @@ DISCOVERY_KIND_ALIASES = {
     "note": "note",
     "notes": "note",
 }
+VALID_TASK_SOURCE_BRANCH_POLICIES = {"shared_main", "isolated_worktree"}
 
 
 def utcnow_iso() -> str:
@@ -80,6 +82,81 @@ def slugify_project_name(name: str) -> str:
     """Convert a project name into a safe filesystem slug."""
     slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
     return slug or "project"
+
+
+def normalize_task_source(
+    task_source: dict[str, Any] | TaskSource | None,
+    *,
+    default_source_kind: str = "manual",
+    default_branch_policy: str = "shared_main",
+) -> dict[str, Any]:
+    """Normalize one task-source payload into the public project contract."""
+
+    if isinstance(task_source, TaskSource):
+        payload = task_source.model_dump()
+    else:
+        payload = dict(task_source or {})
+
+    source_kind = str(payload.get("source_kind") or default_source_kind).strip() or default_source_kind
+    branch_policy = str(payload.get("branch_policy") or default_branch_policy).strip() or default_branch_policy
+    if branch_policy not in VALID_TASK_SOURCE_BRANCH_POLICIES:
+        branch_policy = default_branch_policy
+    return {
+        "source_kind": source_kind,
+        "external_id": str(payload.get("external_id") or "").strip(),
+        "repo": str(payload.get("repo") or "").strip(),
+        "branch_policy": branch_policy,
+        "brief_ref": str(payload.get("brief_ref") or "").strip(),
+    }
+
+
+def resolve_project_task_source(project: dict[str, Any]) -> dict[str, Any]:
+    """Return the canonical task-source contract for one project entry."""
+
+    stored = project.get("task_source")
+    if isinstance(stored, dict) and stored:
+        return normalize_task_source(stored)
+
+    control_plane = dict(project.get("control_plane") or {})
+    tracker_refs = list(project.get("tracker_refs") or [])
+
+    if str(control_plane.get("source_kind") or "").strip() == "execution_brief":
+        execution_brief = dict(control_plane.get("execution_brief") or {})
+        return normalize_task_source(
+            {
+                "source_kind": "execution_brief",
+                "external_id": (
+                    str(control_plane.get("initiative", {}).get("id") or "").strip()
+                    or str(control_plane.get("orchestration", {}).get("project_ref") or "").strip()
+                    or str(control_plane.get("provenance", {}).get("source_session_id") or "").strip()
+                ),
+                "repo": "",
+                "branch_policy": "isolated_worktree",
+                "brief_ref": str(execution_brief.get("relpath") or "").strip(),
+            },
+            default_source_kind="execution_brief",
+            default_branch_policy="isolated_worktree",
+        )
+
+    if tracker_refs:
+        tracker_ref = tracker_refs[0]
+        repository = dict(tracker_ref.get("repository") or {})
+        provider = str(tracker_ref.get("provider") or "").strip().lower()
+        kind = str(tracker_ref.get("kind") or "").strip().lower()
+        source_kind = "github_issue" if provider == "github" and kind == "issue" else "tracker_item"
+        return normalize_task_source(
+            {
+                "source_kind": source_kind,
+                "external_id": str(tracker_ref.get("external_id") or "").strip(),
+                "repo": str(repository.get("full_name") or repository.get("name") or "").strip(),
+                "branch_policy": "isolated_worktree",
+                "brief_ref": "",
+            },
+            default_source_kind=source_kind,
+            default_branch_policy="isolated_worktree",
+        )
+
+    return normalize_task_source(None)
 
 
 def _atomic_write_text(path: Path, contents: str) -> None:
@@ -467,6 +544,9 @@ def migrate_projects_registry(config: AutopilotConfig) -> list[dict[str, Any]]:
         if "last_opened_at" not in project:
             project["last_opened_at"] = None
             changed = True
+        if "task_source" not in project:
+            project["task_source"] = resolve_project_task_source(project)
+            changed = True
 
     if changed:
         _atomic_write_yaml(config.projects_yaml_path, data)
@@ -597,11 +677,17 @@ def register_project(
     project_path: Path,
     prd_relpath: str = ".agents/tasks/prd.json",
     priority: str = "normal",
+    task_source: dict[str, Any] | TaskSource | None = None,
 ) -> dict[str, Any]:
     projects = migrate_projects_registry(config)
     existing_names = {str(project["name"]) for project in projects}
     existing_ids = {str(project["id"]) for project in projects}
     created_at = utcnow_iso()
+    normalized_task_source = (
+        normalize_task_source(task_source)
+        if task_source is not None
+        else None
+    )
 
     final_name = name
     if final_name in existing_names:
@@ -622,6 +708,10 @@ def register_project(
                 "last_opened_at": existing.get("last_opened_at"),
             }
         )
+        if normalized_task_source is not None:
+            existing["task_source"] = normalized_task_source
+        elif "task_source" not in existing:
+            existing["task_source"] = resolve_project_task_source(existing)
         update_project_entry(config, existing)
         return existing
 
@@ -635,6 +725,7 @@ def register_project(
         "tracker_refs": [],
         "created_at": created_at,
         "last_opened_at": None,
+        "task_source": normalized_task_source or resolve_project_task_source({}),
     }
     projects.append(project)
     save_projects_registry(config, projects)
@@ -1331,6 +1422,7 @@ def build_project_summary(config: AutopilotConfig, project: dict[str, Any]) -> d
         "launch_profile": launch_profile,
         "provider_config": provider_config,
         "runtime_profile": runtime_profile,
+        "task_source": resolve_project_task_source(project),
         "budget_policy": state.get("budget_policy", default_budget_policy()),
         "budget_usage": state.get("budget_usage", default_budget_usage()),
         "quality_policy": state.get("quality_policy", default_quality_policy()),
