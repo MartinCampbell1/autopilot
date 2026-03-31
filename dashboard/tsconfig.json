@@ -35,6 +35,9 @@
     "node_modules.broken-*",
     ".node_modules.broken-*",
     "node_modules.partial.*",
-    ".node_modules.partial.*"
+    ".node_modules.partial.*",
+    "**/* 2.ts",
+    "**/* 2.tsx",
+    "**/* 2.mts"
   ]
 }
