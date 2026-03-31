@@ -112,6 +112,7 @@ import { useControlPlaneLinkedSelection } from "@/lib/use-control-plane-linked-s
 import { useControlPlaneOperatorPersistence } from "@/lib/use-control-plane-operator-persistence";
 import { useControlPlaneQueueAdvance } from "@/lib/use-control-plane-queue-advance";
 import { useControlPlaneRevealFlows } from "@/lib/use-control-plane-reveal-flows";
+import { useControlPlaneRunSelection } from "@/lib/use-control-plane-run-selection";
 import { useControlPlaneTriageInbox } from "@/lib/use-control-plane-triage-inbox";
 import { useSSE } from "@/lib/sse";
 import type {
@@ -291,30 +292,6 @@ export default function ControlPlanePage() {
     }, [loadOverview, loadSessionDetail, selectedSessionId])
   );
 
-  useEffect(() => {
-    const visibleRuns = ((selectedSession?.runs || []) as ExecutionAgentActionRunRecord[]).filter(
-      (run) => matchesRunFilter(run, runFilter) && runMatchesSearch(run, entitySearch)
-    );
-    if (!visibleRuns.length) {
-      return;
-    }
-    if (!selectedRunId || !visibleRuns.some((run) => run.id === selectedRunId)) {
-      setSelectedRunId(visibleRuns[0].id);
-    }
-  }, [entitySearch, runFilter, selectedRunId, selectedSession]);
-
-  useEffect(() => {
-    const currentRuns = (selectedSession?.runs || []) as ExecutionAgentActionRunRecord[];
-    const currentRun = currentRuns.find((run) => run.id === selectedRunId) ?? null;
-    if (!currentRun) {
-      setSelectedRunResultIndex(0);
-      return;
-    }
-    if (selectedRunResultIndex >= currentRun.results.length) {
-      setSelectedRunResultIndex(0);
-    }
-  }, [selectedRunId, selectedRunResultIndex, selectedSession]);
-
   const focusAgentTimeline = useCallback(
     (
       filter: string,
@@ -473,6 +450,14 @@ export default function ControlPlanePage() {
     () => linkedRuns.filter((run) => matchesRunFilter(run, runFilter) && runMatchesSearch(run, entitySearch)),
     [entitySearch, linkedRuns, runFilter]
   );
+  useControlPlaneRunSelection({
+    filteredRuns,
+    linkedRuns,
+    selectedRunId,
+    selectedRunResultIndex,
+    setSelectedRunId,
+    setSelectedRunResultIndex,
+  });
   const linkedIssues = useMemo(
     () =>
       [...(selectedSession?.issues || [])].sort((left, right) =>
