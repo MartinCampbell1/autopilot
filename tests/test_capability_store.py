@@ -6,6 +6,8 @@ from autopilot.core.capability_store import (
     LaunchProfile,
     MCPConnector,
     RoutingPolicy,
+    normalize_launch_profile,
+    normalize_review_phases,
     activate_connector_set,
     resolve_story_runtime_plan,
 )
@@ -26,6 +28,8 @@ def test_frontend_story_prefers_browser_and_twenty_first_dev() -> None:
     story = runtime["story"]
     assert "browser_devtools" in story["connectors"]
     assert "twenty_first_dev" in story["connectors"]
+    assert runtime["story_pipeline"] == ["research", "implement", "review"]
+    assert runtime["review_phases"] == ["security", "architecture", "tests"]
     assert any(member["execution_role"] == "specialist" for member in runtime["team_members"])
 
 
@@ -107,3 +111,51 @@ def test_parallel_preset_normalizes_to_team_parallel_mode() -> None:
 
     assert runtime["launch_profile"]["project_concurrency_mode"] == "parallel"
     assert runtime["launch_profile"]["max_parallel_stories"] == 3
+    assert runtime["launch_profile"]["story_pipeline"] == ["research", "implement", "review"]
+    assert runtime["launch_profile"]["review_phases"] == ["security", "architecture", "tests"]
+
+
+def test_story_pipeline_override_can_skip_research_even_in_team_mode() -> None:
+    runtime = resolve_story_runtime_plan(
+        {
+            "id": 4,
+            "title": "Backend fix",
+            "description": "Implement a targeted backend fix.",
+            "tags": ["backend", "api"],
+            "pipeline": ["implement", "review"],
+        },
+        launch_profile={"preset": "team"},
+    )
+
+    assert runtime["story_pipeline"] == ["implement", "review"]
+    assert all(member["execution_role"] != "specialist" for member in runtime["team_members"])
+
+
+def test_story_pipeline_override_can_enable_research_from_fast_profile() -> None:
+    runtime = resolve_story_runtime_plan(
+        {
+            "id": 5,
+            "title": "Landing page refactor",
+            "description": "Improve the frontend shell with prior research.",
+            "tags": ["frontend", "ui"],
+            "pipeline": ["research", "implement", "review"],
+        },
+        launch_profile={"preset": "fast"},
+    )
+
+    assert runtime["story_pipeline"] == ["research", "implement", "review"]
+    assert any(member["execution_role"] == "specialist" for member in runtime["team_members"])
+
+
+def test_fast_preset_defaults_to_single_broad_review() -> None:
+    profile = normalize_launch_profile({"preset": "fast"})
+
+    assert profile.review_phases == []
+
+
+def test_review_phase_normalization_deduplicates_aliases() -> None:
+    assert normalize_review_phases(["sec", "architecture", "qa", "tests"]) == [
+        "security",
+        "architecture",
+        "tests",
+    ]

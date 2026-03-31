@@ -2,7 +2,13 @@
 
 from pathlib import Path
 
-from autopilot.core.config import DEFAULT_CONFIG, AutopilotConfig, load_config, save_config
+from autopilot.core.config import (
+    DEFAULT_CONFIG,
+    AutopilotConfig,
+    NotificationChannelConfig,
+    load_config,
+    save_config,
+)
 
 
 class TestConfig:
@@ -36,3 +42,30 @@ class TestConfig:
         cfg = DEFAULT_CONFIG
         home = cfg.autopilot_home
         assert home.name == ".autopilot"
+
+    def test_save_and_load_notifications(self, tmp_path: Path) -> None:
+        cfg = AutopilotConfig(
+            autopilot_home_override=str(tmp_path / ".autopilot"),
+            notifications=[
+                NotificationChannelConfig(
+                    name="ops-slack",
+                    kind="slack_webhook",
+                    events=["run_failed", "story_stuck"],
+                    webhook_url="https://hooks.slack.test/123",
+                ),
+                NotificationChannelConfig(
+                    name="script",
+                    kind="script",
+                    command=["/bin/echo", "notify"],
+                ),
+            ],
+        )
+        config_path = tmp_path / "config.yaml"
+
+        save_config(cfg, config_path)
+        loaded = load_config(config_path)
+
+        assert len(loaded.notifications) == 2
+        assert loaded.notifications[0].name == "ops-slack"
+        assert loaded.notifications[0].events == ["run_failed", "story_stuck"]
+        assert loaded.notifications[1].command == ["/bin/echo", "notify"]

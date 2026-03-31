@@ -5,7 +5,17 @@ import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from autopilot.core.intake import IntakeSession, generate_prd_from_spec, run_intake_turn, save_prd
+from autopilot.core.intake import (
+    IntakeSession,
+    PLAN_REFINEMENT_PROMPT,
+    SPEC_TO_PRD_PROMPT,
+    build_spec_bootstrap,
+    generate_prd_from_spec,
+    generate_prd_from_session_bootstrap,
+    run_intake_turn,
+    save_prd,
+    save_spec_bootstrap,
+)
 
 
 class TestIntake:
@@ -25,6 +35,7 @@ class TestIntake:
         assert len(session.messages) == 2
         assert session.messages[0]["role"] == "user"
         assert session.messages[1]["role"] == "assistant"
+        assert session.spec_bootstrap is not None
         mock_run.assert_called_once()
         assert "--skip-git-repo-check" in mock_run.call_args.args[0]
 
@@ -95,6 +106,57 @@ class TestIntake:
         assert prd_path.name.startswith("prd-bug-tracker")
         saved = json.loads(prd_path.read_text())
         assert saved["title"] == "Bug Tracker"
+
+    def test_build_spec_bootstrap_extracts_structure_from_interview(self) -> None:
+        session = IntakeSession(session_id="abc123")
+        session.add_user_message(
+            "I want to build a GitHub issue triage dashboard in an existing repo with FastAPI, React, and Postgres. "
+            "It must reuse the current auth flow and integrate with Slack notifications."
+        )
+        session.add_user_message("Need operator controls, project summaries, and a safe review workflow.")
+
+        bootstrap = build_spec_bootstrap(session)
+
+        assert bootstrap is not None
+        assert "FastAPI" in bootstrap["rendered_spec"]
+        assert "React" in bootstrap["tech_stack"]
+        assert "Postgres" in bootstrap["tech_stack"]
+        assert "Slack" in bootstrap["integrations"]
+        assert any("existing repo" in item.lower() for item in bootstrap["execution_context"])
+        assert any("must reuse" in item.lower() or "reuse" in item.lower() for item in bootstrap["constraints"])
+
+    @patch("autopilot.core.intake.generate_prd_from_spec")
+    def test_generate_prd_from_session_bootstrap_uses_rendered_spec(self, mock_generate_prd: MagicMock) -> None:
+        session = IntakeSession(session_id="abc123")
+        session.add_user_message("Build a bug tracker with FastAPI and React.")
+        mock_generate_prd.return_value = {
+            "title": "Bug Tracker",
+            "description": "Track bugs",
+            "stories": [{"id": 1, "title": "Bootstrap", "description": "Start", "status": "open"}],
+        }
+
+        prd = generate_prd_from_session_bootstrap(
+            session,
+            provider="codex",
+            env={"PATH": "/usr/bin"},
+        )
+
+        assert prd["title"] == "Bug Tracker"
+        assert session.prd is not None
+        assert "# Build a bug tracker with FastAPI and React." not in mock_generate_prd.call_args.args[0]
+        assert "## Tech Stack" in mock_generate_prd.call_args.args[0]
+
+    def test_save_spec_bootstrap(self, tmp_path: Path) -> None:
+        path = save_spec_bootstrap(
+            {
+                "rendered_spec": "# Bootstrap Spec\n\n## Goals\n- Ship MVP",
+            },
+            tmp_path,
+        )
+
+        assert path.exists()
+        assert path.name == "spec-bootstrap.md"
+        assert "Ship MVP" in path.read_text()
 
     @patch("autopilot.core.intake.subprocess.run")
     def test_run_intake_turn_returns_stderr_on_failure(self, mock_run: MagicMock) -> None:
@@ -292,3 +354,8 @@ Expected: session completes with debate messages
 
         assert "timed out after 120s" in message
         assert "codex', 'exec'" not in message
+
+
+def test_prd_generation_prompts_include_blocked_by_guidance() -> None:
+    assert "blocked_by" in SPEC_TO_PRD_PROMPT
+    assert "blocked_by" in PLAN_REFINEMENT_PROMPT

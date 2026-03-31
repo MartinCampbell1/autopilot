@@ -35,19 +35,30 @@ def run(
     project_path: str = typer.Argument(help="Path to the project directory"),
     prd: str = typer.Option(".agents/tasks/prd.json", help="PRD JSON path relative to project"),
     project_id: str | None = typer.Option(None, "--project-id", help="Stable project id from the dashboard"),
+    headless: bool = typer.Option(False, "--headless", help="Emit machine-readable logs and a JSON summary."),
+    schedule: str | None = typer.Option(None, "--schedule", help="Repeat the run on a cadence like 30m or 6h."),
+    max_runs: int | None = typer.Option(None, "--max-runs", help="Stop a scheduled run after N iterations."),
 ) -> None:
     """Run autopilot loop on a project until all stories are done."""
     from autopilot.cli.run import run as _run
 
-    _run(project_path, prd, project_id)
+    exit_code = _run(project_path, prd, project_id, headless=headless, schedule=schedule, max_runs=max_runs)
+    if exit_code != 0:
+        raise typer.Exit(code=exit_code)
 
 
 @app.command(name="run-all")
-def run_all_projects() -> None:
+def run_all_projects(
+    headless: bool = typer.Option(False, "--headless", help="Emit machine-readable logs and a JSON summary."),
+    schedule: str | None = typer.Option(None, "--schedule", help="Repeat the run-all loop on a cadence like 30m or 6h."),
+    max_runs: int | None = typer.Option(None, "--max-runs", help="Stop a scheduled run after N iterations."),
+) -> None:
     """Run autopilot on all configured projects in parallel."""
     from autopilot.cli.run import run_all
 
-    run_all()
+    exit_code = run_all(headless=headless, schedule=schedule, max_runs=max_runs)
+    if exit_code != 0:
+        raise typer.Exit(code=exit_code)
 
 
 @app.command()
@@ -70,9 +81,49 @@ def status() -> None:
     _status()
 
 
+@app.command()
+def doctor(
+    project_path: str = typer.Argument(".", help="Path to inspect for onboarding and gates."),
+    refresh: bool = typer.Option(False, "--refresh", help="Refresh provider diagnostics probes."),
+    json_output: bool = typer.Option(False, "--json", help="Emit the doctor report as JSON."),
+) -> None:
+    """Inspect provider readiness plus local project onboarding state."""
+    from autopilot.cli.doctor import doctor as _doctor
+
+    _doctor(project_path, refresh, json_output)
+
+
+@app.command()
+def trace(
+    project_path: str = typer.Argument(".", help="Path to the project directory."),
+    project_id: str | None = typer.Option(None, "--project-id", help="Stable project id from the dashboard."),
+    limit: int = typer.Option(50, "--limit", help="Maximum number of trace entries to read."),
+    json_output: bool = typer.Option(False, "--json", help="Emit the trace payload as JSON."),
+) -> None:
+    """Inspect the structured runtime trace for one project."""
+    from autopilot.cli.trace import trace as _trace
+
+    _trace(project_path, project_id, limit, json_output)
+
+
+@app.command()
+def live(
+    refresh_sec: float = typer.Option(2.0, "--refresh-sec", help="Seconds between live refreshes."),
+    once: bool = typer.Option(False, "--once", help="Render one snapshot and exit."),
+) -> None:
+    """Render an SSH-friendly live view of projects, stories, and recent events."""
+    from autopilot.cli.live import live as _live
+
+    _live(refresh_sec=refresh_sec, once=once)
+
+
 @app.command(name="init")
-def init_project(project_path: str = typer.Argument(help="Path to the project directory")) -> None:
+def init_project(
+    project_path: str = typer.Argument(help="Path to the project directory"),
+    idea: str = typer.Option("", "--idea", help="Natural-language project idea to bootstrap into a starter spec/PRD."),
+    bootstrap_only: bool = typer.Option(False, "--bootstrap-only", help="Save only the generated spec bootstrap and skip PRD generation."),
+) -> None:
     """Initialize a project for autopilot."""
     from autopilot.cli.init_cmd import init as _init
 
-    _init(project_path)
+    _init(project_path, idea=idea, bootstrap_only=bootstrap_only)

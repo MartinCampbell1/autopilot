@@ -1,6 +1,13 @@
 """Tests for escalation chain."""
 
-from autopilot.core.escalation import EscalationChain, EscalationResult
+from autopilot.core.escalation import (
+    CompetingAttempt,
+    EscalationChain,
+    EscalationResult,
+    attempt_strategy_label,
+    build_attempt_plan,
+    select_winning_attempt,
+)
 
 
 class TestEscalationChain:
@@ -54,3 +61,39 @@ class TestEscalationChain:
 def test_escalation_result_dataclass() -> None:
     result = EscalationResult(exhausted=False, current_provider="codex", context_summary="summary")
     assert result.current_provider == "codex"
+
+
+def test_build_attempt_plan_defaults_to_primary_then_retry() -> None:
+    plan = build_attempt_plan("codex", retry_only=False, max_attempts=2)
+
+    assert [attempt.strategy for attempt in plan] == ["primary", "focused_retry"]
+    assert plan[0].provider == "codex"
+
+
+def test_build_attempt_plan_for_retry_prefers_focused_then_fresh() -> None:
+    plan = build_attempt_plan("codex", retry_only=True, max_attempts=2)
+
+    assert [attempt.strategy for attempt in plan] == ["focused_retry", "fresh_build"]
+    assert attempt_strategy_label(plan[1].strategy) == "fresh build"
+
+
+def test_select_winning_attempt_prefers_valid_candidate() -> None:
+    winner = select_winning_attempt(
+        [
+            CompetingAttempt(attempt=1, provider="codex", strategy="focused_retry", outcome="approved", valid=True),
+            CompetingAttempt(attempt=2, provider="codex", strategy="fresh_build", outcome="critic_rejected"),
+        ]
+    )
+
+    assert winner.attempt == 1
+
+
+def test_select_winning_attempt_falls_back_to_latest_when_none_valid() -> None:
+    winner = select_winning_attempt(
+        [
+            CompetingAttempt(attempt=1, provider="codex", strategy="primary", outcome="gate_failed"),
+            CompetingAttempt(attempt=2, provider="codex", strategy="focused_retry", outcome="critic_rejected"),
+        ]
+    )
+
+    assert winner.attempt == 2

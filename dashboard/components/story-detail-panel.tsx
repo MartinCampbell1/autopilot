@@ -42,6 +42,10 @@ function formatTimestamp(value?: string | null) {
   }).format(new Date(value));
 }
 
+function sentenceCase(value?: string | null) {
+  return value ? value.replaceAll("_", " ") : "Unknown";
+}
+
 export function StoryDetailPanel({
   projectId,
   projectStatus,
@@ -148,7 +152,48 @@ export function StoryDetailPanel({
               </div>
               <div>
                 <p className="text-[11px] uppercase tracking-[0.08em] text-[#9b9a97]">Branch</p>
-                <p className="mt-1 text-[#37352f]">{story.branch_name || "main"}</p>
+                <p className="mt-1 text-[#37352f]">{story.branch_name || story.github_pr?.head_branch || "main"}</p>
+              </div>
+            </div>
+
+            <div className="mt-4 space-y-3 rounded-xl border border-[#ecebe8] bg-[#fbfbf9] p-4 text-[13px] text-[#6b6b6b]">
+              <p className="text-[11px] uppercase tracking-[0.08em] text-[#9b9a97]">GitHub Handoff</p>
+              <div>
+                <p className="text-[11px] uppercase tracking-[0.08em] text-[#9b9a97]">Pull Request</p>
+                {story.github_pr?.url ? (
+                  <a
+                    href={story.github_pr.url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="mt-1 inline-flex text-[#2a6690] underline-offset-2 hover:underline"
+                  >
+                    {story.github_pr.number ? `PR #${story.github_pr.number}` : story.github_pr.title || story.github_pr.url}
+                  </a>
+                ) : (
+                  <p className="mt-1 text-[#37352f]">Not opened yet</p>
+                )}
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <p className="text-[11px] uppercase tracking-[0.08em] text-[#9b9a97]">PR State</p>
+                  <p className="mt-1 text-[#37352f]">{sentenceCase(story.github_pr?.state)}</p>
+                </div>
+                <div>
+                  <p className="text-[11px] uppercase tracking-[0.08em] text-[#9b9a97]">CI State</p>
+                  <p className="mt-1 text-[#37352f]">{sentenceCase(story.github_pr?.ci_status)}</p>
+                </div>
+                <div>
+                  <p className="text-[11px] uppercase tracking-[0.08em] text-[#9b9a97]">Review State</p>
+                  <p className="mt-1 text-[#37352f]">{sentenceCase(story.github_pr?.review_status)}</p>
+                </div>
+                <div>
+                  <p className="text-[11px] uppercase tracking-[0.08em] text-[#9b9a97]">Handoff</p>
+                  <p className="mt-1 text-[#37352f]">{sentenceCase(story.github_pr?.handoff_status)}</p>
+                </div>
+              </div>
+              <div>
+                <p className="text-[11px] uppercase tracking-[0.08em] text-[#9b9a97]">Merge State</p>
+                <p className="mt-1 text-[#37352f]">{sentenceCase(story.github_pr?.merge_state)}</p>
               </div>
             </div>
 

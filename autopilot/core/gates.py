@@ -46,9 +46,15 @@ def run_single_gate(
     )
 
 
-def run_gates(gates_config: list[dict], workdir: Path) -> tuple[bool, list[GateResult]]:
+def run_gates(
+    gates_config: list[dict],
+    workdir: Path,
+    *,
+    quality_baseline: dict[str, bool] | None = None,
+) -> tuple[bool, list[GateResult]]:
     """Run all configured gates and return overall pass state plus details."""
     results: list[GateResult] = []
+    quality_baseline = quality_baseline or {}
 
     for gate in gates_config:
         result = run_single_gate(
@@ -57,6 +63,9 @@ def run_gates(gates_config: list[dict], workdir: Path) -> tuple[bool, list[GateR
             workdir=workdir,
             required=gate.get("required", True),
         )
+        baseline_passed = quality_baseline.get(result.name)
+        result.baseline_passed = baseline_passed
+        result.regression = bool(result.required and baseline_passed is True and not result.passed)
         results.append(result)
 
     all_required_passed = all(result.passed for result in results if result.required)

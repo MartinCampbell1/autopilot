@@ -5,9 +5,11 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException
 
 from autopilot.api.deps import get_account_manager, get_config
+from autopilot.core.account_diagnostics import build_account_diagnostics_snapshot
+from autopilot.core.adapters import list_provider_families
 from autopilot.core.provider_sessions import (
-    VALID_PROVIDERS,
     import_current_session,
+    is_valid_provider,
     open_login_terminal,
 )
 
@@ -18,7 +20,7 @@ router = APIRouter()
 async def list_accounts() -> dict[str, dict]:
     manager = get_account_manager()
     result: dict[str, list[dict]] = {}
-    for provider in ("codex", "claude", "gemini"):
+    for provider in list_provider_families():
         if provider in manager.pools:
             result[provider] = manager.pool_status(provider)
     return {"accounts": result}
@@ -36,9 +38,25 @@ async def accounts_health() -> dict[str, int]:
     }
 
 
+@router.get("/diagnostics")
+async def account_diagnostics(refresh: bool = False) -> dict[str, object]:
+    config = get_config()
+    manager = get_account_manager()
+    diagnostics = build_account_diagnostics_snapshot(config, manager, refresh=refresh)
+    return diagnostics
+
+
+@router.post("/diagnostics/refresh")
+async def refresh_account_diagnostics() -> dict[str, object]:
+    config = get_config()
+    manager = get_account_manager()
+    diagnostics = build_account_diagnostics_snapshot(config, manager, refresh=True)
+    return diagnostics
+
+
 @router.post("/{provider}/open-login")
 async def open_provider_login(provider: str) -> dict[str, str]:
-    if provider not in VALID_PROVIDERS:
+    if not is_valid_provider(provider):
         raise HTTPException(404, f"Unknown provider: {provider}")
 
     command = open_login_terminal(provider)
@@ -52,7 +70,7 @@ async def open_provider_login(provider: str) -> dict[str, str]:
 
 @router.post("/{provider}/import")
 async def import_provider_session(provider: str) -> dict[str, str]:
-    if provider not in VALID_PROVIDERS:
+    if not is_valid_provider(provider):
         raise HTTPException(404, f"Unknown provider: {provider}")
 
     config = get_config()
