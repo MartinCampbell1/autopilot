@@ -32,10 +32,15 @@ class TestProviders:
         cmd = build_cli_command("gemini", "do the thing", model=None)
         assert cmd[0] == "gemini"
 
+    def test_ollama_command(self) -> None:
+        cmd = build_cli_command("ollama", "do the thing", model="llama3.2")
+        assert cmd[:3] == ["ollama", "run", "llama3.2"]
+
     def test_provider_registry(self) -> None:
         assert "codex" in PROVIDER_COMMANDS
         assert "claude" in PROVIDER_COMMANDS
         assert "gemini" in PROVIDER_COMMANDS
+        assert "ollama" in PROVIDER_COMMANDS
 
     def test_provider_alias_resolves_local_adapter(self) -> None:
         assert get_adapter("codex").adapter_id == "codex_local"
@@ -47,8 +52,9 @@ class TestProviders:
         tracker_ids = {plugin.tracker_id for plugin in list_trackers()}
         notifier_ids = {plugin.notifier_id for plugin in list_notifiers()}
 
-        assert {"codex", "claude", "gemini"}.issubset(provider_families)
+        assert {"codex", "claude", "gemini", "ollama"}.issubset(provider_families)
         assert "codex_local:runtime" in runtime_ids
+        assert "ollama_local:runtime" in runtime_ids
         assert "project_state" in tracker_ids
         assert {"telegram", "slack_webhook", "webhook", "email", "script"}.issubset(notifier_ids)
 
@@ -63,6 +69,18 @@ class TestProviders:
         assert metadata.adapter_id == "claude_local"
         assert metadata.runtime_home == str(Path(profile.path) / "home")
         assert metadata.env_overrides["HOME"] == str(Path(profile.path) / "home")
+
+    def test_runtime_metadata_exposes_stateless_local_contract(self, tmp_path: Path) -> None:
+        profile = Profile(
+            name="ollama-local",
+            provider="ollama",
+            adapter_id="ollama_local",
+            path=str(tmp_path / "providers" / "ollama-local"),
+        )
+        metadata = get_adapter("ollama").runtime_metadata(profile)
+        assert metadata.provider_mode == "local"
+        assert metadata.auth_strategy == "none"
+        assert metadata.capabilities == ["exec", "review"]
 
     @patch("autopilot.core.adapters.subprocess.run")
     @patch("autopilot.core.adapters.shutil.which")

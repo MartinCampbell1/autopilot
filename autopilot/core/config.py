@@ -43,6 +43,53 @@ class NotificationChannelConfig:
 
 
 @dataclass
+class ProviderConfig:
+    id: str
+    family: str
+    mode: str
+    transport: str
+    endpoint: str | None = None
+    command: list[str] = field(default_factory=list)
+    auth_strategy: str = "managed_session"
+    capabilities: list[str] = field(default_factory=list)
+
+
+@dataclass
+class RuntimeProfileConfig:
+    id: str
+    sandbox_mode: str
+    network_policy: str
+    filesystem_policy: str
+    default_tools: list[str] = field(default_factory=list)
+
+
+def _default_runtime_profiles() -> list[RuntimeProfileConfig]:
+    return [
+        RuntimeProfileConfig(
+            id="cloud",
+            sandbox_mode="host",
+            network_policy="provider-default",
+            filesystem_policy="workspace-write",
+            default_tools=["shell", "git", "browser"],
+        ),
+        RuntimeProfileConfig(
+            id="local",
+            sandbox_mode="host",
+            network_policy="local-only",
+            filesystem_policy="workspace-write",
+            default_tools=["shell", "git"],
+        ),
+        RuntimeProfileConfig(
+            id="hybrid",
+            sandbox_mode="host",
+            network_policy="mixed",
+            filesystem_policy="workspace-write",
+            default_tools=["shell", "git", "browser"],
+        ),
+    ]
+
+
+@dataclass
 class AutopilotConfig:
     accounts: AccountAllocation = field(default_factory=AccountAllocation)
     codex_timeout_sec: int = 1800
@@ -52,6 +99,8 @@ class AutopilotConfig:
     autopilot_home_override: str | None = None
     profiles_dir_override: str | None = None
     notifications: list[NotificationChannelConfig] = field(default_factory=list)
+    providers: list[ProviderConfig] = field(default_factory=list)
+    runtime_profiles: list[RuntimeProfileConfig] = field(default_factory=_default_runtime_profiles)
 
     @property
     def autopilot_home(self) -> Path:
@@ -103,6 +152,41 @@ class AutopilotConfig:
     def routing_policies_json_path(self) -> Path:
         return self.autopilot_home / "routing-policies.json"
 
+    def default_provider_config(self, provider: str) -> ProviderConfig:
+        from autopilot.core.adapters import get_adapter
+
+        adapter = get_adapter(provider)
+        return ProviderConfig(
+            id=adapter.provider_family,
+            family=adapter.provider_family,
+            mode=adapter.provider_mode,
+            transport=adapter.transport,
+            command=adapter.default_command(),
+            auth_strategy=adapter.auth_strategy,
+            capabilities=list(adapter.capabilities),
+        )
+
+    def resolved_provider_configs(self) -> list[ProviderConfig]:
+        resolved: dict[str, ProviderConfig] = {}
+        for provider in self.providers_order:
+            try:
+                resolved[provider] = self.default_provider_config(provider)
+            except ValueError:
+                continue
+        for provider in self.providers:
+            resolved[provider.id] = provider
+        return list(resolved.values())
+
+    def configured_provider_families(self) -> list[str]:
+        families: list[str] = []
+        for provider in self.resolved_provider_configs():
+            if provider.family not in families:
+                families.append(provider.family)
+        return families
+
+    def provider_configs_for_family(self, family: str) -> list[ProviderConfig]:
+        return [provider for provider in self.resolved_provider_configs() if provider.family == family]
+
 
 DEFAULT_CONFIG = AutopilotConfig()
 
@@ -129,6 +213,29 @@ def _serialize_notification_channel(channel: NotificationChannelConfig) -> dict[
         "smtp_password_env": channel.smtp_password_env,
         "smtp_use_tls": channel.smtp_use_tls,
         "command": list(channel.command),
+    }
+
+
+def _serialize_provider_config(provider: ProviderConfig) -> dict[str, object]:
+    return {
+        "id": provider.id,
+        "family": provider.family,
+        "mode": provider.mode,
+        "transport": provider.transport,
+        "endpoint": provider.endpoint,
+        "command": list(provider.command),
+        "auth_strategy": provider.auth_strategy,
+        "capabilities": list(provider.capabilities),
+    }
+
+
+def _serialize_runtime_profile(profile: RuntimeProfileConfig) -> dict[str, object]:
+    return {
+        "id": profile.id,
+        "sandbox_mode": profile.sandbox_mode,
+        "network_policy": profile.network_policy,
+        "filesystem_policy": profile.filesystem_policy,
+        "default_tools": list(profile.default_tools),
     }
 
 
@@ -184,6 +291,66 @@ def _load_notification_channel(raw: object) -> NotificationChannelConfig | None:
     )
 
 
+def _load_provider_config(raw: object) -> ProviderConfig | None:
+    if not isinstance(raw, dict):
+        return None
+    provider_id = str(raw.get("id") or "").strip()
+    family = str(raw.get("family") or "").strip()
+    mode = str(raw.get("mode") or "").strip()
+    transport = str(raw.get("transport") or "").strip()
+    if not provider_id or not family or not mode or not transport:
+        return None
+    command_value = raw.get("command")
+    if isinstance(command_value, str):
+        command = shlex.split(command_value)
+    elif isinstance(command_value, list):
+        command = [str(part) for part in command_value if str(part).strip()]
+    else:
+        command = []
+    capabilities_value = raw.get("capabilities") or []
+    if isinstance(capabilities_value, str):
+        capabilities = [item.strip() for item in capabilities_value.split(",") if item.strip()]
+    elif isinstance(capabilities_value, list):
+        capabilities = [str(item).strip() for item in capabilities_value if str(item).strip()]
+    else:
+        capabilities = []
+    return ProviderConfig(
+        id=provider_id,
+        family=family,
+        mode=mode,
+        transport=transport,
+        endpoint=raw.get("endpoint"),
+        command=command,
+        auth_strategy=str(raw.get("auth_strategy") or "managed_session"),
+        capabilities=capabilities,
+    )
+
+
+def _load_runtime_profile(raw: object) -> RuntimeProfileConfig | None:
+    if not isinstance(raw, dict):
+        return None
+    profile_id = str(raw.get("id") or "").strip()
+    sandbox_mode = str(raw.get("sandbox_mode") or "").strip()
+    network_policy = str(raw.get("network_policy") or "").strip()
+    filesystem_policy = str(raw.get("filesystem_policy") or "").strip()
+    if not profile_id or not sandbox_mode or not network_policy or not filesystem_policy:
+        return None
+    default_tools_value = raw.get("default_tools") or []
+    if isinstance(default_tools_value, str):
+        default_tools = [item.strip() for item in default_tools_value.split(",") if item.strip()]
+    elif isinstance(default_tools_value, list):
+        default_tools = [str(item).strip() for item in default_tools_value if str(item).strip()]
+    else:
+        default_tools = []
+    return RuntimeProfileConfig(
+        id=profile_id,
+        sandbox_mode=sandbox_mode,
+        network_policy=network_policy,
+        filesystem_policy=filesystem_policy,
+        default_tools=default_tools,
+    )
+
+
 def save_config(config: AutopilotConfig, path: Path) -> None:
     """Save config to YAML file."""
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -201,6 +368,8 @@ def save_config(config: AutopilotConfig, path: Path) -> None:
         "autopilot_home": config.autopilot_home_override,
         "profiles_dir": config.profiles_dir_override,
         "notifications": [_serialize_notification_channel(channel) for channel in config.notifications],
+        "providers": [_serialize_provider_config(provider) for provider in config.providers],
+        "runtime_profiles": [_serialize_runtime_profile(profile) for profile in config.runtime_profiles],
     }
     path.write_text(yaml.dump(data, default_flow_style=False))
 
@@ -213,12 +382,26 @@ def load_config(path: Path) -> AutopilotConfig:
     data = yaml.safe_load(path.read_text()) or {}
     accounts_data = data.get("accounts", {})
     notifications_data = data.get("notifications", [])
+    providers_data = data.get("providers", [])
+    runtime_profiles_data = data.get("runtime_profiles", [])
     notifications: list[NotificationChannelConfig] = []
+    providers: list[ProviderConfig] = []
+    runtime_profiles: list[RuntimeProfileConfig] = []
     if isinstance(notifications_data, list):
         for raw_channel in notifications_data:
             channel = _load_notification_channel(raw_channel)
             if channel is not None:
                 notifications.append(channel)
+    if isinstance(providers_data, list):
+        for raw_provider in providers_data:
+            provider = _load_provider_config(raw_provider)
+            if provider is not None:
+                providers.append(provider)
+    if isinstance(runtime_profiles_data, list):
+        for raw_profile in runtime_profiles_data:
+            runtime_profile = _load_runtime_profile(raw_profile)
+            if runtime_profile is not None:
+                runtime_profiles.append(runtime_profile)
 
     return AutopilotConfig(
         accounts=AccountAllocation(
@@ -234,4 +417,6 @@ def load_config(path: Path) -> AutopilotConfig:
         autopilot_home_override=data.get("autopilot_home"),
         profiles_dir_override=data.get("profiles_dir"),
         notifications=notifications,
+        providers=providers,
+        runtime_profiles=runtime_profiles or _default_runtime_profiles(),
     )

@@ -22,6 +22,7 @@ class Provider(StrEnum):
     CODEX = "codex"
     CLAUDE = "claude"
     GEMINI = "gemini"
+    OLLAMA = "ollama"
 
 
 class StoryDependencyError(ValueError):

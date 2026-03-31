@@ -3,6 +3,8 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from autopilot.core.provider_sessions import import_current_session, provider_login_command
 
 
@@ -47,3 +49,8 @@ class TestProviderSessions:
     def test_provider_login_command(self) -> None:
         assert provider_login_command("codex") == ["codex", "login"]
         assert provider_login_command("claude") == ["claude", "auth", "login"]
+        assert provider_login_command("ollama") == []
+
+    def test_import_current_session_rejects_stateless_provider(self, tmp_path: Path) -> None:
+        with pytest.raises(ValueError, match="stateless local execution"):
+            import_current_session("ollama", profiles_dir=tmp_path / "profiles", home=tmp_path / "home")

@@ -54,3 +54,23 @@ def test_accounts_refresh_diagnostics_route_refreshes_cache(tmp_path: Path, monk
 
     assert response.status_code == 200
     assert response.json()["refresh"] is True
+
+
+def test_open_login_rejects_stateless_provider(tmp_path: Path, monkeypatch) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    client = _build_client(config, monkeypatch)
+
+    response = client.post("/api/accounts/ollama/open-login")
+
+    assert response.status_code == 400
+    assert "does not require login" in response.json()["detail"]
+
+
+def test_import_rejects_stateless_provider(tmp_path: Path, monkeypatch) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    client = _build_client(config, monkeypatch)
+
+    response = client.post("/api/accounts/ollama/import")
+
+    assert response.status_code == 400
+    assert "does not support session import" in response.json()["detail"]
