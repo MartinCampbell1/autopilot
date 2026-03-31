@@ -136,3 +136,95 @@ def test_live_command_passes_options(monkeypatch) -> None:
 
     assert result.exit_code == 0
     assert captured == {"refresh_sec": 5.0, "once": True}
+
+
+def test_preview_actions_command_passes_options(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_preview_actions(
+        session_id: str,
+        *,
+        actor: str = "cli-control-plane",
+        reason: str = "",
+        approval_required: bool = False,
+        policy_profile: str | None = None,
+        limit: int = 20,
+        json_output: bool = False,
+    ) -> None:
+        captured.update(
+            {
+                "session_id": session_id,
+                "actor": actor,
+                "reason": reason,
+                "approval_required": approval_required,
+                "policy_profile": policy_profile,
+                "limit": limit,
+                "json_output": json_output,
+            }
+        )
+
+    monkeypatch.setattr("autopilot.cli.execution_preview.preview_actions", fake_preview_actions)
+
+    result = runner.invoke(
+        app,
+        [
+            "preview-actions",
+            "sess_123",
+            "--approval-required",
+            "--policy-profile",
+            "budget_maintenance_with_high_priority_escalation",
+            "--limit",
+            "5",
+            "--actor",
+            "founderos",
+            "--reason",
+            "Preview before apply",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert captured == {
+        "session_id": "sess_123",
+        "actor": "founderos",
+        "reason": "Preview before apply",
+        "approval_required": True,
+        "policy_profile": "budget_maintenance_with_high_priority_escalation",
+        "limit": 5,
+        "json_output": True,
+    }
+
+
+def test_apply_preview_command_passes_options(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_apply_preview(
+        preview_id: str,
+        *,
+        actor: str = "cli-control-plane",
+        reason: str = "",
+        json_output: bool = False,
+    ) -> None:
+        captured.update(
+            {
+                "preview_id": preview_id,
+                "actor": actor,
+                "reason": reason,
+                "json_output": json_output,
+            }
+        )
+
+    monkeypatch.setattr("autopilot.cli.execution_preview.apply_preview", fake_apply_preview)
+
+    result = runner.invoke(
+        app,
+        ["apply-preview", "aar_preview_1", "--actor", "founderos", "--reason", "Apply reviewed preview", "--json"],
+    )
+
+    assert result.exit_code == 0
+    assert captured == {
+        "preview_id": "aar_preview_1",
+        "actor": "founderos",
+        "reason": "Apply reviewed preview",
+        "json_output": True,
+    }
