@@ -48,13 +48,8 @@ import {
   emptyVisibilityKeysRecord,
   isPersistedAgentTimelineStateEmpty,
   isPersistedLineageQueueStateEmpty,
-  persistQueueAdvanceFocusDelta,
-  readPersistedQueueAdvanceFocusDelta,
   sanitizeOperatorVisibilityState,
   sanitizePersistedAgentTimelineState,
-  sanitizePersistedLineageQueueState,
-  type PersistedAgentTimelineState,
-  type PersistedLineageQueueState,
   visibleEntriesByOperatorVisibilityState,
 } from "@/lib/control-plane-operator-state";
 import { buildRuntimeAgentSectionProps } from "@/lib/control-plane-runtime-agent-props";
@@ -113,6 +108,7 @@ import {
   useControlPlaneActions,
 } from "@/lib/use-control-plane-actions";
 import { useControlPlaneLinkedSelection } from "@/lib/use-control-plane-linked-selection";
+import { useControlPlaneOperatorPersistence } from "@/lib/use-control-plane-operator-persistence";
 import { useControlPlaneQueueAdvance } from "@/lib/use-control-plane-queue-advance";
 import { useControlPlaneRevealFlows } from "@/lib/use-control-plane-reveal-flows";
 import { useControlPlaneTriageInbox } from "@/lib/use-control-plane-triage-inbox";
@@ -135,8 +131,6 @@ import type {
 
 const LINEAGE_QUEUE_STORAGE_PREFIX = "control-plane:lineage-queue:";
 const AGENT_TIMELINE_STORAGE_PREFIX = "control-plane:agent-timeline:";
-const SESSION_QUEUE_FOCUS_STORAGE_PREFIX = "control-plane:session-queue-focus:";
-const AGENT_QUEUE_FOCUS_STORAGE_PREFIX = "control-plane:agent-queue-focus:";
 const TRIAGE_INBOX_FEEDBACK_LIMIT = 5;
 
 export default function ControlPlanePage() {
@@ -218,12 +212,6 @@ export default function ControlPlanePage() {
   const [busyActionKey, setBusyActionKey] = useState("");
   const [notice, setNotice] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
-  const [hydratedAgentTimelineStorageKey, setHydratedAgentTimelineStorageKey] = useState("");
-  const [hydratedLineageQueueSessionId, setHydratedLineageQueueSessionId] = useState("");
-  const [hydratedSessionQueueFocusStorageKey, setHydratedSessionQueueFocusStorageKey] =
-    useState("");
-  const [hydratedAgentQueueFocusStorageKey, setHydratedAgentQueueFocusStorageKey] =
-    useState("");
   const selectedSessionLineageEntryRef = useRef<SessionLineageEntry | null>(null);
   const selectedAgentTimelineEntryRef = useRef<AgentTimelineEntry | null>(null);
   const selectedTriageInboxKeyRef = useRef("");
@@ -316,13 +304,6 @@ export default function ControlPlanePage() {
     );
   }, [sessions]);
   useEffect(() => {
-    const interval = setInterval(() => {
-      setLineageQueueNow(Date.now());
-    }, 30000);
-    return () => clearInterval(interval);
-  }, []);
-
-  useEffect(() => {
     if (controlPasses.length === 0) {
       setSelectedPassId("");
       return;
@@ -395,121 +376,6 @@ export default function ControlPlanePage() {
     setPendingLineageAutoAdvance(null);
     setLineageQueueNow(Date.now());
   }, [selectedSessionId]);
-
-  useEffect(() => {
-    if (!selectedSessionId) {
-      setDismissedLineageQueueKeys(emptyVisibilityKeysRecord(SESSION_LINEAGE_QUEUE_KEYS));
-      setSnoozedLineageQueueUntil(emptySnoozedVisibilityRecord(SESSION_LINEAGE_QUEUE_KEYS));
-      setHydratedLineageQueueSessionId("");
-      return;
-    }
-
-    const now = Date.now();
-    setLineageQueueNow(now);
-    setHydratedLineageQueueSessionId("");
-
-    if (typeof window === "undefined") {
-      setDismissedLineageQueueKeys(emptyVisibilityKeysRecord(SESSION_LINEAGE_QUEUE_KEYS));
-      setSnoozedLineageQueueUntil(emptySnoozedVisibilityRecord(SESSION_LINEAGE_QUEUE_KEYS));
-      setHydratedLineageQueueSessionId(selectedSessionId);
-      return;
-    }
-
-    const storageKey = buildScopedStorageKey(LINEAGE_QUEUE_STORAGE_PREFIX, selectedSessionId);
-    const raw = window.localStorage.getItem(storageKey);
-    let parsed: PersistedLineageQueueState<LineageQueueKind> | null = null;
-    if (raw) {
-      try {
-        parsed = JSON.parse(raw) as PersistedLineageQueueState<LineageQueueKind>;
-      } catch {
-        parsed = null;
-      }
-    }
-
-    const sanitized = sanitizePersistedLineageQueueState(
-      parsed,
-      now,
-      SESSION_LINEAGE_QUEUE_KEYS
-    );
-    setDismissedLineageQueueKeys(sanitized.dismissed);
-    setSnoozedLineageQueueUntil(sanitized.snoozedUntil);
-    setHydratedLineageQueueSessionId(selectedSessionId);
-
-    if (isPersistedLineageQueueStateEmpty(sanitized, SESSION_LINEAGE_QUEUE_KEYS)) {
-      window.localStorage.removeItem(storageKey);
-      return;
-    }
-    window.localStorage.setItem(storageKey, JSON.stringify(sanitized));
-  }, [selectedSessionId]);
-
-  useEffect(() => {
-    if (!selectedSessionId || hydratedLineageQueueSessionId !== selectedSessionId) {
-      return;
-    }
-    if (typeof window === "undefined") return;
-
-    const sanitized = sanitizePersistedLineageQueueState(
-      {
-        dismissed: dismissedLineageQueueKeys,
-        snoozedUntil: snoozedLineageQueueUntil,
-      },
-      lineageQueueNow,
-      SESSION_LINEAGE_QUEUE_KEYS
-    );
-    const storageKey = buildScopedStorageKey(LINEAGE_QUEUE_STORAGE_PREFIX, selectedSessionId);
-
-    if (isPersistedLineageQueueStateEmpty(sanitized, SESSION_LINEAGE_QUEUE_KEYS)) {
-      window.localStorage.removeItem(storageKey);
-      return;
-    }
-    window.localStorage.setItem(storageKey, JSON.stringify(sanitized));
-  }, [
-    dismissedLineageQueueKeys,
-    hydratedLineageQueueSessionId,
-    lineageQueueNow,
-    selectedSessionId,
-    snoozedLineageQueueUntil,
-  ]);
-
-  useEffect(() => {
-    if (!selectedSessionId) {
-      setSessionQueueFocusDelta(null);
-      setHydratedSessionQueueFocusStorageKey("");
-      return;
-    }
-
-    const storageKey = buildScopedStorageKey(
-      SESSION_QUEUE_FOCUS_STORAGE_PREFIX,
-      selectedSessionId
-    );
-    setHydratedSessionQueueFocusStorageKey("");
-
-    if (typeof window === "undefined") {
-      setHydratedSessionQueueFocusStorageKey(storageKey);
-      return;
-    }
-    const sanitized = readPersistedQueueAdvanceFocusDelta(storageKey);
-    setSessionQueueFocusDelta(sanitized);
-    setHydratedSessionQueueFocusStorageKey(storageKey);
-    persistQueueAdvanceFocusDelta(storageKey, sanitized);
-  }, [selectedSessionId]);
-
-  useEffect(() => {
-    if (!selectedSessionId) return;
-    const storageKey = buildScopedStorageKey(
-      SESSION_QUEUE_FOCUS_STORAGE_PREFIX,
-      selectedSessionId
-    );
-    if (hydratedSessionQueueFocusStorageKey !== storageKey) {
-      return;
-    }
-    if (typeof window === "undefined") return;
-    persistQueueAdvanceFocusDelta(storageKey, sessionQueueFocusDelta);
-  }, [
-    hydratedSessionQueueFocusStorageKey,
-    selectedSessionId,
-    sessionQueueFocusDelta,
-  ]);
 
   useEffect(() => {
     if (!selectedSession) {
@@ -593,113 +459,6 @@ export default function ControlPlanePage() {
   }, [selectedAgentId]);
 
   useEffect(() => {
-    if (!selectedAgentId) {
-      setDismissedAgentTimelineKeys([]);
-      setSnoozedAgentTimelineUntil({});
-      setHydratedAgentTimelineStorageKey("");
-      return;
-    }
-
-    const now = Date.now();
-    setLineageQueueNow(now);
-    setHydratedAgentTimelineStorageKey("");
-
-    if (typeof window === "undefined") {
-      setDismissedAgentTimelineKeys([]);
-      setSnoozedAgentTimelineUntil({});
-      setHydratedAgentTimelineStorageKey(
-        buildScopedStorageKey(AGENT_TIMELINE_STORAGE_PREFIX, selectedAgentId)
-      );
-      return;
-    }
-
-    const storageKey = buildScopedStorageKey(AGENT_TIMELINE_STORAGE_PREFIX, selectedAgentId);
-    const raw = window.localStorage.getItem(storageKey);
-    let parsed: PersistedAgentTimelineState | null = null;
-    if (raw) {
-      try {
-        parsed = JSON.parse(raw) as PersistedAgentTimelineState;
-      } catch {
-        parsed = null;
-      }
-    }
-
-    const sanitized = sanitizePersistedAgentTimelineState(parsed, now);
-    setDismissedAgentTimelineKeys(sanitized.dismissed);
-    setSnoozedAgentTimelineUntil(sanitized.snoozedUntil);
-    setHydratedAgentTimelineStorageKey(storageKey);
-
-    if (isPersistedAgentTimelineStateEmpty(sanitized)) {
-      window.localStorage.removeItem(storageKey);
-      return;
-    }
-    window.localStorage.setItem(storageKey, JSON.stringify(sanitized));
-  }, [selectedAgentId]);
-
-  useEffect(() => {
-    if (!selectedAgentId) return;
-    const storageKey = buildScopedStorageKey(AGENT_TIMELINE_STORAGE_PREFIX, selectedAgentId);
-    if (hydratedAgentTimelineStorageKey !== storageKey) {
-      return;
-    }
-    if (typeof window === "undefined") return;
-
-    const sanitized = sanitizePersistedAgentTimelineState(
-      {
-        dismissed: dismissedAgentTimelineKeys,
-        snoozedUntil: snoozedAgentTimelineUntil,
-      },
-      lineageQueueNow
-    );
-
-    if (isPersistedAgentTimelineStateEmpty(sanitized)) {
-      window.localStorage.removeItem(storageKey);
-      return;
-    }
-    window.localStorage.setItem(storageKey, JSON.stringify(sanitized));
-  }, [
-    dismissedAgentTimelineKeys,
-    hydratedAgentTimelineStorageKey,
-    lineageQueueNow,
-    selectedAgentId,
-    snoozedAgentTimelineUntil,
-  ]);
-
-  useEffect(() => {
-    if (!selectedAgentId) {
-      setAgentQueueFocusDelta(null);
-      setHydratedAgentQueueFocusStorageKey("");
-      return;
-    }
-
-    const storageKey = buildScopedStorageKey(AGENT_QUEUE_FOCUS_STORAGE_PREFIX, selectedAgentId);
-    setHydratedAgentQueueFocusStorageKey("");
-
-    if (typeof window === "undefined") {
-      setHydratedAgentQueueFocusStorageKey(storageKey);
-      return;
-    }
-    const sanitized = readPersistedQueueAdvanceFocusDelta(storageKey);
-    setAgentQueueFocusDelta(sanitized);
-    setHydratedAgentQueueFocusStorageKey(storageKey);
-    persistQueueAdvanceFocusDelta(storageKey, sanitized);
-  }, [selectedAgentId]);
-
-  useEffect(() => {
-    if (!selectedAgentId) return;
-    const storageKey = buildScopedStorageKey(AGENT_QUEUE_FOCUS_STORAGE_PREFIX, selectedAgentId);
-    if (hydratedAgentQueueFocusStorageKey !== storageKey) {
-      return;
-    }
-    if (typeof window === "undefined") return;
-    persistQueueAdvanceFocusDelta(storageKey, agentQueueFocusDelta);
-  }, [
-    agentQueueFocusDelta,
-    hydratedAgentQueueFocusStorageKey,
-    selectedAgentId,
-  ]);
-
-  useEffect(() => {
     const visibleRuns = ((selectedSession?.runs || []) as ExecutionAgentActionRunRecord[]).filter(
       (run) => matchesRunFilter(run, runFilter) && runMatchesSearch(run, entitySearch)
     );
@@ -779,6 +538,25 @@ export default function ControlPlanePage() {
     loadAgentDetail,
     toStringValue,
     triageInboxFeedbackLimit: TRIAGE_INBOX_FEEDBACK_LIMIT,
+  });
+
+  useControlPlaneOperatorPersistence({
+    selectedSessionId,
+    selectedAgentId,
+    dismissedLineageQueueKeys,
+    setDismissedLineageQueueKeys,
+    snoozedLineageQueueUntil,
+    setSnoozedLineageQueueUntil,
+    lineageQueueNow,
+    setLineageQueueNow,
+    sessionQueueFocusDelta,
+    setSessionQueueFocusDelta,
+    dismissedAgentTimelineKeys,
+    setDismissedAgentTimelineKeys,
+    snoozedAgentTimelineUntil,
+    setSnoozedAgentTimelineUntil,
+    agentQueueFocusDelta,
+    setAgentQueueFocusDelta,
   });
 
   const visibleProjects = useMemo(
