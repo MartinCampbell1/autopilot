@@ -43,13 +43,11 @@ import {
   toStringValue,
 } from "@/lib/control-plane-data";
 import {
-  buildScopedStorageKey,
   emptySnoozedVisibilityRecord,
   emptyVisibilityKeysRecord,
   isPersistedAgentTimelineStateEmpty,
   isPersistedLineageQueueStateEmpty,
   sanitizeOperatorVisibilityState,
-  sanitizePersistedAgentTimelineState,
   visibleEntriesByOperatorVisibilityState,
 } from "@/lib/control-plane-operator-state";
 import { buildRuntimeAgentSectionProps } from "@/lib/control-plane-runtime-agent-props";
@@ -67,7 +65,6 @@ import {
   type TriageInboxFeedback,
 } from "@/lib/control-plane-models";
 import {
-  agentQueueAdvanceTarget,
   agentTimelineEntryKey,
   agentTimelineRowDomId,
   resolveAgentTimelineRunLink,
@@ -75,7 +72,6 @@ import {
   resolveSessionEventFromContext,
   sessionContextRowDomId,
   sessionEventKey,
-  sessionQueueAdvanceTarget,
   withSelectedItem,
 } from "@/lib/control-plane-linking";
 import {
@@ -85,10 +81,7 @@ import {
 } from "@/lib/control-plane-section-props";
 import {
   agentTimelinePriority,
-  buildQueueAdvanceFeedback,
   countTriagePriorities,
-  describeAgentQueueAdvanceReason,
-  describeSessionQueueAdvanceReason,
   matchesAgentOutcomeFilter,
   matchesAgentTimelineFilter,
   matchesEventFilter,
@@ -108,12 +101,14 @@ import {
   useControlPlaneActions,
 } from "@/lib/use-control-plane-actions";
 import { useControlPlaneAgentTimelineSelection } from "@/lib/use-control-plane-agent-timeline-selection";
+import { useControlPlaneAgentPriorityQueues } from "@/lib/use-control-plane-agent-priority-queues";
 import { useControlPlaneBootstrap } from "@/lib/use-control-plane-bootstrap";
 import { useControlPlaneLinkedSelection } from "@/lib/use-control-plane-linked-selection";
 import { useControlPlaneOperatorPersistence } from "@/lib/use-control-plane-operator-persistence";
 import { useControlPlaneQueueAdvance } from "@/lib/use-control-plane-queue-advance";
 import { useControlPlaneRevealFlows } from "@/lib/use-control-plane-reveal-flows";
 import { useControlPlaneRunSelection } from "@/lib/use-control-plane-run-selection";
+import { useControlPlaneSessionLineageQueues } from "@/lib/use-control-plane-session-lineage-queues";
 import { useControlPlaneSessionLineageSelection } from "@/lib/use-control-plane-session-lineage-selection";
 import { useControlPlaneTriageInbox } from "@/lib/use-control-plane-triage-inbox";
 import { useSSE } from "@/lib/sse";
@@ -133,8 +128,6 @@ import type {
   ProjectSummary,
 } from "@/lib/types";
 
-const LINEAGE_QUEUE_STORAGE_PREFIX = "control-plane:lineage-queue:";
-const AGENT_TIMELINE_STORAGE_PREFIX = "control-plane:agent-timeline:";
 const TRIAGE_INBOX_FEEDBACK_LIMIT = 5;
 
 export default function ControlPlanePage() {
@@ -276,11 +269,16 @@ export default function ControlPlanePage() {
   }, []);
 
   useEffect(() => {
-    void loadOverview();
+    const initialLoad = setTimeout(() => {
+      void loadOverview();
+    }, 0);
     const interval = setInterval(() => {
       void loadOverview();
     }, 15000);
-    return () => clearInterval(interval);
+    return () => {
+      clearTimeout(initialLoad);
+      clearInterval(interval);
+    };
   }, [loadOverview]);
 
   useSSE(
@@ -897,289 +895,38 @@ export default function ControlPlanePage() {
     setErrorMessage,
     setSessionLineageFilter,
   });
-  const advanceSessionLineageQueue = useCallback(
-    (filter: "attention" | "decisions") => {
-      const entries =
-        filter === "attention" ? attentionSessionLineageEntries : decisionSessionLineageEntries;
-      const previousEntry = selectedSessionLineageEntry;
-      const nextEntry = nextSessionLineageQueueEntry(entries, selectedSessionLineageEntry);
-      if (!nextEntry) return;
-      const nextReason = describeSessionQueueAdvanceReason(nextEntry);
-      setSessionQueueAdvanceFeedback(buildQueueAdvanceFeedback({
-        title: `${filter === "attention" ? "Attention" : "Decision"} queue advanced`,
-        detail: `Selected "${nextEntry.title}" as the next ${filter} item.`,
-        nextTarget: sessionQueueAdvanceTarget(filter, nextEntry),
-        previousTarget: previousEntry
-          ? sessionQueueAdvanceTarget(sessionLineageFilter, previousEntry)
-          : null,
-        reasonDetails: nextReason,
-      }));
-      focusSessionLineageEntry(nextEntry, filter);
-    },
-    [
-      attentionSessionLineageEntries,
-      decisionSessionLineageEntries,
-      focusSessionLineageEntry,
-      sessionLineageFilter,
-      selectedSessionLineageEntry,
-    ]
-  );
-  const advanceSessionLineageQueueFromEntry = useCallback(
-    (filter: LineageQueueKind, entry: SessionLineageEntry | null) => {
-      const entries =
-        filter === "attention" ? attentionSessionLineageEntries : decisionSessionLineageEntries;
-      const nextEntry = nextSessionLineageQueueEntry(entries, entry);
-      if (!nextEntry) return;
-      const nextReason = describeSessionQueueAdvanceReason(nextEntry);
-      setSessionQueueAdvanceFeedback(buildQueueAdvanceFeedback({
-        title: `${filter === "attention" ? "Attention" : "Decision"} queue advanced`,
-        detail: `Selected "${nextEntry.title}" as the next ${filter} item.`,
-        nextTarget: sessionQueueAdvanceTarget(filter, nextEntry),
-        previousTarget: entry ? sessionQueueAdvanceTarget(filter, entry) : null,
-        reasonDetails: nextReason,
-      }));
-      focusSessionLineageEntry(nextEntry, filter);
-    },
-    [attentionSessionLineageEntries, decisionSessionLineageEntries, focusSessionLineageEntry]
-  );
-  const dismissSessionLineageQueueEntry = useCallback(
-    (filter: LineageQueueKind, entry: SessionLineageEntry) => {
-      setDismissedLineageQueueKeys((current) => ({
-        ...current,
-        [filter]: current[filter].includes(entry.key)
-          ? current[filter]
-          : [...current[filter], entry.key],
-      }));
-      setLineageQueueNow(Date.now());
-      if (selectedSessionLineageEntry?.key === entry.key) {
-        setPendingLineageAutoAdvance({
-          filter,
-          previousKey: entry.key,
-          previousEntry: entry,
-          previousFilter: filter,
-        });
-      }
-    },
-    [selectedSessionLineageEntry]
-  );
-  const snoozeSessionLineageQueueEntry = useCallback(
-    (filter: LineageQueueKind, entry: SessionLineageEntry, minutes = 15) => {
-      const snoozedUntil = Date.now() + minutes * 60 * 1000;
-      setSnoozedLineageQueueUntil((current) => ({
-        ...current,
-        [filter]: {
-          ...current[filter],
-          [entry.key]: snoozedUntil,
-        },
-      }));
-      setLineageQueueNow(Date.now());
-      if (selectedSessionLineageEntry?.key === entry.key) {
-        setPendingLineageAutoAdvance({
-          filter,
-          previousKey: entry.key,
-          previousEntry: entry,
-          previousFilter: filter,
-        });
-      }
-    },
-    [selectedSessionLineageEntry]
-  );
-  const restoreSessionLineageQueue = useCallback((filter: LineageQueueKind) => {
-    setDismissedLineageQueueKeys((current) => ({
-      ...current,
-      [filter]: [],
-    }));
-    setSnoozedLineageQueueUntil((current) => ({
-      ...current,
-      [filter]: {},
-    }));
-    setLineageQueueNow(Date.now());
-  }, []);
-  const resetSessionLineageQueuePreferences = useCallback(() => {
-    setDismissedLineageQueueKeys(emptyVisibilityKeysRecord(SESSION_LINEAGE_QUEUE_KEYS));
-    setSnoozedLineageQueueUntil(emptySnoozedVisibilityRecord(SESSION_LINEAGE_QUEUE_KEYS));
-    setLineageQueueNow(Date.now());
-    setNotice("Session lineage queue state reset.");
-    setErrorMessage("");
-    if (selectedSessionId && typeof window !== "undefined") {
-      window.localStorage.removeItem(
-        buildScopedStorageKey(LINEAGE_QUEUE_STORAGE_PREFIX, selectedSessionId)
-      );
-    }
-  }, [selectedSessionId]);
-  const toggleSessionLineageQueueExpansion = useCallback((filter: LineageQueueKind) => {
-    setExpandedSessionLineageQueues((current) =>
-      current.includes(filter)
-        ? current.filter((key) => key !== filter)
-        : [...current, filter]
-    );
-  }, []);
-  const expandAllSessionLineageQueues = useCallback(() => {
-    setExpandedSessionLineageQueues([...SESSION_LINEAGE_QUEUE_KEYS]);
-  }, []);
-  const collapseAllSessionLineageQueues = useCallback(() => {
-    setExpandedSessionLineageQueues([]);
-  }, []);
-  const openCurrentSessionLineageQueue = useCallback(() => {
-    if (!currentSessionLineageQueue) return;
-    setExpandedSessionLineageQueues((current) =>
-      current.includes(currentSessionLineageQueue)
-        ? current
-        : [...current, currentSessionLineageQueue]
-    );
-  }, [currentSessionLineageQueue]);
-  const exportSessionLineageQueuePreferences = useCallback(async () => {
-    if (!selectedSessionId) return;
-    const payload = {
-      sessionId: selectedSessionId,
-      exportedAt: new Date().toISOString(),
-      queueState: persistedLineageQueueState,
-    };
-    const serialized = JSON.stringify(payload, null, 2);
-    try {
-      if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
-        await navigator.clipboard.writeText(serialized);
-        setNotice("Copied session lineage queue state.");
-        setErrorMessage("");
-        return;
-      }
-      setErrorMessage("Clipboard is unavailable in this environment.");
-    } catch (error) {
-      setErrorMessage(
-        error instanceof Error ? error.message : "Failed to copy session lineage queue state."
-      );
-    }
-  }, [persistedLineageQueueState, selectedSessionId]);
-  const dismissAgentTimelineEntry = useCallback((entry: AgentTimelineEntry) => {
-    const entryKey = agentTimelineEntryKey(entry);
-    setDismissedAgentTimelineKeys((current) =>
-      current.includes(entryKey) ? current : [...current, entryKey]
-    );
-    setLineageQueueNow(Date.now());
-    const currentEntry = selectedAgentTimelineEntryRef.current;
-    if (currentEntry && agentTimelineEntryKey(currentEntry) === entryKey) {
-      const priority = agentTimelinePriority(entry);
-      if (priority === "critical" || priority === "high") {
-        setPendingAgentPriorityAutoAdvance({
-          priority,
-          previousKey: entryKey,
-          previousEntry: entry,
-        });
-      }
-    }
-  }, []);
-  const snoozeAgentTimelineEntry = useCallback((entry: AgentTimelineEntry, minutes = 15) => {
-    const entryKey = agentTimelineEntryKey(entry);
-    const snoozedUntil = Date.now() + minutes * 60 * 1000;
-    setSnoozedAgentTimelineUntil((current) => ({
-      ...current,
-      [entryKey]: snoozedUntil,
-    }));
-    setLineageQueueNow(Date.now());
-    const currentEntry = selectedAgentTimelineEntryRef.current;
-    if (currentEntry && agentTimelineEntryKey(currentEntry) === entryKey) {
-      const priority = agentTimelinePriority(entry);
-      if (priority === "critical" || priority === "high") {
-        setPendingAgentPriorityAutoAdvance({
-          priority,
-          previousKey: entryKey,
-          previousEntry: entry,
-        });
-      }
-    }
-  }, []);
-  const restoreAgentTimelineHidden = useCallback(() => {
-    setDismissedAgentTimelineKeys([]);
-    setSnoozedAgentTimelineUntil({});
-    setLineageQueueNow(Date.now());
-  }, []);
-  const resetAgentTimelinePreferences = useCallback(() => {
-    setDismissedAgentTimelineKeys([]);
-    setSnoozedAgentTimelineUntil({});
-    setLineageQueueNow(Date.now());
-    setNotice("Agent timeline state reset.");
-    setErrorMessage("");
-    if (selectedAgentId && typeof window !== "undefined") {
-      window.localStorage.removeItem(
-        buildScopedStorageKey(AGENT_TIMELINE_STORAGE_PREFIX, selectedAgentId)
-      );
-    }
-  }, [selectedAgentId]);
-  const exportAgentTimelinePreferences = useCallback(async () => {
-    if (!selectedAgentId) return;
-    const timelineState = sanitizePersistedAgentTimelineState(
-      {
-        dismissed: dismissedAgentTimelineKeys,
-        snoozedUntil: snoozedAgentTimelineUntil,
-      },
-      lineageQueueNow
-    );
-    const payload = {
-      runtimeAgentId: selectedAgentId,
-      exportedAt: new Date().toISOString(),
-      timelineState,
-    };
-    const serialized = JSON.stringify(payload, null, 2);
-    try {
-      if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
-        await navigator.clipboard.writeText(serialized);
-        setNotice("Copied agent timeline state.");
-        setErrorMessage("");
-        return;
-      }
-      setErrorMessage("Clipboard is unavailable in this environment.");
-    } catch (error) {
-      setErrorMessage(
-        error instanceof Error ? error.message : "Failed to copy agent timeline state."
-      );
-    }
-  }, [dismissedAgentTimelineKeys, lineageQueueNow, selectedAgentId, snoozedAgentTimelineUntil]);
-  useEffect(() => {
-    if (!pendingLineageAutoAdvance) return;
-    const entries =
-      pendingLineageAutoAdvance.filter === "attention"
-        ? attentionSessionLineageEntries
-        : decisionSessionLineageEntries;
-    const currentIndex = entries.findIndex(
-      (entry) => entry.key === pendingLineageAutoAdvance.previousKey
-    );
-    const nextEntry =
-      currentIndex === -1 ? (entries[0] ?? null) : (entries[currentIndex + 1] ?? entries[0] ?? null);
-    setPendingLineageAutoAdvance(null);
-    if (nextEntry) {
-      const nextReason = describeSessionQueueAdvanceReason(nextEntry);
-      setSessionQueueAdvanceFeedback(buildQueueAdvanceFeedback({
-        title: `${pendingLineageAutoAdvance.filter === "attention" ? "Attention" : "Decision"} queue auto-advanced`,
-        detail: `Moved to "${nextEntry.title}" after the previous queue action completed.`,
-        nextTarget: sessionQueueAdvanceTarget(pendingLineageAutoAdvance.filter, nextEntry),
-        previousTarget: pendingLineageAutoAdvance.previousEntry
-          ? sessionQueueAdvanceTarget(
-              pendingLineageAutoAdvance.previousFilter,
-              pendingLineageAutoAdvance.previousEntry
-            )
-          : null,
-        reasonDetails: nextReason,
-      }));
-      focusSessionLineageEntry(nextEntry, pendingLineageAutoAdvance.filter);
-    } else {
-      setSessionQueueAdvanceFeedback(buildQueueAdvanceFeedback({
-        title: `${pendingLineageAutoAdvance.filter === "attention" ? "Attention" : "Decision"} queue cleared`,
-        detail: `No remaining ${pendingLineageAutoAdvance.filter} items were available after the previous queue action.`,
-        previousTarget: pendingLineageAutoAdvance.previousEntry
-          ? sessionQueueAdvanceTarget(
-              pendingLineageAutoAdvance.previousFilter,
-              pendingLineageAutoAdvance.previousEntry
-            )
-          : null,
-      }));
-      setSessionLineageFilter(pendingLineageAutoAdvance.filter);
-    }
-  }, [
+  const {
+    advanceSessionLineageQueue,
+    advanceSessionLineageQueueFromEntry,
+    dismissSessionLineageQueueEntry,
+    snoozeSessionLineageQueueEntry,
+    restoreSessionLineageQueue,
+    resetSessionLineageQueuePreferences,
+    toggleSessionLineageQueueExpansion,
+    expandAllSessionLineageQueues,
+    collapseAllSessionLineageQueues,
+    openCurrentSessionLineageQueue,
+    exportSessionLineageQueuePreferences,
+  } = useControlPlaneSessionLineageQueues({
     attentionSessionLineageEntries,
     decisionSessionLineageEntries,
-    focusSessionLineageEntry,
+    selectedSessionLineageEntry,
+    sessionLineageFilter,
+    currentSessionLineageQueue,
+    selectedSessionId,
+    persistedLineageQueueState,
     pendingLineageAutoAdvance,
-  ]);
+    setDismissedLineageQueueKeys,
+    setSnoozedLineageQueueUntil,
+    setLineageQueueNow,
+    setNotice,
+    setErrorMessage,
+    setExpandedSessionLineageQueues,
+    setSessionQueueAdvanceFeedback,
+    setPendingLineageAutoAdvance,
+    setSessionLineageFilter,
+    focusSessionLineageEntry,
+  });
   const agentScopedRuns = useMemo(() => {
     if (!selectedAgentId) return [] as ExecutionAgentActionRunRecord[];
     return linkedRuns.filter((run) => {
@@ -1509,30 +1256,6 @@ export default function ControlPlanePage() {
       ),
     [filteredAgentTimelineEntries, selectedAgentTimelineEntry]
   );
-  const toggleAgentPriorityQueueExpansion = useCallback(
-    (priority: (typeof AGENT_PRIORITY_QUEUE_KEYS)[number]) => {
-      setExpandedAgentPriorityQueues((current) =>
-        current.includes(priority)
-          ? current.filter((key) => key !== priority)
-          : [...current, priority]
-      );
-    },
-    []
-  );
-  const expandAllAgentPriorityQueues = useCallback(() => {
-    setExpandedAgentPriorityQueues([...AGENT_PRIORITY_QUEUE_KEYS]);
-  }, []);
-  const collapseAllAgentPriorityQueues = useCallback(() => {
-    setExpandedAgentPriorityQueues([]);
-  }, []);
-  const openCurrentAgentPriorityQueue = useCallback(() => {
-    if (!currentAgentPriorityQueue) return;
-    setExpandedAgentPriorityQueues((current) =>
-      current.includes(currentAgentPriorityQueue)
-        ? current
-        : [...current, currentAgentPriorityQueue]
-    );
-  }, [currentAgentPriorityQueue]);
   const selectedAgentTimelineEntryKeyValue = selectedAgentTimelineEntry
     ? agentTimelineEntryKey(selectedAgentTimelineEntry)
     : "";
@@ -1557,31 +1280,38 @@ export default function ControlPlanePage() {
     },
     [linkedRuns, selectedAgent, selectedAgentId, syncLinkedSelection]
   );
-  const advanceAgentPriorityQueueFromEntry = useCallback(
-    (
-      priority: (typeof AGENT_PRIORITY_QUEUE_KEYS)[number],
-      entry: AgentTimelineEntry | null
-    ) => {
-      const nextEntry = nextTriageEntryByPriority(
-        filteredAgentTimelineEntries,
-        entry,
-        agentTimelineEntryKey,
-        agentTimelinePriority,
-        priority
-      );
-      if (!nextEntry) return;
-      const nextReason = describeAgentQueueAdvanceReason(nextEntry);
-      setAgentQueueAdvanceFeedback(buildQueueAdvanceFeedback({
-        title: `${priority === "critical" ? "Critical" : "High"} queue advanced`,
-        detail: `Selected "${nextEntry.title}" as the next ${priority} item.`,
-        nextTarget: agentQueueAdvanceTarget(priority, nextEntry),
-        previousTarget: entry ? agentQueueAdvanceTarget(priority, entry) : null,
-        reasonDetails: nextReason,
-      }));
-      inspectAgentTimelineEntry(nextEntry);
-    },
-    [filteredAgentTimelineEntries, inspectAgentTimelineEntry]
-  );
+  const {
+    toggleAgentPriorityQueueExpansion,
+    expandAllAgentPriorityQueues,
+    collapseAllAgentPriorityQueues,
+    openCurrentAgentPriorityQueue,
+    dismissAgentTimelineEntry,
+    snoozeAgentTimelineEntry,
+    restoreAgentTimelineHidden,
+    resetAgentTimelinePreferences,
+    exportAgentTimelinePreferences,
+    advanceAgentPriorityQueueFromEntry,
+  } = useControlPlaneAgentPriorityQueues({
+    selectedAgentId,
+    selectedAgentTimelineEntryRef,
+    filteredAgentTimelineEntries,
+    criticalAgentTimelineEntries,
+    highAgentTimelineEntries,
+    currentAgentPriorityQueue,
+    dismissedAgentTimelineKeys,
+    snoozedAgentTimelineUntil,
+    lineageQueueNow,
+    pendingAgentPriorityAutoAdvance,
+    setDismissedAgentTimelineKeys,
+    setSnoozedAgentTimelineUntil,
+    setLineageQueueNow,
+    setNotice,
+    setErrorMessage,
+    setExpandedAgentPriorityQueues,
+    setPendingAgentPriorityAutoAdvance,
+    setAgentQueueAdvanceFeedback,
+    inspectAgentTimelineEntry,
+  });
   const {
     restoreAgentTimelineEntryVisibility,
     revealAgentTimelineEntry,
@@ -1708,51 +1438,6 @@ export default function ControlPlanePage() {
     recordTriageInboxFeedback,
     triageInboxFeedbackLimit: TRIAGE_INBOX_FEEDBACK_LIMIT,
   });
-  useEffect(() => {
-    if (!pendingAgentPriorityAutoAdvance) return;
-    const entries =
-      pendingAgentPriorityAutoAdvance.priority === "critical"
-        ? criticalAgentTimelineEntries
-        : highAgentTimelineEntries;
-    const currentIndex = entries.findIndex(
-      (entry) => agentTimelineEntryKey(entry) === pendingAgentPriorityAutoAdvance.previousKey
-    );
-    const nextEntry =
-      currentIndex === -1 ? (entries[0] ?? null) : (entries[currentIndex + 1] ?? entries[0] ?? null);
-    setPendingAgentPriorityAutoAdvance(null);
-    if (nextEntry) {
-      const nextReason = describeAgentQueueAdvanceReason(nextEntry);
-      setAgentQueueAdvanceFeedback(buildQueueAdvanceFeedback({
-        title: `${pendingAgentPriorityAutoAdvance.priority === "critical" ? "Critical" : "High"} queue auto-advanced`,
-        detail: `Moved to "${nextEntry.title}" after the previous queue action completed.`,
-        nextTarget: agentQueueAdvanceTarget(pendingAgentPriorityAutoAdvance.priority, nextEntry),
-        previousTarget: pendingAgentPriorityAutoAdvance.previousEntry
-          ? agentQueueAdvanceTarget(
-              pendingAgentPriorityAutoAdvance.priority,
-              pendingAgentPriorityAutoAdvance.previousEntry
-            )
-          : null,
-        reasonDetails: nextReason,
-      }));
-      inspectAgentTimelineEntry(nextEntry);
-    } else {
-      setAgentQueueAdvanceFeedback(buildQueueAdvanceFeedback({
-        title: `${pendingAgentPriorityAutoAdvance.priority === "critical" ? "Critical" : "High"} queue cleared`,
-        detail: `No remaining ${pendingAgentPriorityAutoAdvance.priority} items were available after the previous queue action.`,
-        previousTarget: pendingAgentPriorityAutoAdvance.previousEntry
-          ? agentQueueAdvanceTarget(
-              pendingAgentPriorityAutoAdvance.priority,
-              pendingAgentPriorityAutoAdvance.previousEntry
-            )
-          : null,
-      }));
-    }
-  }, [
-    criticalAgentTimelineEntries,
-    highAgentTimelineEntries,
-    inspectAgentTimelineEntry,
-    pendingAgentPriorityAutoAdvance,
-  ]);
   const selectedControl = selectedSession?.control ?? null;
   const loading = !controlSummary || !sessionSummary;
 
@@ -1877,7 +1562,6 @@ export default function ControlPlanePage() {
     openTriageInboxHistoryGroup,
     snoozeTriageInboxItem,
     dismissTriageInboxItem,
-    // eslint-disable-next-line react-hooks/refs
     runtimeAgentSectionProps: buildRuntimeAgentSectionProps({
       selectedAgentId,
       agentLoading,
