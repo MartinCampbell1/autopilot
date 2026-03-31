@@ -71,6 +71,7 @@ import {
   visibleEntriesByOperatorVisibilityState,
 } from "@/lib/control-plane-operator-state";
 import { buildRuntimeAgentSectionProps } from "@/lib/control-plane-runtime-agent-props";
+import { buildSessionDrilldownSectionProps } from "@/lib/control-plane-session-drilldown-props";
 import {
   AGENT_PRIORITY_QUEUE_KEYS,
   SESSION_LINEAGE_QUEUE_KEYS,
@@ -3343,179 +3344,68 @@ export default function ControlPlanePage() {
     },
   };
 
-  const sessionDrilldownSectionProps = {
+  const sessionDrilldownSectionProps = buildSessionDrilldownSectionProps({
     selectedSessionId,
     sessionLoading,
     selectedSession,
-    controlSectionProps: selectedSession
-      ? {
-          selectedSession,
-          selectedControl,
-          linkedAgentIds,
-          selectedAgentId,
-          onFocusRuntimeAgent: (runtimeAgentId: string) => {
-            focusRuntimeAgent(runtimeAgentId, true);
-          },
-          filteredRunsCount: filteredRuns.length,
-          linkedRunsCount: linkedRuns.length,
-          filteredEventsCount: filteredEvents.length,
-          filteredApprovalsCount: filteredApprovals.length,
-          linkedApprovalsCount: linkedApprovals.length,
-          filteredIssuesCount: filteredIssues.length,
-          linkedIssuesCount: linkedIssues.length,
-          entitySearch,
-          onEntitySearchChange: setEntitySearch,
-          onClearEntitySearch: () => {
-            setEntitySearch("");
-          },
-          sortedProfiles,
-          busyActionKey,
-          onApplyControlPlan: (profile: OrchestratorSessionControlProfile) => {
-            void applyControlPlan(profile);
-          },
-          onApplyRecommendation: (recommendation: OrchestratorSessionControlRecommendation) => {
-            void applyRecommendation(recommendation);
-          },
-        }
-      : null,
-    activitySectionProps: selectedSession
-      ? {
-          selectedSession,
-          selectedControl,
-          linkedRuns,
-          runFilter: runFilter as "all" | "execute" | "preview" | "attention",
-          onRunFilterChange: setRunFilter,
-          getRunFilterCount: (filter: "execute" | "preview" | "attention") =>
-            linkedRuns.filter((run) => matchesRunFilter(run, filter)).length,
-          filteredRuns,
-          selectedRunId,
-          onSelectRun: setSelectedRunId,
-          onFocusRuntimeAgent: (runtimeAgentId: string) => {
-            focusRuntimeAgent(runtimeAgentId, true);
-          },
-          toNumber,
-          eventFilter: eventFilter as
-            | "all"
-            | "control"
-            | "actions"
-            | "decisions"
-            | "attention",
-          onEventFilterChange: setEventFilter,
-          getEventFilterCount: (filter: "control" | "actions" | "decisions" | "attention") =>
-            (selectedSession.events || []).filter((event) => matchesEventFilter(event, filter))
-              .length,
-          filteredEvents,
-          visibleSessionEvents,
-          selectedSessionEventKey,
-          toStringValue,
-          toStringArray,
-          toNullableNumber,
-          formatTimestamp,
-          eventFamily,
-          sessionEventKey,
-          sessionContextRowDomId,
-          onSyncLinkedSelection: syncLinkedSelection,
-          onSearchEntity: setEntitySearch,
-        }
-      : null,
-    selectedControlPassCardProps: {
-      selectedPass,
-      toStringValue,
-      toNumber,
-      onOpenSession: setSelectedSessionId,
-    },
-    linkedDecisionsCardProps: {
-      selectedSession,
-      linkedApprovals,
-      filteredApprovals,
-      visibleSessionApprovals,
-      selectedSessionApprovalId,
-      linkedIssues,
-      filteredIssues,
-      visibleSessionIssues,
-      selectedSessionIssueId,
-      busyActionKey,
-      formatTimestamp,
-      sessionContextRowDomId,
-      onSearchEntity: setEntitySearch,
-      onFocusRuntimeAgent: (runtimeAgentId: string) => {
-        focusRuntimeAgent(runtimeAgentId, true);
-      },
-      onInspectApproval: (approval: ExecutionApprovalRecord) => {
-        syncLinkedSelection({
-          approvalId: approval.id,
-          issueId: approval.issue_id,
-          runtimeAgentId: approval.runtime_agent_ids[0],
-        });
-      },
-      onInspectIssue: (issue: ExecutionIssueRecord) => {
-        syncLinkedSelection({
-          issueId: issue.id,
-          approvalId: issue.approval_id,
-          runtimeAgentId: issue.runtime_agent_ids[0] || issue.runtime_agent_id,
-        });
-      },
-      onApproveApproval: (approval: ExecutionApprovalRecord) => {
-        void approveApproval(approval);
-      },
-      onRejectApproval: (approval: ExecutionApprovalRecord) => {
-        void rejectApproval(approval);
-      },
-      onApplyApproval: (approval: ExecutionApprovalRecord) => {
-        void applyApproval(approval);
-      },
-      onResolveIssue: (issue: ExecutionIssueRecord) => {
-        void resolveIssue(issue);
-      },
-    },
-    selectedSessionContextCardProps: {
-      selectedSession,
-      selectedSessionContext,
-      linkedRuns,
-      busyActionKey,
-      currentSessionLineageQueue,
-      formatTimestamp,
-      formatJson,
-      toStringValue,
-      toStringArray,
-      toNullableNumber,
-      asRecord,
-      eventFamily,
-      describeRunResult,
-      resolveRunLinkFromContext,
-      onRevealSessionRow: revealSelectedSessionContextRow,
-      onRevealInAgentTimeline: revealSelectedSessionContextInAgentTimeline,
-      onOpenRuntimeAgent: (runtimeAgentId: string) => {
-        focusRuntimeAgent(runtimeAgentId, true);
-      },
-      onSyncLinkedSelection: syncLinkedSelection,
-      onOpenRunOutcome: (runId: string, resultIndex: number) => {
-        setSelectedRunId(runId);
-        setSelectedRunResultIndex(resultIndex);
-      },
-      onApproveApproval: (approval: ExecutionApprovalRecord) => {
-        void approveApproval(approval);
-      },
-      onRejectApproval: (approval: ExecutionApprovalRecord) => {
-        void rejectApproval(approval);
-      },
-      onApplyApproval: (approval: ExecutionApprovalRecord) => {
-        void applyApproval(approval);
-      },
-      onResolveIssue: (issue: ExecutionIssueRecord) => {
-        void resolveIssue(issue);
-      },
-      onAdvanceCurrentQueue:
-        currentSessionLineageQueue && selectedSessionLineageEntry
-          ? () => {
-              advanceSessionLineageQueueFromEntry(
-                currentSessionLineageQueue,
-                selectedSessionLineageEntry
-              );
-            }
-          : null,
-    },
-  };
+    selectedControl,
+    linkedAgentIds,
+    selectedAgentId,
+    focusRuntimeAgent,
+    filteredRuns,
+    linkedRuns,
+    filteredEvents,
+    filteredApprovals,
+    linkedApprovals,
+    visibleSessionApprovals,
+    filteredIssues,
+    linkedIssues,
+    visibleSessionIssues,
+    entitySearch,
+    setEntitySearch,
+    sortedProfiles,
+    busyActionKey,
+    applyControlPlan,
+    applyRecommendation,
+    runFilter: runFilter as "all" | "execute" | "preview" | "attention",
+    setRunFilter,
+    matchesRunFilter,
+    selectedRunId,
+    setSelectedRunId,
+    setSelectedRunResultIndex,
+    toNumber,
+    eventFilter: eventFilter as "all" | "control" | "actions" | "decisions" | "attention",
+    setEventFilter,
+    matchesEventFilter,
+    visibleSessionEvents,
+    selectedSessionEventKey,
+    toStringValue,
+    toStringArray,
+    toNullableNumber,
+    formatTimestamp,
+    eventFamily,
+    sessionEventKey,
+    sessionContextRowDomId,
+    syncLinkedSelection,
+    selectedPass,
+    setSelectedSessionId,
+    selectedSessionApprovalId,
+    selectedSessionIssueId,
+    revealSelectedSessionContextRow,
+    revealSelectedSessionContextInAgentTimeline,
+    selectedSessionContext,
+    formatJson,
+    asRecord,
+    describeRunResult,
+    resolveRunLinkFromContext,
+    currentSessionLineageQueue,
+    selectedSessionLineageEntry,
+    advanceSessionLineageQueueFromEntry,
+    approveApproval,
+    rejectApproval,
+    applyApproval,
+    resolveIssue,
+  });
 
   const headerSectionProps = {
     latestControlPassAt: controlSummary.latest_control_pass_at,
