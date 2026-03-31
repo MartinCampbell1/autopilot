@@ -35,7 +35,7 @@ class ConnectorRequest(BaseModel):
     description: str = ""
     transport: str = "builtin"
     tags: list[str] = Field(default_factory=list)
-    providers: list[str] = Field(default_factory=lambda: ["codex", "claude", "gemini"])
+    providers: list[str] = Field(default_factory=lambda: ["codex", "claude", "gemini", "ollama"])
     risk_level: str = "medium"
     scopes: list[str] = Field(default_factory=list)
     enabled: bool = True
@@ -71,7 +71,21 @@ async def get_capabilities_catalog() -> dict:
         "connector_types": [connector_type.model_dump() for connector_type in load_connector_type_catalog()],
         "routing_policies": [policy.model_dump() for policy in load_routing_policies_registry(config)],
         "launch_presets": [preset.model_dump() for preset in DEFAULT_LAUNCH_PRESETS],
+        "provider_configs": config.resolved_provider_config_payloads(),
+        "runtime_profiles": config.runtime_profile_payloads(),
     }
+
+
+@router.get("/providers")
+async def list_provider_configs() -> dict[str, list[dict]]:
+    config = get_config()
+    return {"provider_configs": config.resolved_provider_config_payloads()}
+
+
+@router.get("/runtime-profiles")
+async def list_runtime_profiles() -> dict[str, list[dict]]:
+    config = get_config()
+    return {"runtime_profiles": config.runtime_profile_payloads()}
 
 
 @router.get("/connector-types")

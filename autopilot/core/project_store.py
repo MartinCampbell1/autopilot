@@ -11,6 +11,7 @@ import subprocess
 import sys
 import time
 import uuid
+from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -1106,6 +1107,7 @@ def _resolve_story_runtime_metadata(
     story: dict[str, Any],
     runtime: dict[str, Any],
 ) -> dict[str, Any]:
+    launch_profile = normalize_launch_profile(state.get("launch_profile"))
     team_mode = runtime.get("team_mode")
     team_members = runtime.get("team_members") or []
     story_pipeline = runtime.get("story_pipeline") or []
@@ -1123,7 +1125,7 @@ def _resolve_story_runtime_metadata(
     )
     if has_runtime_plan:
         return {
-            "team_mode": team_mode or state.get("launch_profile", {}).get("story_execution_mode", "solo"),
+            "team_mode": team_mode or launch_profile.story_execution_mode,
             "team_members": team_members,
             "story_pipeline": story_pipeline,
             "review_phases": review_phases or list(story.get("review_phases") or []),
@@ -1134,8 +1136,8 @@ def _resolve_story_runtime_metadata(
 
     resolved = resolve_story_runtime_plan(
         story,
-        launch_profile=state.get("launch_profile"),
-        provider="codex",
+        launch_profile=launch_profile,
+        provider=launch_profile.provider,
         connectors=load_connectors_registry(config),
         skill_packs=load_skill_packs_registry(config),
         routing_policies=load_routing_policies_registry(config),
@@ -1239,8 +1241,21 @@ def _project_progress_counts(stories: list[dict[str, Any]]) -> tuple[int, int]:
     return done, total
 
 
+def _resolve_launch_contract(
+    config: AutopilotConfig,
+    launch_profile: dict[str, Any] | None,
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    normalized = normalize_launch_profile(launch_profile)
+    provider_config = asdict(
+        config.resolve_provider_config(normalized.provider, normalized.provider_config_id)
+    )
+    runtime_profile = asdict(config.resolve_runtime_profile(normalized.runtime_profile_id))
+    return normalized.model_dump(), provider_config, runtime_profile
+
+
 def build_project_summary(config: AutopilotConfig, project: dict[str, Any]) -> dict[str, Any]:
     state = ensure_project_state(config, project, seed_mode="migrate")
+    launch_profile, provider_config, runtime_profile = _resolve_launch_contract(config, state.get("launch_profile"))
     stories = merge_project_stories(config, project, state)
     stories_done, stories_total = _project_progress_counts(stories)
     current_story = next((story for story in stories if story["id"] == state.get("current_story_id")), None)
@@ -1260,7 +1275,9 @@ def build_project_summary(config: AutopilotConfig, project: dict[str, Any]) -> d
         "last_activity_at": state.get("updated_at"),
         "last_message": _sanitize_message(last_event["message"]) if last_event else "",
         "pid": state.get("pid"),
-        "launch_profile": state.get("launch_profile", normalize_launch_profile().model_dump()),
+        "launch_profile": launch_profile,
+        "provider_config": provider_config,
+        "runtime_profile": runtime_profile,
         "budget_policy": state.get("budget_policy", default_budget_policy()),
         "budget_usage": state.get("budget_usage", default_budget_usage()),
         "quality_policy": state.get("quality_policy", default_quality_policy()),
@@ -1283,6 +1300,7 @@ def build_project_detail(config: AutopilotConfig, project_id: str) -> dict[str, 
 
     touch_project_last_opened(config, project_id)
     state = ensure_project_state(config, project, seed_mode="migrate")
+    launch_profile, provider_config, runtime_profile = _resolve_launch_contract(config, state.get("launch_profile"))
     prd = load_project_prd(project, seed_mode="migrate")
     stories = merge_project_stories(config, project, state)
     summary = build_project_summary(config, project)
@@ -1329,7 +1347,9 @@ def build_project_detail(config: AutopilotConfig, project_id: str) -> dict[str, 
         "active_worker": state.get("active_worker"),
         "active_critic": state.get("active_critic"),
         "current_iteration": state.get("current_iteration", 0),
-        "launch_profile": state.get("launch_profile", normalize_launch_profile().model_dump()),
+        "launch_profile": launch_profile,
+        "provider_config": provider_config,
+        "runtime_profile": runtime_profile,
         "budget_policy": state.get("budget_policy", default_budget_policy()),
         "budget_usage": state.get("budget_usage", default_budget_usage()),
         "quality_policy": state.get("quality_policy", default_quality_policy()),

@@ -42,6 +42,9 @@ class GuidanceRequest(BaseModel):
 
 class LaunchProfileRequest(BaseModel):
     preset: str = "fast"
+    provider: str | None = None
+    provider_config_id: str | None = None
+    runtime_profile_id: str | None = None
     story_execution_mode: str | None = None
     project_concurrency_mode: str | None = None
     max_parallel_stories: int | None = None

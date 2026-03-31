@@ -14,6 +14,7 @@ import typer
 from rich.console import Console
 
 from autopilot.core.account_manager import AccountManager
+from autopilot.core.adapters import get_adapter
 from autopilot.core.capability_store import normalize_launch_profile, resolve_story_runtime_plan
 from autopilot.core.config import load_config
 from autopilot.core.cost_accounting import merge_usage_records, record_iteration_cost, start_run_cost_bucket
@@ -537,8 +538,37 @@ def _run_impl(
     )
     account_mgr.discover()
 
-    if "codex" not in account_mgr.pools:
-        message = "No Codex profiles found. Run: autopilot login codex"
+    project_entry = _load_or_register_project(config, project, project_id, prd)
+    project_id = project_entry["id"]
+    state = ensure_project_state(config, project_entry, seed_mode="migrate")
+    launch_profile = normalize_launch_profile(state.get("launch_profile"))
+    selected_provider = launch_profile.provider
+    selected_provider_config_id = launch_profile.provider_config_id
+
+    if selected_provider not in account_mgr.pools:
+        adapter = get_adapter(selected_provider)
+        if adapter.requires_managed_profile:
+            message = f"No {adapter.provider_family} profiles found. Run: autopilot login {adapter.provider_family}"
+        else:
+            message = (
+                f"No configured {adapter.provider_family} runtime found. "
+                f"Add `{adapter.provider_family}` to config providers/providers_order."
+            )
+        _emit_runtime_message(
+            headless=headless,
+            event="run_preflight_failed",
+            message=message,
+            rich_message=f"[red]{message}[/red]",
+            level="error",
+            project_path=str(project),
+        )
+        return build_preflight_summary(str(project), project_id=project_id, message=message)
+    if selected_provider_config_id and not any(
+        profile.name == selected_provider_config_id for profile in account_mgr.pools.get(selected_provider, [])
+    ):
+        message = (
+            f"Configured runtime `{selected_provider_config_id}` for provider `{selected_provider}` was not found."
+        )
         _emit_runtime_message(
             headless=headless,
             event="run_preflight_failed",
@@ -549,12 +579,8 @@ def _run_impl(
         )
         return build_preflight_summary(str(project), project_id=project_id, message=message)
 
-    project_entry = _load_or_register_project(config, project, project_id, prd)
-    project_id = project_entry["id"]
-    state = ensure_project_state(config, project_entry, seed_mode="migrate")
     run_started_at = state.get("started_at") or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     start_run_cost_bucket(state, started_at=run_started_at)
-    launch_profile = normalize_launch_profile(state.get("launch_profile"))
     state_lock = threading.Lock()
     account_lock = threading.Lock()
 
@@ -683,15 +709,18 @@ def _run_impl(
 
     def reserve_profiles() -> tuple[Any, Any] | None:
         with account_lock:
-            worker_profile = account_mgr.get_next("codex")
+            worker_profile = account_mgr.get_next(selected_provider, preferred_name=selected_provider_config_id)
             if worker_profile is None:
                 return None
-            critic_profile = account_mgr.get_next("codex") or worker_profile
+            critic_profile = (
+                account_mgr.get_next(selected_provider, preferred_name=selected_provider_config_id)
+                or worker_profile
+            )
             return worker_profile, critic_profile
 
     def reserve_specialist_profile() -> Any | None:
         with account_lock:
-            return account_mgr.get_next("codex")
+            return account_mgr.get_next(selected_provider, preferred_name=selected_provider_config_id)
 
     def mark_profile_success(profile: Any) -> None:
         with account_lock:
@@ -950,7 +979,11 @@ def _run_impl(
         story_title = story.get("title", f"Story #{story_id}")
         story_desc = story.get("description", "")
         started_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-        runtime_plan = resolve_story_runtime_plan(story, launch_profile=launch_profile, provider="codex")
+        runtime_plan = resolve_story_runtime_plan(
+            story,
+            launch_profile=launch_profile,
+            provider=selected_provider,
+        )
         planned_story_branch = stable_story_branch_name(project_entry["name"], story_id, story_title)
         shared_discoveries = build_story_discovery_context(load_project_state(config, project_id), story_id=story_id)
 

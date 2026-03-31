@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 import yaml
 
-from autopilot.core.config import AutopilotConfig
+from autopilot.core.config import AutopilotConfig, ProviderConfig
 from autopilot.core.models import StoryDependencyError
 from autopilot.core.project_store import (
     auto_pause_project_run,
@@ -400,6 +400,8 @@ def test_build_project_detail_resolves_launch_profile_team_and_connectors(tmp_pa
     detail = build_project_detail(config, project["id"])
 
     assert detail["launch_profile"]["preset"] == "team"
+    assert detail["provider_config"]["family"] == "codex"
+    assert detail["runtime_profile"]["id"] == "cloud"
     story = detail["stories"][0]
     assert story["team_mode"] == "team"
     assert story["story_pipeline"] == ["research", "implement", "review"]
@@ -407,6 +409,50 @@ def test_build_project_detail_resolves_launch_profile_team_and_connectors(tmp_pa
     assert [entry["stage"] for entry in story["pipeline_state"]] == ["research", "implement", "review"]
     assert any(member["execution_role"] == "specialist" for member in story["team_members"])
     assert any(connector["id"] == "browser_devtools" for connector in story["connector_activation"])
+
+
+def test_build_project_detail_resolves_local_provider_contract(tmp_path: Path) -> None:
+    config = AutopilotConfig(
+        autopilot_home_override=str(tmp_path / ".autopilot"),
+        providers_order=[],
+        providers=[
+            ProviderConfig(
+                id="ollama-local",
+                family="ollama",
+                mode="local",
+                transport="command",
+                command=["ollama"],
+                auth_strategy="none",
+                capabilities=["exec", "review"],
+            )
+        ],
+    )
+    project_dir = tmp_path / "local-project"
+    project_dir.mkdir(parents=True)
+
+    project = register_project(config, name="Local Project", project_path=project_dir)
+    prd = normalize_prd(
+        {
+            "title": "Local Project",
+            "stories": [{"id": 1, "title": "Bootstrap", "description": "Start", "tags": ["backend"]}],
+        }
+    )
+    save_project_prd(project, prd)
+    state = ensure_project_state(config, project, seed_mode="new")
+    state["launch_profile"] = {
+        "preset": "fast",
+        "provider": "ollama",
+        "provider_config_id": "ollama-local",
+        "runtime_profile_id": "local",
+    }
+    save_project_state(config, project["id"], state)
+
+    detail = build_project_detail(config, project["id"])
+
+    assert detail["launch_profile"]["provider"] == "ollama"
+    assert detail["provider_config"]["id"] == "ollama-local"
+    assert detail["runtime_profile"]["id"] == "local"
+    assert detail["stories"][0]["team_members"][0]["provider"] == "ollama"
 
 
 def test_discoveries_are_recorded_and_shared_in_story_context(tmp_path: Path) -> None:
