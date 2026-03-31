@@ -32,13 +32,15 @@ from autopilot.core.project_store import (
 
 def test_migrate_projects_registry_adds_ids_and_archives_temp_paths(tmp_path: Path) -> None:
     config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    stable_project_path = Path.home() / "autopilot-real-project"
+    temp_project_path = Path("/tmp/temp-project")
     config.projects_yaml_path.parent.mkdir(parents=True, exist_ok=True)
     config.projects_yaml_path.write_text(
         yaml.safe_dump(
             {
                 "projects": [
-                    {"name": "Real Project", "path": str(tmp_path / "real-project")},
-                    {"name": "Temp Project", "path": "/private/tmp/temp-project"},
+                    {"name": "Real Project", "path": str(stable_project_path)},
+                    {"name": "Temp Project", "path": str(temp_project_path)},
                 ]
             },
             sort_keys=False,
