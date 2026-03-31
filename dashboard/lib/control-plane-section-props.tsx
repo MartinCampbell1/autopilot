@@ -31,6 +31,10 @@ type BuildWorkspaceSectionPropsArgs = {
   selectedRunResultIndex: number;
   setSelectedRunResultIndex: (index: number) => void;
   onCopySelectedRunLink: () => void;
+  busyActionKey: WorkspaceSectionProps["selectedActionRunCardProps"]["busyActionKey"];
+  onApplySelectedPreviewRun: (
+    run: NonNullable<WorkspaceSectionProps["selectedActionRunCardProps"]["selectedRun"]>
+  ) => void;
   formatScopeList: WorkspaceSectionProps["selectedActionRunCardProps"]["formatScopeList"];
   describeRunResult: WorkspaceSectionProps["selectedActionRunCardProps"]["describeRunResult"];
   toStringArray: WorkspaceSectionProps["selectedActionRunCardProps"]["toStringArray"];
@@ -170,6 +174,8 @@ export function buildWorkspaceSectionProps({
   selectedRunResultIndex,
   setSelectedRunResultIndex,
   onCopySelectedRunLink,
+  busyActionKey,
+  onApplySelectedPreviewRun,
   formatScopeList,
   describeRunResult,
   toStringArray,
@@ -292,6 +298,11 @@ export function buildWorkspaceSectionProps({
       selectedRunResultIndex,
       onSelectResult: setSelectedRunResultIndex,
       onCopyLink: onCopySelectedRunLink,
+      busyActionKey,
+      onApplyPreviewRun: (run) => {
+        if (!run) return;
+        onApplySelectedPreviewRun(run);
+      },
       formatTimestamp,
       formatScopeList,
       describeRunResult,

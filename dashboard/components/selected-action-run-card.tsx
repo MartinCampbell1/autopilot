@@ -28,6 +28,8 @@ type SelectedActionRunCardProps = {
   selectedRunResultIndex: number;
   onSelectResult: (index: number) => void;
   onCopyLink: () => void;
+  busyActionKey: string;
+  onApplyPreviewRun: (run: ExecutionAgentActionRunRecord) => void;
   formatTimestamp: (value?: string | null) => string;
   formatScopeList: (items: string[], emptyText: string) => string;
   describeRunResult: (result: Record<string, unknown>) => RunResultDetails;
@@ -43,6 +45,8 @@ export function SelectedActionRunCard({
   selectedRunResultIndex,
   onSelectResult,
   onCopyLink,
+  busyActionKey,
+  onApplyPreviewRun,
   formatTimestamp,
   formatScopeList,
   describeRunResult,
@@ -56,6 +60,14 @@ export function SelectedActionRunCard({
   const patchBundle = asRecord(selectedRun?.patch_bundle);
   const commandCounts = (asRecord(diffSummary?.command_counts) as ExecutionPlaneCountMap | null) || {};
   const plannedModeCounts = (asRecord(diffSummary?.planned_mode_counts) as ExecutionPlaneCountMap | null) || {};
+  const previewActionKey = selectedRun
+    ? `preview-apply:${toStringValue(selectedRun.preview_id, selectedRun.id)}`
+    : "";
+  const canApplyPreview = Boolean(
+    selectedRun?.dry_run &&
+      selectedRun?.run_kind === "batch" &&
+      toStringArray(selectedRun?.selection.selected_action_keys).length > 0
+  );
   const patchOperations = Array.isArray(patchBundle?.operations)
     ? patchBundle.operations
         .map((item) => asRecord(item))
@@ -132,6 +144,24 @@ export function SelectedActionRunCard({
                     ? ` · completed ${formatTimestamp(selectedRun.completed_at)}`
                     : ""}
                 </p>
+                {canApplyPreview && (
+                  <Button
+                    size="sm"
+                    className="h-8 rounded-lg bg-[#1a1a1a] text-[12px] text-white hover:bg-[#333]"
+                    disabled={Boolean(busyActionKey)}
+                    onClick={() => {
+                      onApplyPreviewRun(selectedRun);
+                    }}
+                  >
+                    {busyActionKey === previewActionKey
+                      ? selectedRun.approval_required
+                        ? "Requesting..."
+                        : "Applying..."
+                      : selectedRun.approval_required
+                        ? "Request approvals"
+                        : "Apply preview"}
+                  </Button>
+                )}
                 <Button
                   size="sm"
                   variant="outline"

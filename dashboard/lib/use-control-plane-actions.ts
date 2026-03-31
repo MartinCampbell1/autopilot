@@ -1,5 +1,6 @@
 import { useCallback, type Dispatch, type MutableRefObject, type SetStateAction } from "react";
 import {
+  applyExecutionPlanePreviewRun,
   applyExecutionPlaneApproval,
   applyExecutionPlaneOrchestratorSessionControlPlan,
   applyExecutionPlaneOrchestratorSessionRecommendation,
@@ -21,6 +22,7 @@ import {
 } from "@/lib/control-plane-triage";
 import type {
   ExecutionApprovalRecord,
+  ExecutionAgentActionRunRecord,
   ExecutionIssueRecord,
   ExecutionRuntimeAgentDetail,
   OrchestratorSessionControlProfile,
@@ -51,6 +53,7 @@ type UseControlPlaneActionsArgs = {
   setNotice: Dispatch<SetStateAction<string>>;
   setErrorMessage: Dispatch<SetStateAction<string>>;
   setSelectedRunId: Dispatch<SetStateAction<string>>;
+  setSelectedRunResultIndex: Dispatch<SetStateAction<number>>;
   setSelectedPassId: Dispatch<SetStateAction<string>>;
   setSelectedAgent: Dispatch<SetStateAction<ExecutionRuntimeAgentDetail | null>>;
   setEntitySearch: Dispatch<SetStateAction<string>>;
@@ -79,6 +82,7 @@ export function useControlPlaneActions({
   setNotice,
   setErrorMessage,
   setSelectedRunId,
+  setSelectedRunResultIndex,
   setSelectedPassId,
   setSelectedAgent,
   setEntitySearch,
@@ -250,6 +254,81 @@ export function useControlPlaneActions({
       setPendingAgentPriorityAutoAdvance,
       setPendingLineageAutoAdvance,
       setSelectedAgent,
+    ]
+  );
+
+  const applyPreviewRun = useCallback(
+    async (run: ExecutionAgentActionRunRecord) => {
+      if (!run.dry_run) return;
+      const previewId = toStringValue(run.preview_id, run.id);
+      if (!previewId) return;
+      const busyKey = `preview-apply:${previewId}`;
+      setBusyActionKey(busyKey);
+      setNotice("");
+      setErrorMessage("");
+
+      try {
+        const payload = await applyExecutionPlanePreviewRun(run, {
+          actor: DEFAULT_CONTROL_ACTOR,
+          reason: run.approval_required
+            ? `Dashboard requested approval from preview ${previewId}`
+            : `Dashboard applied preview ${previewId}`,
+        });
+        const appliedRunId = toStringValue(payload.run?.id);
+        if (appliedRunId) {
+          setSelectedRunId(appliedRunId);
+          setSelectedRunResultIndex(0);
+        }
+
+        const firstApprovalId = payload.results
+          .map((result) => {
+            const approval =
+              result && typeof result === "object" && !Array.isArray(result)
+                ? (result as Record<string, unknown>).approval
+                : null;
+            return approval && typeof approval === "object" && !Array.isArray(approval)
+              ? toStringValue((approval as Record<string, unknown>).id)
+              : "";
+          })
+          .find(Boolean);
+        if (firstApprovalId) {
+          setEntitySearch(firstApprovalId);
+        }
+
+        setNotice(
+          firstApprovalId
+            ? `Preview ${previewId} escalated to approval ${firstApprovalId}.`
+            : `Preview ${previewId} applied as run ${appliedRunId || payload.run.id}.`
+        );
+
+        if (run.orchestrator_session_id) {
+          await refreshAfterMutation(run.orchestrator_session_id);
+        } else {
+          await loadOverview();
+        }
+        if (selectedAgentId && run.runtime_agent_ids.includes(selectedAgentId)) {
+          const detail = await loadAgentDetail(selectedAgentId);
+          setSelectedAgent(detail);
+        }
+      } catch (error) {
+        setErrorMessage(error instanceof Error ? error.message : "Failed to apply selected preview.");
+      } finally {
+        setBusyActionKey("");
+      }
+    },
+    [
+      loadAgentDetail,
+      loadOverview,
+      refreshAfterMutation,
+      selectedAgentId,
+      setBusyActionKey,
+      setEntitySearch,
+      setErrorMessage,
+      setNotice,
+      setSelectedAgent,
+      setSelectedRunId,
+      setSelectedRunResultIndex,
+      toStringValue,
     ]
   );
 
@@ -463,6 +542,7 @@ export function useControlPlaneActions({
     rejectApproval,
     applyApproval,
     resolveIssue,
+    applyPreviewRun,
     runAgentSuggestedCommand,
     applyControlPlan,
   };

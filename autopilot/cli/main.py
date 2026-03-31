@@ -117,6 +117,51 @@ def live(
     _live(refresh_sec=refresh_sec, once=once)
 
 
+@app.command(name="preview-actions")
+def preview_actions(
+    session_id: str = typer.Argument(help="Orchestrator session id to preview."),
+    approval_required: bool = typer.Option(
+        False,
+        "--approval-required",
+        help="Preview approval-gated actions instead of safe actions.",
+    ),
+    policy_profile: str | None = typer.Option(
+        None,
+        "--policy-profile",
+        help="Override the batch policy profile used for the preview.",
+    ),
+    limit: int = typer.Option(20, "--limit", help="Maximum number of actions to include in the preview."),
+    actor: str = typer.Option("cli-control-plane", "--actor", help="Actor label recorded on the preview."),
+    reason: str = typer.Option("", "--reason", help="Optional operator rationale for the preview."),
+    json_output: bool = typer.Option(False, "--json", help="Emit the preview payload as JSON."),
+) -> None:
+    """Preview session-scoped execution-plane actions without applying them."""
+    from autopilot.cli.execution_preview import preview_actions as _preview_actions
+
+    _preview_actions(
+        session_id,
+        actor=actor,
+        reason=reason,
+        approval_required=approval_required,
+        policy_profile=policy_profile,
+        limit=limit,
+        json_output=json_output,
+    )
+
+
+@app.command(name="apply-preview")
+def apply_preview(
+    preview_id: str = typer.Argument(help="Preview run id to apply."),
+    actor: str = typer.Option("cli-control-plane", "--actor", help="Actor label recorded on the apply."),
+    reason: str = typer.Option("", "--reason", help="Optional operator rationale for the apply."),
+    json_output: bool = typer.Option(False, "--json", help="Emit the apply payload as JSON."),
+) -> None:
+    """Apply a previously recorded execution-plane preview run."""
+    from autopilot.cli.execution_preview import apply_preview as _apply_preview
+
+    _apply_preview(preview_id, actor=actor, reason=reason, json_output=json_output)
+
+
 @app.command(name="init")
 def init_project(
     project_path: str = typer.Argument(help="Path to the project directory"),
