@@ -71,11 +71,15 @@ Already landed on branch:
   - TUI/live view
   - multi-attempt per task
   - scheduled maintenance runs
+- branch-level product verification hardening:
+  - repo-local gate execution for headless runs
+  - dashboard Next 16/Turbopack stabilization
+  - successful operator smoke on API, `/`, and `/control-plane`
 
 That means the remaining items in this document are mostly historical planning context.
 The next intentional work should be either:
 
-- verification / stabilization / PR prep on the existing branch, or
+- review / merge / publish work on the existing branch, or
 - an explicit promotion of a `P3` item with justification for why it should become active work now
 
 That means the current work is **not** foundation building from scratch.

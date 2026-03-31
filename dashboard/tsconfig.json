@@ -30,5 +30,11 @@
     ".next/dev/types/**/*.ts",
     "**/*.mts"
   ],
-  "exclude": ["node_modules"]
+  "exclude": [
+    "node_modules",
+    "node_modules.broken-*",
+    ".node_modules.broken-*",
+    "node_modules.partial.*",
+    ".node_modules.partial.*"
+  ]
 }

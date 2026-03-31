@@ -152,6 +152,7 @@ class Orchestrator:
                 gates_config,
                 self.project_path,
                 quality_baseline=read_quality_ratchet(self.project_path),
+                base_env=env,
             )
             update_quality_ratchet(self.project_path, gate_results)
             quality_regression = any(result.regression for result in gate_results if result.required)

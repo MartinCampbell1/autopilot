@@ -37,11 +37,26 @@ Closed areas:
 Verification completed on the branch after the backlog work landed:
 
 - `./.venv/bin/python -m pytest -q`
-  - `277 passed in 8.42s`
+  - `281 passed in 7.73s`
 - `npm run build` in `dashboard`
   - passed
 - `npm run lint` in `dashboard`
-  - passed after ignoring the unrelated generated artifact directory `.next.broken-20260329`
+  - passed after narrowing the script to source/config roots and ignoring generated artifact directories
+- `./.venv/bin/autopilot dashboard --no-browser`
+  - passed smoke: backend `/api/health`, frontend `/`, and frontend `/control-plane` returned `200`
+- browser smoke on `/` and `/control-plane`
+  - passed
+- `./.venv/bin/autopilot live --once`
+  - passed
+- `./.venv/bin/autopilot status`
+  - passed
+
+Late stabilization fixes that were required to reach that state:
+
+- headless gate execution now sees repo-local `.venv` / project-local binaries instead of failing bare `ruff` lookups
+- dashboard no longer forces Next 16 through the broken `--webpack` operator path
+- dashboard build no longer trips over partial install artifacts like `node_modules.partial.*`
+- control-plane page build typing was tightened so production builds complete cleanly
 
 ## Documentation Sync Completed
 
@@ -66,3 +81,8 @@ The branch handoff docs were updated so they no longer instruct the next agent t
 - handoff/assign/send-message orchestration vocabulary
 
 Promote one of those only with an explicit justification tied to a concrete operator/runtime failure mode.
+
+## Current Ready State
+
+At this point the branch is no longer waiting on backlog implementation or product smoke hardening.
+The next sensible step is review / merge / publish work, not more feature expansion by default.
