@@ -40,6 +40,12 @@ class AgentActionBatchRunRecord(BaseModel):
     policy: dict[str, Any] = Field(default_factory=dict)
     selection: dict[str, Any] = Field(default_factory=dict)
     summary: dict[str, Any] = Field(default_factory=dict)
+    diff_summary: dict[str, Any] = Field(default_factory=dict)
+    patch_bundle: dict[str, Any] = Field(default_factory=dict)
+    preview_id: str = ""
+    artifact_ref: str = ""
+    approval_required: bool = False
+    apply_mode: str = "manual"
     results: list[dict[str, Any]] = Field(default_factory=list)
     status: str = "ok"
     project_ids: list[str] = Field(default_factory=list)
@@ -95,6 +101,12 @@ def create_agent_action_batch_run(
     policy: dict[str, Any] | None = None,
     selection: dict[str, Any] | None = None,
     summary: dict[str, Any] | None = None,
+    diff_summary: dict[str, Any] | None = None,
+    patch_bundle: dict[str, Any] | None = None,
+    preview_id: str = "",
+    artifact_ref: str = "",
+    approval_required: bool = False,
+    apply_mode: str = "manual",
     results: list[dict[str, Any]] | None = None,
     status: str = "ok",
     project_ids: list[str] | None = None,
@@ -119,6 +131,12 @@ def create_agent_action_batch_run(
         policy=dict(policy or {}),
         selection=dict(selection or {}),
         summary=dict(summary or {}),
+        diff_summary=dict(diff_summary or {}),
+        patch_bundle=dict(patch_bundle or {}),
+        preview_id=preview_id.strip(),
+        artifact_ref=artifact_ref.strip(),
+        approval_required=approval_required,
+        apply_mode=apply_mode.strip() or "manual",
         results=list(results or []),
         status=status,
         project_ids=sorted({str(item) for item in (project_ids or []) if str(item).strip()}),

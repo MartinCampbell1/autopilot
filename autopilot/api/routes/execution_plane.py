@@ -116,6 +116,7 @@ class AgentActionBatchPolicyRequest(BaseModel):
 
 class AgentActionBatchExecutionRequest(BaseModel):
     action_keys: list[str] = Field(default_factory=list)
+    preview_id: str = ""
     orchestrator_session_id: str = ""
     idempotency_key: str = ""
     actor: str = "external-orchestrator"
@@ -163,6 +164,7 @@ class OrchestratorSessionStatusRequest(BaseModel):
 
 class OrchestratorSessionActionBatchRequest(BaseModel):
     action_keys: list[str] = Field(default_factory=list)
+    preview_id: str = ""
     idempotency_key: str = ""
     actor: str = "external-orchestrator"
     mode: str = "auto"
@@ -626,6 +628,7 @@ async def execute_execution_orchestrator_session_actions(
             config,
             session_id,
             action_keys=request.action_keys,
+            preview_id=request.preview_id,
             idempotency_key=request.idempotency_key,
             actor=request.actor,
             mode=request.mode,
@@ -666,6 +669,7 @@ async def preview_execution_orchestrator_session_actions(
             config,
             session_id,
             action_keys=request.action_keys,
+            preview_id=request.preview_id,
             idempotency_key=request.idempotency_key,
             actor=request.actor,
             mode=request.mode,
@@ -887,6 +891,7 @@ async def execute_execution_agent_actions_batch(request: AgentActionBatchExecuti
         return execute_execution_plane_agent_actions(
             config,
             action_keys=request.action_keys,
+            preview_id=request.preview_id,
             orchestrator_session_id=request.orchestrator_session_id,
             idempotency_key=request.idempotency_key,
             actor=request.actor,
@@ -926,6 +931,7 @@ async def preview_execution_agent_actions_batch(request: AgentActionBatchExecuti
         return execute_execution_plane_agent_actions(
             config,
             action_keys=request.action_keys,
+            preview_id=request.preview_id,
             orchestrator_session_id=request.orchestrator_session_id,
             idempotency_key=request.idempotency_key,
             actor=request.actor,
