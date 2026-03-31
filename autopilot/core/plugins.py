@@ -5,6 +5,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from autopilot.core.config import AutopilotConfig, NotificationChannelConfig, TrackerConfig
+from autopilot.core.notifiers import channel_ready
+
 
 @dataclass(slots=True)
 class AgentProviderPlugin:
@@ -124,13 +127,63 @@ def list_notifiers() -> list[NotifierPlugin]:
     return list(_REGISTRY.notifiers.values())
 
 
+def tracker_plugin_from_config(tracker: TrackerConfig) -> TrackerPlugin:
+    return TrackerPlugin(
+        tracker_id=tracker.id,
+        display_name=tracker.display_name,
+        kind=tracker.transport,
+        metadata={
+            "source": "config",
+            "tracker_kind": tracker.kind,
+            "transport": tracker.transport,
+            "endpoint": tracker.endpoint,
+            "auth_strategy": tracker.auth_strategy,
+            "event_kinds": list(tracker.event_kinds),
+            "supports_ingest": True,
+            **dict(tracker.metadata),
+        },
+    )
+
+
+def notifier_plugin_from_channel(channel: NotificationChannelConfig) -> NotifierPlugin:
+    target = channel.webhook_url or channel.webhook_url_env or ",".join(channel.email_to) or "configured-channel"
+    return NotifierPlugin(
+        notifier_id=channel.name,
+        display_name=channel.name,
+        kind=channel.kind,
+        metadata={
+            "source": "config",
+            "transport": channel.kind,
+            "events": list(channel.events),
+            "target": target,
+            "ready": channel_ready(channel),
+        },
+    )
+
+
+def resolve_tracker_plugins(config: AutopilotConfig) -> list[TrackerPlugin]:
+    trackers = {plugin.tracker_id: plugin for plugin in list_trackers()}
+    for tracker in config.trackers:
+        plugin = tracker_plugin_from_config(tracker)
+        trackers[plugin.tracker_id] = plugin
+    return list(trackers.values())
+
+
+def resolve_notifier_plugins(config: AutopilotConfig) -> list[NotifierPlugin]:
+    notifiers = {plugin.notifier_id: plugin for plugin in list_notifiers()}
+    for channel in config.notifications:
+        plugin = notifier_plugin_from_channel(channel)
+        notifiers[plugin.notifier_id] = plugin
+    return list(notifiers.values())
+
+
 def _register_builtin_slots() -> None:
     register_tracker(
         TrackerPlugin(
             tracker_id="project_state",
             display_name="Project State Tracker",
             kind="filesystem",
-            metadata={"module": "autopilot.core.project_store"},
+            metadata={"module": "autopilot.core.project_store", "source": "builtin", "supports_ingest": False},
         )
     )
     register_notifier(
@@ -138,6 +191,7 @@ def _register_builtin_slots() -> None:
             notifier_id="telegram",
             display_name="Telegram",
             kind="telegram",
+            metadata={"source": "builtin"},
         )
     )
     register_notifier(
@@ -145,6 +199,7 @@ def _register_builtin_slots() -> None:
             notifier_id="slack_webhook",
             display_name="Slack Webhook",
             kind="slack_webhook",
+            metadata={"source": "builtin"},
         )
     )
     register_notifier(
@@ -152,6 +207,7 @@ def _register_builtin_slots() -> None:
             notifier_id="webhook",
             display_name="Webhook",
             kind="webhook",
+            metadata={"source": "builtin"},
         )
     )
     register_notifier(
@@ -159,6 +215,7 @@ def _register_builtin_slots() -> None:
             notifier_id="email",
             display_name="Email",
             kind="email",
+            metadata={"source": "builtin"},
         )
     )
     register_notifier(
@@ -166,6 +223,7 @@ def _register_builtin_slots() -> None:
             notifier_id="script",
             display_name="Script",
             kind="script",
+            metadata={"source": "builtin"},
         )
     )
 

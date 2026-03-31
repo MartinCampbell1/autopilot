@@ -27,16 +27,16 @@ from autopilot.core.capability_store import (
 )
 from autopilot.core.plugins import (
     list_agent_providers,
-    list_notifiers,
     list_runtimes,
-    list_trackers,
+    resolve_notifier_plugins,
+    resolve_tracker_plugins,
 )
 
 router = APIRouter()
 EXTENSION_LIFECYCLE = ["register", "validate", "expose", "audit"]
 
 
-def _build_extension_registry() -> dict[str, object]:
+def _build_extension_registry(config) -> dict[str, object]:
     return {
         "lifecycle": list(EXTENSION_LIFECYCLE),
         "agent_providers": [
@@ -72,7 +72,7 @@ def _build_extension_registry() -> dict[str, object]:
                 "transport": plugin.kind,
                 "metadata": plugin.metadata,
             }
-            for plugin in list_trackers()
+            for plugin in resolve_tracker_plugins(config)
         ],
         "notifiers": [
             {
@@ -82,7 +82,7 @@ def _build_extension_registry() -> dict[str, object]:
                 "transport": plugin.kind,
                 "metadata": plugin.metadata,
             }
-            for plugin in list_notifiers()
+            for plugin in resolve_notifier_plugins(config)
         ],
     }
 
@@ -134,7 +134,7 @@ async def get_capabilities_catalog() -> dict:
         "launch_presets": [preset.model_dump() for preset in DEFAULT_LAUNCH_PRESETS],
         "provider_configs": config.resolved_provider_config_payloads(),
         "runtime_profiles": config.runtime_profile_payloads(),
-        "extensions": _build_extension_registry(),
+        "extensions": _build_extension_registry(config),
     }
 
 
@@ -170,7 +170,7 @@ async def list_tools() -> dict[str, list[dict]]:
 
 @router.get("/extensions")
 async def list_extensions() -> dict[str, object]:
-    return _build_extension_registry()
+    return _build_extension_registry(get_config())
 
 
 @router.post("/connectors")
