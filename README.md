@@ -62,6 +62,54 @@ Useful patterns:
 - `autopilot trace` shows the structured worker/runtime history for a project
 - `autopilot live` renders an SSH-friendly snapshot of accounts, projects, stories, and recent events
 
+## Local-First Setup
+
+Autopilot now supports first-class local runtime contracts in addition to managed cloud CLI profiles. The two public local provider paths are:
+
+- `openai_compatible` for local or self-hosted `/v1` endpoints such as Ollama-compatible gateways or OpenAI-compatible wrappers
+- `local_command` for a local executable or wrapper script that accepts prompt input over `stdin` or via environment variables
+
+Minimal `config.yaml` example:
+
+```yaml
+providers:
+  - id: local-openai
+    family: openai_compatible
+    mode: local
+    transport: http
+    endpoint: http://127.0.0.1:11434/v1
+    auth_strategy: none
+    capabilities: [exec, review, critic]
+  - id: local-command
+    family: local_command
+    mode: local
+    transport: command
+    command:
+      - /usr/local/bin/autopilot-local-runtime
+      - --mode
+      - "{mode}"
+      - --model
+      - "{model}"
+    auth_strategy: none
+    capabilities: [exec, review]
+
+runtime_profiles:
+  - id: local
+    sandbox_mode: host
+    network_policy: local-only
+    filesystem_policy: workspace-write
+    default_tools: [shell, git]
+```
+
+Then validate and use it:
+
+```bash
+./.venv/bin/autopilot doctor /path/to/project --refresh
+./.venv/bin/autopilot run /path/to/project
+```
+
+The intake dashboard now lets you choose both `Execution Provider` and `Runtime Profile` before launch. For the full local-first contract, examples, and behavior notes, see [docs/local-first-runtime.md](/Users/martin/Desktop/autopilot/docs/local-first-runtime.md).
+
 ## Official Verification Baseline
 
 ```bash
