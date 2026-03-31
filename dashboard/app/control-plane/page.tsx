@@ -5,8 +5,6 @@ import { ControlPlaneLoadingShell } from "@/components/control-plane-loading-she
 import {
   type QueueAdvanceFeedback,
   type QueueAdvanceFocusDelta,
-  type QueueAdvanceFocusSummary,
-  type QueueAdvanceSignal,
 } from "@/components/queue-advance-notice";
 import {
   fetchAccountsHealth,
@@ -45,7 +43,6 @@ import {
   toStringValue,
 } from "@/lib/control-plane-data";
 import {
-  buildQueueAdvanceFocusDelta,
   buildScopedStorageKey,
   emptySnoozedVisibilityRecord,
   emptyVisibilityKeysRecord,
@@ -92,12 +89,8 @@ import {
   buildWorkspaceSectionProps,
 } from "@/lib/control-plane-section-props";
 import {
-  agentTimelineFilterClass,
-  agentTimelineFilterLabel,
   agentTimelinePriority,
   buildQueueAdvanceFeedback,
-  buildQueueAdvanceFocusSummary,
-  buildQueueAdvanceNoticeActionProps,
   countTriagePriorities,
   describeAgentQueueAdvanceReason,
   describeSessionQueueAdvanceReason,
@@ -109,8 +102,6 @@ import {
   nextBestTriageItem,
   nextSessionLineageQueueEntry,
   nextTriageEntryByPriority,
-  sessionLineageFilterClass,
-  sessionLineageFilterLabel,
   sessionLineagePriority,
   sessionLineageQueuePosition,
   sessionLineageTraits,
@@ -122,6 +113,7 @@ import {
   useControlPlaneActions,
 } from "@/lib/use-control-plane-actions";
 import { useControlPlaneLinkedSelection } from "@/lib/use-control-plane-linked-selection";
+import { useControlPlaneQueueAdvance } from "@/lib/use-control-plane-queue-advance";
 import { useControlPlaneRevealFlows } from "@/lib/use-control-plane-reveal-flows";
 import { useControlPlaneTriageInbox } from "@/lib/use-control-plane-triage-inbox";
 import { useSSE } from "@/lib/sse";
@@ -1742,40 +1734,6 @@ export default function ControlPlanePage() {
     }),
     [activeAgentTimelineEntries]
   );
-  const sessionQueueAdvanceFocusSummary = useMemo<QueueAdvanceFocusSummary | null>(() => {
-    if (!sessionQueueAdvanceFeedback) return null;
-    return buildQueueAdvanceFocusSummary({
-      activeFilter: sessionLineageFilter,
-      total: sessionLineageEntries.length,
-      visible: filteredSessionLineageEntries.length,
-      labelForFilter: sessionLineageFilterLabel,
-      classForFilter: sessionLineageFilterClass,
-      noun: "lineage chains",
-      scopeLabel: "session",
-    });
-  }, [
-    filteredSessionLineageEntries.length,
-    sessionLineageEntries.length,
-    sessionLineageFilter,
-    sessionQueueAdvanceFeedback,
-  ]);
-  const agentQueueAdvanceFocusSummary = useMemo<QueueAdvanceFocusSummary | null>(() => {
-    if (!agentQueueAdvanceFeedback) return null;
-    return buildQueueAdvanceFocusSummary({
-      activeFilter: agentTimelineFilter,
-      total: activeAgentTimelineEntries.length,
-      visible: filteredAgentTimelineEntries.length,
-      labelForFilter: agentTimelineFilterLabel,
-      classForFilter: agentTimelineFilterClass,
-      noun: "active timeline items",
-      scopeLabel: "agent",
-    });
-  }, [
-    activeAgentTimelineEntries.length,
-    agentQueueAdvanceFeedback,
-    agentTimelineFilter,
-    filteredAgentTimelineEntries.length,
-  ]);
   useEffect(() => {
     if (!filteredAgentTimelineEntries.length) {
       setSelectedAgentTimelineKey("");
@@ -2060,126 +2018,35 @@ export default function ControlPlanePage() {
     },
     [inspectAgentTimelineEntry, restoreAgentTimelineEntryVisibility, revealAgentTimelineEntry]
   );
-  const applySessionQueueFocus = useCallback(
-    (nextFilter: string, entry?: SessionLineageEntry | null) => {
-      setSessionQueueFocusDelta(
-        buildQueueAdvanceFocusDelta(
-          sessionLineageFilterLabel(sessionLineageFilter),
-          sessionLineageFilterLabel(nextFilter),
-          sessionLineageFilterCounts[sessionLineageFilter] ?? sessionLineageEntries.length,
-          sessionLineageFilterCounts[nextFilter] ?? sessionLineageEntries.length
-        )
-      );
-      if (entry) {
-        focusSessionLineageEntry(entry, nextFilter);
-        return;
-      }
-      setSessionLineageFilter(nextFilter);
-    },
-    [
-      focusSessionLineageEntry,
-      sessionLineageEntries.length,
-      sessionLineageFilter,
-      sessionLineageFilterCounts,
-    ]
-  );
-  const applyAgentQueueFocus = useCallback(
-    (nextFilter: string, entry?: AgentTimelineEntry | null) => {
-      setAgentQueueFocusDelta(
-        buildQueueAdvanceFocusDelta(
-          agentTimelineFilterLabel(agentTimelineFilter),
-          agentTimelineFilterLabel(nextFilter),
-          agentTimelineFilterCounts[agentTimelineFilter] ?? activeAgentTimelineEntries.length,
-          agentTimelineFilterCounts[nextFilter] ?? activeAgentTimelineEntries.length
-        )
-      );
-      focusAgentTimeline(nextFilter, entry ? { entry } : undefined);
-      if (entry) {
-        inspectAgentTimelineEntry(entry);
-      }
-    },
-    [
-      activeAgentTimelineEntries.length,
-      agentTimelineFilter,
-      agentTimelineFilterCounts,
-      focusAgentTimeline,
-      inspectAgentTimelineEntry,
-    ]
-  );
-  const focusSessionQueueAdvanceSignal = useCallback(
-    (signal: QueueAdvanceSignal) => {
-      const target = sessionQueueAdvanceFeedback?.nextTarget;
-      if (!target || target.kind !== "session-lineage") return;
-      applySessionQueueFocus(signal.focusFilter || target.filter, target.entry);
-    },
-    [applySessionQueueFocus, sessionQueueAdvanceFeedback]
-  );
-  const focusAgentQueueAdvanceSignal = useCallback(
-    (signal: QueueAdvanceSignal) => {
-      const target = agentQueueAdvanceFeedback?.nextTarget;
-      if (!target || target.kind !== "agent-timeline") return;
-      applyAgentQueueFocus(signal.focusFilter || "all", target.entry);
-    },
-    [agentQueueAdvanceFeedback, applyAgentQueueFocus]
-  );
-  const sessionQueueAdvanceNoticeActions = useMemo(
-    () =>
-      buildQueueAdvanceNoticeActionProps({
-        feedback: sessionQueueAdvanceFeedback,
-        onOpenTarget: openSessionQueueAdvanceTarget,
-        onSignalClick: focusSessionQueueAdvanceSignal,
-        onResetFocus: () => {
-          applySessionQueueFocus(
-            "all",
-            sessionQueueAdvanceFeedback?.nextTarget?.kind === "session-lineage"
-              ? sessionQueueAdvanceFeedback.nextTarget.entry
-              : null
-          );
-        },
-        onOpenMatchingQueue: currentSessionLineageQueue
-          ? () => {
-              openCurrentSessionLineageQueue();
-            }
-          : undefined,
-      }),
-    [
-      applySessionQueueFocus,
-      currentSessionLineageQueue,
-      focusSessionQueueAdvanceSignal,
-      openCurrentSessionLineageQueue,
-      openSessionQueueAdvanceTarget,
-      sessionQueueAdvanceFeedback,
-    ]
-  );
-  const agentQueueAdvanceNoticeActions = useMemo(
-    () =>
-      buildQueueAdvanceNoticeActionProps({
-        feedback: agentQueueAdvanceFeedback,
-        onOpenTarget: openAgentQueueAdvanceTarget,
-        onSignalClick: focusAgentQueueAdvanceSignal,
-        onResetFocus: () => {
-          applyAgentQueueFocus(
-            "all",
-            agentQueueAdvanceFeedback?.nextTarget?.kind === "agent-timeline"
-              ? agentQueueAdvanceFeedback.nextTarget.entry
-              : undefined
-          );
-        },
-        onOpenMatchingQueue: currentAgentPriorityQueue
-          ? () => {
-              openCurrentAgentPriorityQueue();
-            }
-          : undefined,
-      }),
-    [
-      agentQueueAdvanceFeedback,
-      applyAgentQueueFocus,
-      currentAgentPriorityQueue,
-      focusAgentQueueAdvanceSignal,
-      openAgentQueueAdvanceTarget,
-      openCurrentAgentPriorityQueue,
-    ]
-  );
+  const {
+    sessionQueueAdvanceFocusSummary,
+    agentQueueAdvanceFocusSummary,
+    sessionQueueAdvanceNoticeActions,
+    agentQueueAdvanceNoticeActions,
+  } = useControlPlaneQueueAdvance({
+    sessionLineageFilter,
+    sessionLineageEntriesCount: sessionLineageEntries.length,
+    filteredSessionLineageEntriesCount: filteredSessionLineageEntries.length,
+    sessionLineageFilterCounts,
+    focusSessionLineageEntry,
+    setSessionLineageFilter,
+    sessionQueueAdvanceFeedback,
+    setSessionQueueFocusDelta,
+    currentSessionLineageQueue,
+    openCurrentSessionLineageQueue,
+    openSessionQueueAdvanceTarget,
+    agentTimelineFilter,
+    activeAgentTimelineEntriesCount: activeAgentTimelineEntries.length,
+    filteredAgentTimelineEntriesCount: filteredAgentTimelineEntries.length,
+    agentTimelineFilterCounts,
+    focusAgentTimeline,
+    inspectAgentTimelineEntry,
+    agentQueueAdvanceFeedback,
+    setAgentQueueFocusDelta,
+    currentAgentPriorityQueue,
+    openCurrentAgentPriorityQueue,
+    openAgentQueueAdvanceTarget,
+  });
   const {
     triageInboxItems,
     triageInboxItemCount,
