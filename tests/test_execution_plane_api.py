@@ -629,6 +629,7 @@ def test_execution_plane_routes_create_list_and_detail_projects(
     assert payload["project"]["source_kind"] == "execution_brief"
     assert payload["project"]["task_source"]["source_kind"] == "execution_brief"
     assert payload["project"]["task_source"]["branch_policy"] == "isolated_worktree"
+    assert payload["project"]["delivery_loop"]["source"]["source_kind"] == "execution_brief"
     assert payload["project"]["initiative"]["id"] == "init_founderos_1"
     assert payload["project"]["orchestration"]["orchestrator"] == "founderos"
     assert payload["project"]["execution_brief_path"].endswith(".agents/tasks/execution-brief.json")
@@ -659,6 +660,8 @@ def test_execution_plane_routes_create_list_and_detail_projects(
     detail = detail_response.json()
     assert detail["brief"]["provenance"]["source_system"] == "quorum"
     assert detail["task_source"]["source_kind"] == "execution_brief"
+    assert detail["delivery_loop"]["brief"]["present"] is True
+    assert detail["delivery_loop"]["run"]["status"] == "idle"
     assert detail["command_policy"]["parallel_launch_requires_approval"] is True
     assert detail["provider_config"]["family"] == "codex"
     assert detail["runtime_profile"]["id"] == "cloud"
