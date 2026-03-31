@@ -1385,6 +1385,54 @@ def _project_progress_counts(stories: list[dict[str, Any]]) -> tuple[int, int]:
     return done, total
 
 
+def _build_project_handoff_summary(stories: list[dict[str, Any]]) -> dict[str, Any] | None:
+    candidates: list[dict[str, Any]] = []
+    for story in stories:
+        github_pr = dict(story.get("github_pr") or {})
+        if not github_pr:
+            continue
+        if not (
+            github_pr.get("number")
+            or github_pr.get("url")
+            or str(github_pr.get("handoff_status") or "").strip().lower() not in {"", "not_requested"}
+            or str(github_pr.get("merge_state") or "").strip().lower() not in {"", "not_ready"}
+            or str(story.get("branch_name") or "").strip()
+        ):
+            continue
+        candidates.append(
+            {
+                "story_id": int(story["id"]),
+                "story_title": str(story.get("title") or ""),
+                "head_branch": str(github_pr.get("head_branch") or story.get("branch_name") or "").strip(),
+                "number": github_pr.get("number"),
+                "url": str(github_pr.get("url") or "").strip(),
+                "state": str(github_pr.get("state") or "").strip(),
+                "ci_status": str(github_pr.get("ci_status") or "").strip(),
+                "review_status": str(github_pr.get("review_status") or "").strip(),
+                "handoff_status": str(github_pr.get("handoff_status") or "").strip(),
+                "merge_state": str(github_pr.get("merge_state") or "").strip(),
+                "updated_at": (
+                    github_pr.get("updated_at")
+                    or story.get("updated_at")
+                    or story.get("completed_at")
+                    or story.get("started_at")
+                ),
+            }
+        )
+
+    if not candidates:
+        return None
+
+    candidates.sort(
+        key=lambda candidate: (
+            str(candidate.get("updated_at") or ""),
+            int(candidate.get("story_id") or 0),
+        ),
+        reverse=True,
+    )
+    return candidates[0]
+
+
 def _resolve_launch_contract(
     config: AutopilotConfig,
     launch_profile: dict[str, Any] | None,
@@ -1402,6 +1450,7 @@ def build_project_summary(config: AutopilotConfig, project: dict[str, Any]) -> d
     launch_profile, provider_config, runtime_profile = _resolve_launch_contract(config, state.get("launch_profile"))
     stories = merge_project_stories(config, project, state)
     stories_done, stories_total = _project_progress_counts(stories)
+    latest_handoff = _build_project_handoff_summary(stories)
     current_story = next((story for story in stories if story["id"] == state.get("current_story_id")), None)
     last_event = state.get("timeline", [])[-1] if state.get("timeline") else None
     return {
@@ -1423,6 +1472,7 @@ def build_project_summary(config: AutopilotConfig, project: dict[str, Any]) -> d
         "provider_config": provider_config,
         "runtime_profile": runtime_profile,
         "task_source": resolve_project_task_source(project),
+        "latest_handoff": latest_handoff,
         "budget_policy": state.get("budget_policy", default_budget_policy()),
         "budget_usage": state.get("budget_usage", default_budget_usage()),
         "quality_policy": state.get("quality_policy", default_quality_policy()),

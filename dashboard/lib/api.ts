@@ -31,6 +31,7 @@ import type {
   MCPConnector,
   RoutingPolicy,
   SkillPack,
+  TaskSource,
 } from "@/lib/types";
 
 export const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8420/api";
@@ -522,7 +523,8 @@ export async function resolveExecutionPlaneIssue(
 export async function createProjectFromPrd(
   prd: object,
   projectName?: string,
-  projectPath?: string
+  projectPath?: string,
+  taskSource?: TaskSource | null
 ): Promise<CreateProjectResult> {
   const res = await fetch(`${API_BASE}/projects/`, {
     method: "POST",
@@ -531,6 +533,7 @@ export async function createProjectFromPrd(
       prd,
       project_name: projectName || null,
       project_path: projectPath || null,
+      task_source: taskSource ?? null,
     }),
   });
   return jsonOrThrow<CreateProjectResult>(res, `Project creation failed: ${res.status}`);

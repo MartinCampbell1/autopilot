@@ -166,6 +166,36 @@ def test_runtime_control_route_returns_workspace_policy(tmp_path: Path, monkeypa
     assert "leases" in payload
 
 
+def test_create_project_route_accepts_task_source_contract(tmp_path: Path, monkeypatch) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    client = _build_client(config, monkeypatch)
+
+    create_response = client.post(
+        "/api/projects/",
+        json={
+            "project_name": "Issue Project",
+            "project_path": str(tmp_path / "issue-project"),
+            "task_source": {
+                "source_kind": "github_issue",
+                "external_id": "42",
+                "repo": "martin/autopilot",
+                "branch_policy": "isolated_worktree",
+                "brief_ref": "",
+            },
+            "prd": {
+                "title": "Issue Project",
+                "stories": [{"id": 1, "title": "Bootstrap", "description": "Start"}],
+            },
+        },
+    )
+
+    assert create_response.status_code == 200
+    project_id = create_response.json()["project_id"]
+    detail = client.get(f"/api/projects/{project_id}").json()
+    assert detail["task_source"]["source_kind"] == "github_issue"
+    assert detail["task_source"]["repo"] == "martin/autopilot"
+
+
 def test_recover_checkout_route_clears_story_checkout(tmp_path: Path, monkeypatch) -> None:
     config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
     client = _build_client(config, monkeypatch)
