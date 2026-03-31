@@ -153,3 +153,36 @@ class TestAccountManager:
         assert "ollama" in manager.pools
         assert profile is not None
         assert profile.name == "ollama"
+
+    def test_get_next_can_target_named_stateless_runtime(self, tmp_path: Path) -> None:
+        profiles_dir = tmp_path / "profiles"
+        config = AutopilotConfig(
+            autopilot_home_override=str(tmp_path / ".autopilot"),
+            providers=[
+                ProviderConfig(
+                    id="ollama-local-a",
+                    family="ollama",
+                    mode="local",
+                    transport="command",
+                    command=["ollama"],
+                    auth_strategy="none",
+                    capabilities=["exec", "review"],
+                ),
+                ProviderConfig(
+                    id="ollama-local-b",
+                    family="ollama",
+                    mode="local",
+                    transport="command",
+                    command=["ollama"],
+                    auth_strategy="none",
+                    capabilities=["exec", "review"],
+                ),
+            ],
+        )
+
+        manager = AccountManager(profiles_dir=profiles_dir, config=config)
+        manager.discover()
+        profile = manager.get_next("ollama", preferred_name="ollama-local-b")
+
+        assert profile is not None
+        assert profile.name == "ollama-local-b"

@@ -115,6 +115,30 @@ def test_parallel_preset_normalizes_to_team_parallel_mode() -> None:
     assert runtime["launch_profile"]["review_phases"] == ["security", "architecture", "tests"]
 
 
+def test_local_provider_defaults_runtime_profile_to_local() -> None:
+    profile = normalize_launch_profile({"preset": "team", "provider": "ollama"})
+
+    assert profile.provider == "ollama"
+    assert profile.runtime_profile_id == "local"
+
+
+def test_local_provider_runtime_plan_uses_selected_provider() -> None:
+    runtime = resolve_story_runtime_plan(
+        {
+            "id": 31,
+            "title": "Local backend slice",
+            "description": "Implement a backend slice on a local runtime.",
+            "tags": ["backend", "api"],
+        },
+        launch_profile={"preset": "team", "provider": "ollama", "runtime_profile_id": "local"},
+    )
+
+    assert runtime["launch_profile"]["provider"] == "ollama"
+    assert runtime["launch_profile"]["runtime_profile_id"] == "local"
+    assert all(member["provider"] == "ollama" for member in runtime["team_members"])
+    assert runtime["activation_errors"] == []
+
+
 def test_story_pipeline_override_can_skip_research_even_in_team_mode() -> None:
     runtime = resolve_story_runtime_plan(
         {

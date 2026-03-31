@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import shlex
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 import yaml
@@ -186,6 +186,30 @@ class AutopilotConfig:
 
     def provider_configs_for_family(self, family: str) -> list[ProviderConfig]:
         return [provider for provider in self.resolved_provider_configs() if provider.family == family]
+
+    def resolve_provider_config(self, family: str, provider_id: str | None = None) -> ProviderConfig:
+        candidates = self.provider_configs_for_family(family)
+        if provider_id:
+            selected = next((provider for provider in candidates if provider.id == provider_id), None)
+            if selected is not None:
+                return selected
+        if candidates:
+            return candidates[0]
+        return self.default_provider_config(family)
+
+    def resolve_runtime_profile(self, profile_id: str | None = None) -> RuntimeProfileConfig:
+        requested = str(profile_id or "").strip()
+        if requested:
+            selected = next((profile for profile in self.runtime_profiles if profile.id == requested), None)
+            if selected is not None:
+                return selected
+        return self.runtime_profiles[0] if self.runtime_profiles else _default_runtime_profiles()[0]
+
+    def resolved_provider_config_payloads(self) -> list[dict[str, object]]:
+        return [asdict(provider) for provider in self.resolved_provider_configs()]
+
+    def runtime_profile_payloads(self) -> list[dict[str, object]]:
+        return [asdict(profile) for profile in self.runtime_profiles]
 
 
 DEFAULT_CONFIG = AutopilotConfig()

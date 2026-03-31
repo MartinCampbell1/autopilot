@@ -30,6 +30,21 @@ def test_capabilities_catalog_lists_defaults(tmp_path: Path, monkeypatch) -> Non
     assert any(connector_type["id"] == "mcp_server" for connector_type in payload["connector_types"])
     assert any(policy["role_id"] == "frontend_worker" for policy in payload["routing_policies"])
     assert any(preset["id"] == "parallel" for preset in payload["launch_presets"])
+    assert any(provider["family"] == "codex" for provider in payload["provider_configs"])
+    assert any(profile["id"] == "local" for profile in payload["runtime_profiles"])
+
+
+def test_capabilities_routes_list_provider_and_runtime_contracts(tmp_path: Path, monkeypatch) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    client = _build_client(config, monkeypatch)
+
+    providers_response = client.get("/api/capabilities/providers")
+    runtime_profiles_response = client.get("/api/capabilities/runtime-profiles")
+
+    assert providers_response.status_code == 200
+    assert runtime_profiles_response.status_code == 200
+    assert any(provider["family"] == "codex" for provider in providers_response.json()["provider_configs"])
+    assert any(profile["id"] == "cloud" for profile in runtime_profiles_response.json()["runtime_profiles"])
 
 
 def test_create_and_update_connector_and_skill_pack(tmp_path: Path, monkeypatch) -> None:
