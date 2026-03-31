@@ -1,4 +1,5 @@
 "use client";
+import { useCallback } from "react";
 import {
   asRecord,
   describeRunResult,
@@ -61,7 +62,12 @@ import {
   useControlPlaneViewState,
 } from "@/lib/use-control-plane-view-state";
 
-export function useControlPlanePageController(initialSelection?: ControlPlaneViewSelection) {
+type BuildControlPlaneUrl = (selection: ControlPlaneViewSelection) => string;
+
+export function useControlPlanePageController(
+  initialSelection?: ControlPlaneViewSelection,
+  buildControlPlaneUrl?: BuildControlPlaneUrl
+) {
   const TRIAGE_INBOX_FEEDBACK_LIMIT = 5;
   const {
     health,
@@ -228,6 +234,29 @@ export function useControlPlanePageController(initialSelection?: ControlPlaneVie
     toStringValue,
     triageInboxFeedbackLimit: TRIAGE_INBOX_FEEDBACK_LIMIT,
   });
+
+  const copyControlPlaneLink = useCallback(
+    async (selection: ControlPlaneViewSelection, successMessage: string) => {
+      const url = buildControlPlaneUrl?.(selection);
+      if (!url) {
+        setErrorMessage("Unable to build control plane link.");
+        return;
+      }
+
+      try {
+        if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+          await navigator.clipboard.writeText(url);
+          setNotice(successMessage);
+          setErrorMessage("");
+          return;
+        }
+        setErrorMessage("Clipboard is unavailable in this environment.");
+      } catch (error) {
+        setErrorMessage(error instanceof Error ? error.message : "Failed to copy control plane link.");
+      }
+    },
+    [buildControlPlaneUrl, setErrorMessage, setNotice]
+  );
 
   useControlPlaneOperatorPersistence({
     selectedSessionId,
@@ -964,6 +993,26 @@ export function useControlPlanePageController(initialSelection?: ControlPlaneVie
     rejectApproval,
     applyApproval,
     resolveIssue,
+    onCopySessionLink: () => {
+      void copyControlPlaneLink(
+        {
+          sessionId: selectedSessionId || null,
+        },
+        "Copied session link."
+      );
+    },
+    canCopyFocusedLink: Boolean(selectedAgentId || selectedRunId || selectedPassId),
+    onCopyFocusedLink: () => {
+      void copyControlPlaneLink(
+        {
+          sessionId: selectedSessionId || null,
+          agentId: selectedAgentId || null,
+          runId: selectedRunId || null,
+          passId: selectedPassId || null,
+        },
+        "Copied focused control link."
+      );
+    },
   });
 
   const headerSectionProps = buildHeaderSectionProps({
@@ -982,6 +1031,17 @@ export function useControlPlanePageController(initialSelection?: ControlPlaneVie
     totalSessionCount: sessions.length,
     filteredControlPassHistoryCount: filteredControlPassHistory.length,
     totalControlPassCount: controlPasses.length,
+    onCopyCurrentLink: () => {
+      void copyControlPlaneLink(
+        {
+          sessionId: selectedSessionId || null,
+          agentId: selectedAgentId || null,
+          runId: selectedRunId || null,
+          passId: selectedPassId || null,
+        },
+        "Copied current control plane link."
+      );
+    },
   });
 
   const mainSectionsProps = buildMainSectionsProps({

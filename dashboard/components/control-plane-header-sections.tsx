@@ -27,6 +27,7 @@ type ControlPlaneHeaderSectionsProps = {
   totalSessionCount: number;
   filteredControlPassHistoryCount: number;
   totalControlPassCount: number;
+  onCopyCurrentLink: () => void;
 };
 
 export function ControlPlaneHeaderSections({
@@ -46,6 +47,7 @@ export function ControlPlaneHeaderSections({
   totalSessionCount,
   filteredControlPassHistoryCount,
   totalControlPassCount,
+  onCopyCurrentLink,
 }: ControlPlaneHeaderSectionsProps) {
   return (
     <>
@@ -95,14 +97,24 @@ export function ControlPlaneHeaderSections({
                 <span className="text-[#9b9a97]">No session selected</span>
               )}
             </div>
-            <Button
-              size="sm"
-              className="mt-4 h-9 w-full rounded-lg bg-[#1a1a1a] text-[13px] hover:bg-[#333]"
-              disabled={refreshing}
-              onClick={onRefresh}
-            >
-              {refreshing ? "Refreshing..." : "Refresh control plane"}
-            </Button>
+            <div className="mt-4 grid gap-2">
+              <Button
+                size="sm"
+                className="h-9 w-full rounded-lg bg-[#1a1a1a] text-[13px] hover:bg-[#333]"
+                disabled={refreshing}
+                onClick={onRefresh}
+              >
+                {refreshing ? "Refreshing..." : "Refresh control plane"}
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-9 w-full rounded-lg border-[#e5e5e3] bg-white text-[13px] text-[#37352f] hover:bg-[#f7f7f5]"
+                onClick={onCopyCurrentLink}
+              >
+                Copy current link
+              </Button>
+            </div>
           </div>
         </div>
       </header>

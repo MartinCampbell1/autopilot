@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useEffect, useMemo } from "react";
+import { Suspense, useCallback, useEffect, useMemo } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { ControlPlaneLayout } from "@/components/control-plane-layout";
 import { ControlPlaneLoadingShell } from "@/components/control-plane-loading-shell";
@@ -19,6 +19,29 @@ function ControlPlanePageInner({
   searchParamsString,
 }: ControlPlanePageInnerProps) {
   const router = useRouter();
+  const buildControlPlaneUrl = useCallback(
+    (selection: ControlPlaneViewSelection) => {
+      const next = new URLSearchParams(searchParamsString);
+
+      if (selection.sessionId) next.set("session", selection.sessionId);
+      else next.delete("session");
+
+      if (selection.agentId) next.set("agent", selection.agentId);
+      else next.delete("agent");
+
+      if (selection.runId) next.set("run", selection.runId);
+      else next.delete("run");
+
+      if (selection.passId) next.set("pass", selection.passId);
+      else next.delete("pass");
+
+      const nextQuery = next.toString();
+      const relativeUrl = nextQuery ? `${pathname}?${nextQuery}` : pathname;
+      if (typeof window === "undefined") return relativeUrl;
+      return new URL(relativeUrl, window.location.origin).toString();
+    },
+    [pathname, searchParamsString]
+  );
   const {
     loading,
     health,
@@ -29,7 +52,7 @@ function ControlPlanePageInner({
     selectedPassId,
     headerSectionProps,
     mainSectionsProps,
-  } = useControlPlanePageController(initialSelection);
+  } = useControlPlanePageController(initialSelection, buildControlPlaneUrl);
 
   useEffect(() => {
     const current = searchParamsString;

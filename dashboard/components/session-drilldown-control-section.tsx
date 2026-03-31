@@ -36,6 +36,9 @@ type SessionDrilldownControlSectionProps = {
   onClearEntitySearch: () => void;
   sortedProfiles: OrchestratorSessionControlProfile[];
   busyActionKey: string;
+  onCopySessionLink: () => void;
+  canCopyFocusedLink: boolean;
+  onCopyFocusedLink: () => void;
   onApplyControlPlan: (profile: OrchestratorSessionControlProfile) => void;
   onApplyRecommendation: (recommendation: OrchestratorSessionControlRecommendation) => void;
 };
@@ -58,6 +61,9 @@ export function SessionDrilldownControlSection({
   onClearEntitySearch,
   sortedProfiles,
   busyActionKey,
+  onCopySessionLink,
+  canCopyFocusedLink,
+  onCopyFocusedLink,
   onApplyControlPlan,
   onApplyRecommendation,
 }: SessionDrilldownControlSectionProps) {
@@ -90,7 +96,25 @@ export function SessionDrilldownControlSection({
             {selectedSession.reason ? ` · ${selectedSession.reason}` : ""}
           </p>
         </div>
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <Button
+            size="sm"
+            variant="outline"
+            className="h-8 rounded-full border-[#e5e5e3] bg-white px-3 text-[12px] font-medium text-[#37352f] hover:bg-[#f7f7f5]"
+            onClick={onCopySessionLink}
+          >
+            Copy session link
+          </Button>
+          {canCopyFocusedLink ? (
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-8 rounded-full border-[#e5e5e3] bg-white px-3 text-[12px] font-medium text-[#37352f] hover:bg-[#f7f7f5]"
+              onClick={onCopyFocusedLink}
+            >
+              Copy focused link
+            </Button>
+          ) : null}
           {selectedSession.project_ids.map((projectId) => (
             <Link
               key={`${selectedSession.id}-${projectId}`}

@@ -151,6 +151,7 @@ type BuildHeaderSectionPropsArgs = {
   totalSessionCount: number;
   filteredControlPassHistoryCount: number;
   totalControlPassCount: number;
+  onCopyCurrentLink: () => void;
 };
 
 export function buildWorkspaceSectionProps({
@@ -449,6 +450,7 @@ export function buildHeaderSectionProps({
   totalSessionCount,
   filteredControlPassHistoryCount,
   totalControlPassCount,
+  onCopyCurrentLink,
 }: BuildHeaderSectionPropsArgs): HeaderSectionProps {
   return {
     latestControlPassAt,
@@ -471,6 +473,7 @@ export function buildHeaderSectionProps({
     totalSessionCount,
     filteredControlPassHistoryCount,
     totalControlPassCount,
+    onCopyCurrentLink,
   };
 }
 

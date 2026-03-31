@@ -89,6 +89,9 @@ type BuildSessionDrilldownSectionPropsArgs = {
   rejectApproval: (approval: ExecutionApprovalRecord) => Promise<void>;
   applyApproval: (approval: ExecutionApprovalRecord) => Promise<void>;
   resolveIssue: (issue: ExecutionIssueRecord) => Promise<void>;
+  onCopySessionLink: () => void;
+  canCopyFocusedLink: boolean;
+  onCopyFocusedLink: () => void;
 };
 
 export function buildSessionDrilldownSectionProps({
@@ -152,6 +155,9 @@ export function buildSessionDrilldownSectionProps({
   rejectApproval,
   applyApproval,
   resolveIssue,
+  onCopySessionLink,
+  canCopyFocusedLink,
+  onCopyFocusedLink,
 }: BuildSessionDrilldownSectionPropsArgs): SessionDrilldownSectionProps {
   return {
     selectedSessionId,
@@ -180,6 +186,9 @@ export function buildSessionDrilldownSectionProps({
           },
           sortedProfiles,
           busyActionKey,
+          onCopySessionLink,
+          canCopyFocusedLink,
+          onCopyFocusedLink,
           onApplyControlPlan: (profile) => {
             void applyControlPlan(profile);
           },
