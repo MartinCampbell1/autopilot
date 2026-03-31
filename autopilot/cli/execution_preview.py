@@ -42,10 +42,35 @@ def _int_value(value: Any, fallback: int) -> int:
     return parsed if parsed > 0 else fallback
 
 
+def _dict_records(value: Any) -> list[dict[str, Any]]:
+    return [item for item in (value or []) if isinstance(item, dict)]
+
+
+def _dedupe_records_by_id(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    deduped: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    for record in records:
+        record_id = _string_value(record.get("id"))
+        if not record_id or record_id in seen_ids:
+            continue
+        deduped.append(record)
+        seen_ids.add(record_id)
+    return deduped
+
+
 def _render_batch_run_payload(payload: dict[str, Any], *, heading: str) -> None:
     run = dict(payload.get("run") or {})
     diff_summary = dict(payload.get("diff_summary") or {})
     command_counts = dict(diff_summary.get("command_counts") or {})
+    policy_reason_counts = dict(diff_summary.get("policy_reason_counts") or {})
+    why = [item for item in (diff_summary.get("why") or []) if _string_value(item)]
+    results = _dict_records(payload.get("results"))
+    approvals = _dedupe_records_by_id(
+        [dict(result.get("approval") or {}) for result in results if isinstance(result.get("approval"), dict)]
+    )
+    issues = _dedupe_records_by_id(
+        [dict(result.get("issue") or {}) for result in results if isinstance(result.get("issue"), dict)]
+    )
 
     console.print(Panel.fit(f"[bold]{heading}[/bold]"))
     table = Table(show_header=False, box=None)
@@ -74,6 +99,69 @@ def _render_batch_run_payload(payload: dict[str, Any], *, heading: str) -> None:
         for command, count in sorted(command_counts.items()):
             commands.add_row(str(command), str(count))
         console.print(commands)
+
+    if policy_reason_counts:
+        reasons = Table(title="Gate Reasons")
+        reasons.add_column("Reason")
+        reasons.add_column("Count", justify="right")
+        for reason, count in sorted(policy_reason_counts.items()):
+            reasons.add_row(str(reason), str(count))
+        console.print(reasons)
+
+    if why:
+        console.print(Panel("\n".join(f"- {item}" for item in why[:5]), title="Why", expand=False))
+
+    if approvals:
+        approvals_table = Table(title="Approvals")
+        approvals_table.add_column("Approval")
+        approvals_table.add_column("Status")
+        approvals_table.add_column("Action")
+        approvals_table.add_column("Issue")
+        for approval in approvals:
+            approvals_table.add_row(
+                _string_value(approval.get("id"), "-"),
+                _string_value(approval.get("status"), "-"),
+                _string_value(approval.get("action"), "-"),
+                _string_value(approval.get("issue_id"), "-"),
+            )
+        console.print(approvals_table)
+
+    if issues:
+        issues_table = Table(title="Issues")
+        issues_table.add_column("Issue")
+        issues_table.add_column("Status")
+        issues_table.add_column("Category")
+        issues_table.add_column("Approval")
+        for issue in issues:
+            issues_table.add_row(
+                _string_value(issue.get("id"), "-"),
+                _string_value(issue.get("status"), "-"),
+                _string_value(issue.get("category"), "-"),
+                _string_value(issue.get("approval_id"), "-"),
+            )
+        console.print(issues_table)
+
+    if approvals:
+        console.print(
+            Panel.fit(
+                "Approvals were created from this preview path. Review them in the dashboard before continuing.",
+                title="Next Step",
+            )
+        )
+    elif issues:
+        console.print(
+            Panel.fit(
+                "Linked issues were created during apply. Resolve or reject them before retrying execution.",
+                title="Next Step",
+            )
+        )
+    elif bool(payload.get("approval_required")):
+        console.print(
+            Panel.fit(
+                "This preview is approval-gated. Applying it will request approval instead of mutating directly.",
+                title="Next Step",
+            )
+        )
 
 
 def preview_actions(
