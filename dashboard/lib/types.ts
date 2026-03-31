@@ -58,6 +58,36 @@ export interface ConnectorActivation {
   config: Record<string, unknown>;
 }
 
+export interface ToolContract {
+  tool_id: string;
+  connector_id: string;
+  name: string;
+  kind: string;
+  transport: string;
+  scope: string;
+  approval_policy: string;
+  provider_compatibility: string[];
+  description: string;
+  enabled: boolean;
+  built_in: boolean;
+  validation_status: string;
+}
+
+export interface ToolActivation {
+  tool_id: string;
+  connector_id: string;
+  name: string;
+  kind: string;
+  transport: string;
+  scope: string;
+  approval_policy: string;
+  provider_compatibility: string[];
+  provider: string;
+  required: boolean;
+  status: string;
+  reason: string;
+}
+
 export interface TeamMemberAssignment {
   member_id: string;
   label: string;
@@ -151,6 +181,8 @@ export interface Story {
   review_phases?: string[];
   discoveries?: DiscoveryMarker[];
   connector_activation?: ConnectorActivation[];
+  tools?: ToolContract[];
+  active_tools?: ToolActivation[];
   activation_errors?: string[];
   worktree_path?: string | null;
   branch_name?: string | null;
@@ -214,6 +246,7 @@ export interface ProjectDetail extends ProjectSummary {
   launch_profile: LaunchProfile;
   team_assignments: Record<string, TeamMemberAssignment[]>;
   active_connectors: Record<string, ConnectorActivation[]>;
+  active_tools: Record<string, ToolActivation[]>;
   activation_errors: Record<string, string[]>;
 }
 
@@ -826,8 +859,28 @@ export interface ConnectorValidationResult {
   checked_fields: string[];
 }
 
+export interface ExtensionRegistryItem {
+  extension_id: string;
+  display_name: string;
+  kind: string;
+  provider_family?: string | null;
+  adapter_id?: string | null;
+  runtime_id?: string | null;
+  transport?: string | null;
+  metadata: Record<string, unknown>;
+}
+
+export interface ExtensionRegistry {
+  lifecycle: string[];
+  agent_providers: ExtensionRegistryItem[];
+  runtimes: ExtensionRegistryItem[];
+  trackers: ExtensionRegistryItem[];
+  notifiers: ExtensionRegistryItem[];
+}
+
 export interface CapabilitiesCatalog {
   connectors: MCPConnector[];
+  tools: ToolContract[];
   skill_packs: SkillPack[];
   roles: RoleTemplate[];
   connector_types: ConnectorTypeSchema[];
@@ -835,6 +888,7 @@ export interface CapabilitiesCatalog {
   launch_presets: LaunchPreset[];
   provider_configs: ProviderConfig[];
   runtime_profiles: RuntimeProfile[];
+  extensions: ExtensionRegistry;
 }
 
 export interface CreateProjectResult {

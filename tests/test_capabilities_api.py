@@ -25,6 +25,7 @@ def test_capabilities_catalog_lists_defaults(tmp_path: Path, monkeypatch) -> Non
     assert response.status_code == 200
     payload = response.json()
     assert any(connector["id"] == "browser_devtools" for connector in payload["connectors"])
+    assert any(tool["tool_id"] == "browser_devtools" for tool in payload["tools"])
     assert any(skill_pack["id"] == "fastapi-backend" for skill_pack in payload["skill_packs"])
     assert any(role["id"] == "backend_worker" for role in payload["roles"])
     assert any(connector_type["id"] == "mcp_server" for connector_type in payload["connector_types"])
@@ -32,6 +33,7 @@ def test_capabilities_catalog_lists_defaults(tmp_path: Path, monkeypatch) -> Non
     assert any(preset["id"] == "parallel" for preset in payload["launch_presets"])
     assert any(provider["family"] == "codex" for provider in payload["provider_configs"])
     assert any(profile["id"] == "local" for profile in payload["runtime_profiles"])
+    assert any(tracker["extension_id"] == "project_state" for tracker in payload["extensions"]["trackers"])
 
 
 def test_capabilities_routes_list_provider_and_runtime_contracts(tmp_path: Path, monkeypatch) -> None:
@@ -45,6 +47,19 @@ def test_capabilities_routes_list_provider_and_runtime_contracts(tmp_path: Path,
     assert runtime_profiles_response.status_code == 200
     assert any(provider["family"] == "codex" for provider in providers_response.json()["provider_configs"])
     assert any(profile["id"] == "cloud" for profile in runtime_profiles_response.json()["runtime_profiles"])
+
+
+def test_capabilities_routes_list_tools_and_extensions(tmp_path: Path, monkeypatch) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    client = _build_client(config, monkeypatch)
+
+    tools_response = client.get("/api/capabilities/tools")
+    extensions_response = client.get("/api/capabilities/extensions")
+
+    assert tools_response.status_code == 200
+    assert extensions_response.status_code == 200
+    assert any(tool["tool_id"] == "shell_exec" for tool in tools_response.json()["tools"])
+    assert any(item["extension_id"] == "project_state" for item in extensions_response.json()["trackers"])
 
 
 def test_create_and_update_connector_and_skill_pack(tmp_path: Path, monkeypatch) -> None:

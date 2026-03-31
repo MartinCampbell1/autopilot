@@ -11,6 +11,7 @@ from autopilot.core.capability_store import (
     MCPConnector,
     RoutingPolicy,
     SkillPack,
+    build_tool_catalog,
     delete_connector,
     delete_skill_pack,
     get_connector_type_schema,
@@ -24,8 +25,66 @@ from autopilot.core.capability_store import (
     upsert_skill_pack,
     validate_connector_config,
 )
+from autopilot.core.plugins import (
+    list_agent_providers,
+    list_notifiers,
+    list_runtimes,
+    list_trackers,
+)
 
 router = APIRouter()
+EXTENSION_LIFECYCLE = ["register", "validate", "expose", "audit"]
+
+
+def _build_extension_registry() -> dict[str, object]:
+    return {
+        "lifecycle": list(EXTENSION_LIFECYCLE),
+        "agent_providers": [
+            {
+                "extension_id": plugin.provider_family,
+                "display_name": plugin.display_name,
+                "kind": "provider",
+                "provider_family": plugin.provider_family,
+                "adapter_id": plugin.adapter_id,
+                "runtime_id": plugin.runtime_id,
+                "metadata": plugin.metadata,
+            }
+            for plugin in list_agent_providers()
+        ],
+        "runtimes": [
+            {
+                "extension_id": plugin.runtime_id,
+                "display_name": plugin.display_name,
+                "kind": "runtime",
+                "runtime_id": plugin.runtime_id,
+                "provider_family": plugin.provider_family,
+                "adapter_id": plugin.adapter_id,
+                "transport": plugin.kind,
+                "metadata": plugin.metadata,
+            }
+            for plugin in list_runtimes()
+        ],
+        "trackers": [
+            {
+                "extension_id": plugin.tracker_id,
+                "display_name": plugin.display_name,
+                "kind": "tracker",
+                "transport": plugin.kind,
+                "metadata": plugin.metadata,
+            }
+            for plugin in list_trackers()
+        ],
+        "notifiers": [
+            {
+                "extension_id": plugin.notifier_id,
+                "display_name": plugin.display_name,
+                "kind": "notifier",
+                "transport": plugin.kind,
+                "metadata": plugin.metadata,
+            }
+            for plugin in list_notifiers()
+        ],
+    }
 
 
 class ConnectorRequest(BaseModel):
@@ -64,8 +123,10 @@ class RoutingPolicyRequest(BaseModel):
 @router.get("/catalog")
 async def get_capabilities_catalog() -> dict:
     config = get_config()
+    connectors = load_connectors_registry(config)
     return {
-        "connectors": [connector.model_dump() for connector in load_connectors_registry(config)],
+        "connectors": [connector.model_dump() for connector in connectors],
+        "tools": [tool.model_dump() for tool in build_tool_catalog(connectors)],
         "skill_packs": [skill_pack.model_dump() for skill_pack in load_skill_packs_registry(config)],
         "roles": [role.model_dump() for role in load_role_templates()],
         "connector_types": [connector_type.model_dump() for connector_type in load_connector_type_catalog()],
@@ -73,6 +134,7 @@ async def get_capabilities_catalog() -> dict:
         "launch_presets": [preset.model_dump() for preset in DEFAULT_LAUNCH_PRESETS],
         "provider_configs": config.resolved_provider_config_payloads(),
         "runtime_profiles": config.runtime_profile_payloads(),
+        "extensions": _build_extension_registry(),
     }
 
 
@@ -97,6 +159,18 @@ async def list_connector_types() -> dict:
 async def list_connectors() -> dict[str, list[dict]]:
     config = get_config()
     return {"connectors": [connector.model_dump() for connector in load_connectors_registry(config)]}
+
+
+@router.get("/tools")
+async def list_tools() -> dict[str, list[dict]]:
+    config = get_config()
+    connectors = load_connectors_registry(config)
+    return {"tools": [tool.model_dump() for tool in build_tool_catalog(connectors)]}
+
+
+@router.get("/extensions")
+async def list_extensions() -> dict[str, object]:
+    return _build_extension_registry()
 
 
 @router.post("/connectors")

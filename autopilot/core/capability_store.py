@@ -138,6 +138,40 @@ class ConnectorActivation(BaseModel):
     config: dict = Field(default_factory=dict)
 
 
+class ToolContract(BaseModel):
+    """Public tool-layer contract derived from the connector registry."""
+
+    tool_id: str
+    connector_id: str
+    name: str
+    kind: str
+    transport: str
+    scope: str
+    approval_policy: str
+    provider_compatibility: list[str] = Field(default_factory=list)
+    description: str = ""
+    enabled: bool = True
+    built_in: bool = False
+    validation_status: str = "unknown"
+
+
+class ToolActivation(BaseModel):
+    """Resolved runtime state for one public tool contract."""
+
+    tool_id: str
+    connector_id: str
+    name: str
+    kind: str
+    transport: str
+    scope: str
+    approval_policy: str
+    provider_compatibility: list[str] = Field(default_factory=list)
+    provider: str
+    required: bool = False
+    status: str = "disabled"
+    reason: str = ""
+
+
 class TeamMemberAssignment(BaseModel):
     """Resolved runtime assignment for one member of a story team."""
 
@@ -1025,6 +1059,130 @@ def validate_connector_config(connector: MCPConnector) -> ConnectorValidationRes
         log="Validation completed successfully.",
         checked_fields=checked_fields,
     )
+
+
+TOOL_KIND_BY_CONNECTOR_ID: dict[str, str] = {
+    "shell_exec": "shell",
+    "python_exec": "workspace",
+    "browser_devtools": "browser_devtools",
+    "http_api": "http_api",
+    "postgres": "database",
+    "neo4j": "database",
+}
+TOOL_KIND_BY_CONNECTOR_TYPE: dict[str, str] = {
+    "builtin": "workspace",
+    "mcp_server": "mcp_server",
+    "http_api": "http_api",
+    "neo4j": "database",
+    "postgres": "database",
+    "custom": "custom",
+}
+APPROVAL_POLICY_BY_RISK_LEVEL: dict[str, str] = {
+    "low": "auto",
+    "medium": "policy",
+    "high": "manual",
+}
+
+
+def tool_kind_for_connector(connector: MCPConnector) -> str:
+    """Map an internal connector to the public tool kind used in the product surface."""
+
+    return TOOL_KIND_BY_CONNECTOR_ID.get(
+        connector.id,
+        TOOL_KIND_BY_CONNECTOR_TYPE.get(connector.connector_type, connector.connector_type or "custom"),
+    )
+
+
+def tool_scope_for_connector(connector: MCPConnector) -> str:
+    """Return the primary scope shown in the public tool contract."""
+
+    for scope in connector.scopes:
+        normalized = str(scope).strip()
+        if normalized:
+            return normalized
+    return "workspace"
+
+
+def tool_approval_policy_for_connector(connector: MCPConnector) -> str:
+    """Derive the operator approval policy from the connector risk level."""
+
+    return APPROVAL_POLICY_BY_RISK_LEVEL.get(str(connector.risk_level or "").strip().lower(), "policy")
+
+
+def build_tool_contract(connector: MCPConnector) -> ToolContract:
+    """Convert one connector registry entry into the public tool-layer contract."""
+
+    return ToolContract(
+        tool_id=connector.id,
+        connector_id=connector.id,
+        name=connector.name,
+        kind=tool_kind_for_connector(connector),
+        transport=connector.transport,
+        scope=tool_scope_for_connector(connector),
+        approval_policy=tool_approval_policy_for_connector(connector),
+        provider_compatibility=list(connector.providers),
+        description=connector.description,
+        enabled=connector.enabled,
+        built_in=connector.built_in,
+        validation_status=connector.validation_status,
+    )
+
+
+def build_tool_catalog(connectors: list[MCPConnector]) -> list[ToolContract]:
+    """Expose the current connector registry as a user-facing tool catalog."""
+
+    return [build_tool_contract(connector) for connector in connectors]
+
+
+def build_tool_activation_catalog(
+    activations: list[ConnectorActivation],
+    *,
+    available_connectors: list[MCPConnector] | None = None,
+) -> list[ToolActivation]:
+    """Expose runtime connector activation through the stable public tool contract."""
+
+    connectors_by_id = {connector.id: connector for connector in (available_connectors or list(DEFAULT_CONNECTORS))}
+    tools: list[ToolActivation] = []
+    for raw_activation in activations:
+        activation = (
+            raw_activation
+            if isinstance(raw_activation, ConnectorActivation)
+            else ConnectorActivation.model_validate(raw_activation)
+        )
+        connector = connectors_by_id.get(activation.id)
+        if connector is not None:
+            contract = build_tool_contract(connector)
+        else:
+            contract = ToolContract(
+                tool_id=activation.id,
+                connector_id=activation.id,
+                name=activation.name,
+                kind=activation.connector_type or "custom",
+                transport="builtin",
+                scope="workspace",
+                approval_policy="policy",
+                provider_compatibility=[activation.provider] if activation.provider else [],
+                enabled=False,
+                built_in=False,
+                validation_status="unknown",
+            )
+        tools.append(
+            ToolActivation(
+                tool_id=contract.tool_id,
+                connector_id=contract.connector_id,
+                name=contract.name,
+                kind=contract.kind,
+                transport=contract.transport,
+                scope=contract.scope,
+                approval_policy=contract.approval_policy,
+                provider_compatibility=contract.provider_compatibility,
+                provider=activation.provider,
+                required=activation.required,
+                status=activation.status,
+                reason=activation.reason,
+            )
+        )
+    return tools
 
 
 TAG_KEYWORDS: dict[str, tuple[str, ...]] = {
