@@ -59,7 +59,8 @@ def build_account_diagnostics_snapshot(
     cached = load_account_probe_state(config)
     providers_payload: dict[str, list[dict[str, Any]]] = {}
 
-    for provider in list_provider_families():
+    configured_families = config.configured_provider_families() or list_provider_families()
+    for provider in configured_families:
         profiles = manager.pools.get(provider, [])
         cached_entries = {
             entry["name"]: entry
@@ -127,18 +128,31 @@ def build_provider_setup_snapshot(
     )
     providers_payload: dict[str, dict[str, Any]] = {}
 
-    for provider in list_provider_families():
+    configured_families = config.configured_provider_families() or list_provider_families()
+    for provider in configured_families:
         adapter = get_adapter(provider)
         cli_probe = adapter.test_environment(timeout=timeout)
         profile_entries = diagnostics.get("providers", {}).get(provider, [])
+        provider_contracts = [asdict(provider_config) for provider_config in config.provider_configs_for_family(provider)]
+        if not provider_contracts:
+            provider_contracts = [asdict(config.default_provider_config(provider))]
+        session_source_dir = provider_source_dir(provider, home=home)
+        source_session_required = adapter.auth_strategy != "none"
         providers_payload[provider] = {
             "provider": provider,
             "adapter_id": adapter.adapter_id,
             "install_hint": adapter.install_hint,
+            "mode": adapter.provider_mode,
+            "transport": adapter.transport,
+            "auth_strategy": adapter.auth_strategy,
+            "capabilities": adapter.capabilities,
             "cli_probe": _serialize_probe(cli_probe),
-            "session_source_dir": str(provider_source_dir(provider, home=home)),
+            "session_source_dir": str(session_source_dir) if session_source_dir is not None else None,
+            "source_session_required": source_session_required,
             "source_session_available": provider_has_logged_in_session(provider, home=home),
             "login_command": provider_login_command(provider),
+            "provider_config": provider_contracts[0],
+            "provider_configs": provider_contracts,
             "managed_profile_count": len(profile_entries),
             "available_profile_count": sum(1 for entry in profile_entries if entry.get("available")),
             "ready_profile_count": sum(
@@ -156,5 +170,7 @@ def build_provider_setup_snapshot(
 
     return {
         "recorded_at": diagnostics.get("recorded_at"),
+        "provider_configs": [asdict(provider_config) for provider_config in config.resolved_provider_configs()],
+        "runtime_profiles": [asdict(profile) for profile in config.runtime_profiles],
         "providers": providers_payload,
     }

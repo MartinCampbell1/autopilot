@@ -23,7 +23,7 @@ def version() -> None:
 
 
 @app.command()
-def login(provider: str = typer.Argument(help="Provider: codex, claude, or gemini")) -> None:
+def login(provider: str = typer.Argument(help="Provider family to import or validate for local execution.")) -> None:
     """Save a logged-in CLI session as a reusable profile."""
     from autopilot.cli.login import login as _login
 

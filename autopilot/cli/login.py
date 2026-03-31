@@ -9,6 +9,7 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
+from autopilot.core.adapters import get_adapter, list_provider_families
 from autopilot.core.config import load_config
 
 console = Console()
@@ -26,11 +27,15 @@ PROVIDER_VALIDATION = {
 }
 
 
-def login(provider: str = typer.Argument(help="Provider: codex, claude, or gemini")) -> None:
+def login(provider: str = typer.Argument(help="Provider family to import or validate for local execution.")) -> None:
     """Save a logged-in CLI session as a reusable profile."""
-    if provider not in ("codex", "claude", "gemini"):
-        console.print(f"[red]Unknown provider: {provider}. Use: codex, claude, gemini[/red]")
+    if provider not in set(list_provider_families()):
+        supported = ", ".join(list_provider_families())
+        console.print(f"[red]Unknown provider: {provider}. Use: {supported}[/red]")
         raise typer.Exit(1)
+    if not get_adapter(provider).requires_managed_profile:
+        console.print(f"[yellow]{provider} uses stateless local execution and does not require login/import.[/yellow]")
+        raise typer.Exit(0)
 
     config = load_config(Path.home() / ".autopilot" / "config.yaml")
     provider_dir = config.profiles_dir / provider

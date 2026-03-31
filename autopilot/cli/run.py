@@ -530,7 +530,11 @@ def _run_impl(
         return build_preflight_summary(str(project), project_id=project_id, message=message)
 
     config = load_config(Path.home() / ".autopilot" / "config.yaml")
-    account_mgr = AccountManager(profiles_dir=config.profiles_dir, cooldown_base=config.cooldown_base_sec)
+    account_mgr = AccountManager(
+        profiles_dir=config.profiles_dir,
+        cooldown_base=config.cooldown_base_sec,
+        config=config,
+    )
     account_mgr.discover()
 
     if "codex" not in account_mgr.pools:
