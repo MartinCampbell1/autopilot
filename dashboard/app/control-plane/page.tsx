@@ -107,6 +107,7 @@ import {
   type PendingLineageAutoAdvance,
   useControlPlaneActions,
 } from "@/lib/use-control-plane-actions";
+import { useControlPlaneAgentTimelineSelection } from "@/lib/use-control-plane-agent-timeline-selection";
 import { useControlPlaneBootstrap } from "@/lib/use-control-plane-bootstrap";
 import { useControlPlaneLinkedSelection } from "@/lib/use-control-plane-linked-selection";
 import { useControlPlaneOperatorPersistence } from "@/lib/use-control-plane-operator-persistence";
@@ -1361,27 +1362,14 @@ export default function ControlPlanePage() {
     }),
     [activeAgentTimelineEntries]
   );
-  useEffect(() => {
-    if (!filteredAgentTimelineEntries.length) {
-      setSelectedAgentTimelineKey("");
-      return;
-    }
-    setSelectedAgentTimelineKey((current) =>
-      current && filteredAgentTimelineEntries.some((entry) => agentTimelineEntryKey(entry) === current)
-        ? current
-        : agentTimelineEntryKey(filteredAgentTimelineEntries[0])
-    );
-  }, [filteredAgentTimelineEntries]);
-  const selectedAgentTimelineEntry = useMemo(
-    () =>
-      filteredAgentTimelineEntries.find(
-        (entry) => agentTimelineEntryKey(entry) === selectedAgentTimelineKey
-      ) ?? filteredAgentTimelineEntries[0] ?? null,
-    [filteredAgentTimelineEntries, selectedAgentTimelineKey]
-  );
-  useEffect(() => {
-    selectedAgentTimelineEntryRef.current = selectedAgentTimelineEntry;
-  }, [selectedAgentTimelineEntry]);
+  const { selectedAgentTimelineEntry } = useControlPlaneAgentTimelineSelection({
+    selectedAgentId,
+    filteredAgentTimelineEntries,
+    selectedAgentTimelineKey,
+    setSelectedAgentTimelineKey,
+    setExpandedAgentPriorityQueues,
+    selectedAgentTimelineEntryRef,
+  });
   const visibleAgentTimelineEntries = useMemo(
     () =>
       withSelectedItem(
@@ -1728,9 +1716,6 @@ export default function ControlPlanePage() {
   useEffect(() => {
     setExpandedSessionLineageQueues([...SESSION_LINEAGE_QUEUE_KEYS]);
   }, [selectedSessionId]);
-  useEffect(() => {
-    setExpandedAgentPriorityQueues([...AGENT_PRIORITY_QUEUE_KEYS]);
-  }, [selectedAgentId]);
   useEffect(() => {
     if (!pendingAgentPriorityAutoAdvance) return;
     const entries =
