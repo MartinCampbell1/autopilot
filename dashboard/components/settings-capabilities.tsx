@@ -29,6 +29,7 @@ import type {
   RoutingPolicy,
   RuntimeProfile,
   SkillPack,
+  ToolContract,
 } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -249,6 +250,17 @@ function runtimeProfileSummary(runtimeProfile: RuntimeProfile) {
   return `${runtimeProfile.sandbox_mode} · ${runtimeProfile.network_policy} · ${runtimeProfile.filesystem_policy}`;
 }
 
+function toolSummary(tool: ToolContract) {
+  return `${tool.kind} · ${tool.scope} · ${tool.approval_policy}`;
+}
+
+const EXTENSION_GROUPS = [
+  { label: "Providers", itemsKey: "agent_providers" as const },
+  { label: "Runtimes", itemsKey: "runtimes" as const },
+  { label: "Trackers", itemsKey: "trackers" as const },
+  { label: "Notifiers", itemsKey: "notifiers" as const },
+];
+
 function applyConnectorPreset(preset: (typeof CONNECTOR_PRESETS)[number]): ConnectorDraft {
   return {
     ...EMPTY_CONNECTOR,
@@ -360,6 +372,7 @@ function renderConnectorFieldInput(
 export function SettingsCapabilitiesManager() {
   const [catalog, setCatalog] = useState<CapabilitiesCatalog>({
     connectors: [],
+    tools: [],
     skill_packs: [],
     roles: [],
     connector_types: [],
@@ -367,6 +380,13 @@ export function SettingsCapabilitiesManager() {
     launch_presets: [],
     provider_configs: [],
     runtime_profiles: [],
+    extensions: {
+      lifecycle: [],
+      agent_providers: [],
+      runtimes: [],
+      trackers: [],
+      notifiers: [],
+    },
   });
   const [activeTab, setActiveTab] = useState<"connectors" | "skill-packs" | "routing">("connectors");
   const [selectedConnectorId, setSelectedConnectorId] = useState<string>("");
@@ -701,8 +721,15 @@ export function SettingsCapabilitiesManager() {
 
   const connectorCount = catalog.connectors.length;
   const enabledConnectorCount = catalog.connectors.filter((item) => item.enabled).length;
+  const toolCount = catalog.tools.length;
+  const enabledToolCount = catalog.tools.filter((item) => item.enabled).length;
   const skillPackCount = catalog.skill_packs.length;
   const enabledSkillPackCount = catalog.skill_packs.filter((item) => item.enabled).length;
+  const extensionSlotCount =
+    catalog.extensions.agent_providers.length +
+    catalog.extensions.runtimes.length +
+    catalog.extensions.trackers.length +
+    catalog.extensions.notifiers.length;
   const filteredConnectors = catalog.connectors.filter((connector) => {
     const haystack = `${connector.id} ${connector.name} ${connector.description} ${connector.tags.join(" ")}`.toLowerCase();
     return haystack.includes(connectorFilter.trim().toLowerCase());
@@ -754,9 +781,14 @@ export function SettingsCapabilitiesManager() {
     <div className="space-y-6">
       <div className="grid gap-3 md:grid-cols-4">
         <div className="rounded-[12px] border border-[#e5e5e3] bg-white px-4 py-3 shadow-[0_1px_3px_rgba(15,15,15,0.08)]">
+          <p className="text-[11px] uppercase tracking-[0.08em] text-[#9b9a97]">Tools</p>
+          <p className="mt-1 text-[20px] font-semibold text-[#37352f]">{toolCount}</p>
+          <p className="mt-1 text-[12px] text-[#787774]">{enabledToolCount} active contracts</p>
+        </div>
+        <div className="rounded-[12px] border border-[#e5e5e3] bg-white px-4 py-3 shadow-[0_1px_3px_rgba(15,15,15,0.08)]">
           <p className="text-[11px] uppercase tracking-[0.08em] text-[#9b9a97]">Connectors</p>
           <p className="mt-1 text-[20px] font-semibold text-[#37352f]">{connectorCount}</p>
-          <p className="mt-1 text-[12px] text-[#787774]">{enabledConnectorCount} enabled</p>
+          <p className="mt-1 text-[12px] text-[#787774]">{enabledConnectorCount} backing the tool layer</p>
         </div>
         <div className="rounded-[12px] border border-[#e5e5e3] bg-white px-4 py-3 shadow-[0_1px_3px_rgba(15,15,15,0.08)]">
           <p className="text-[11px] uppercase tracking-[0.08em] text-[#9b9a97]">Skill packs</p>
@@ -764,21 +796,17 @@ export function SettingsCapabilitiesManager() {
           <p className="mt-1 text-[12px] text-[#787774]">{enabledSkillPackCount} enabled</p>
         </div>
         <div className="rounded-[12px] border border-[#e5e5e3] bg-white px-4 py-3 shadow-[0_1px_3px_rgba(15,15,15,0.08)]">
-          <p className="text-[11px] uppercase tracking-[0.08em] text-[#9b9a97]">Roles</p>
-          <p className="mt-1 text-[20px] font-semibold text-[#37352f]">{catalog.roles.length}</p>
-          <p className="mt-1 text-[12px] text-[#787774]">Planner and worker routing templates</p>
-        </div>
-        <div className="rounded-[12px] border border-[#e5e5e3] bg-white px-4 py-3 shadow-[0_1px_3px_rgba(15,15,15,0.08)]">
-          <p className="text-[11px] uppercase tracking-[0.08em] text-[#9b9a97]">Catalog</p>
+          <p className="text-[11px] uppercase tracking-[0.08em] text-[#9b9a97]">Extension Slots</p>
           <p className="mt-1 text-[20px] font-semibold text-[#37352f]">{loading ? "Syncing" : "Ready"}</p>
-          <p className="mt-1 text-[12px] text-[#787774]">Local connector registry and skill packs</p>
+          <p className="mt-1 text-[12px] text-[#787774]">{extensionSlotCount} provider/runtime/tracker/notifier slots</p>
         </div>
       </div>
 
       <div className="rounded-[14px] border border-[#e5e5e3] bg-white px-5 py-4 shadow-[0_1px_3px_rgba(15,15,15,0.08),0_0_1px_rgba(15,15,15,0.04)]">
         <p className="text-[14px] leading-relaxed text-[#37352f]">
           Configure the exact MCP servers, API adapters, and skill packs available to Autopilot workers.
-          Connectors are persisted locally; the planner uses this catalog to tag stories and assign roles.
+          Connector definitions stay local, but Autopilot now exposes them as a public tool layer with
+          explicit kind, scope, approval policy, and provider compatibility.
         </p>
         <p className="mt-2 min-h-[20px] text-[13px] text-[#787774]">{message}</p>
       </div>
@@ -801,7 +829,7 @@ export function SettingsCapabilitiesManager() {
               <div className="flex items-center justify-between border-b border-[#ecebe8] px-4 py-3">
                 <div>
                   <h3 className="text-[14px] font-semibold text-[#37352f]">MCP / API connectors</h3>
-                  <p className="text-[12px] text-[#9b9a97]">Choose a connector to edit or create a new one.</p>
+                  <p className="text-[12px] text-[#9b9a97]">Edit the backing connector registry for the public tool layer.</p>
                 </div>
                 <Button
                   size="sm"
@@ -1693,6 +1721,67 @@ export function SettingsCapabilitiesManager() {
                                 No runtime profiles were returned by the capability catalog.
                               </p>
                             )}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                    <div>
+                      <p className="text-[11px] uppercase tracking-[0.08em] text-[#9b9a97]">User-facing tool layer</p>
+                      <div className="mt-3 grid gap-3 xl:grid-cols-2">
+                        <div className="rounded-[10px] border border-[#ecebe8] bg-white px-3 py-3">
+                          <p className="text-[12px] font-semibold text-[#37352f]">Tool contracts</p>
+                          <div className="mt-3 space-y-2">
+                            {catalog.tools.length ? (
+                              catalog.tools.map((tool) => (
+                                <div key={tool.tool_id} className="rounded-[8px] border border-[#ecebe8] bg-[#fbfbf9] px-3 py-2.5">
+                                  <div className="flex flex-wrap items-center justify-between gap-2">
+                                    <p className="text-[12px] font-semibold text-[#37352f]">
+                                      {tool.name}
+                                    </p>
+                                    <span className="rounded-full bg-white px-2 py-0.5 text-[11px] font-medium text-[#6b6b6b]">
+                                      {tool.kind}
+                                    </span>
+                                  </div>
+                                  <p className="mt-1 text-[12px] text-[#787774]">{tool.tool_id}</p>
+                                  <p className="mt-1 text-[12px] text-[#787774]">{toolSummary(tool)}</p>
+                                  <p className="mt-1 text-[12px] text-[#787774]">
+                                    Providers: {tool.provider_compatibility.join(", ") || "none declared"}
+                                  </p>
+                                </div>
+                              ))
+                            ) : (
+                              <p className="text-[12px] text-[#787774]">
+                                No tool contracts were returned by the capability catalog.
+                              </p>
+                            )}
+                          </div>
+                        </div>
+                        <div className="rounded-[10px] border border-[#ecebe8] bg-white px-3 py-3">
+                          <p className="text-[12px] font-semibold text-[#37352f]">Extension registry</p>
+                          <p className="mt-1 text-[12px] leading-relaxed text-[#787774]">
+                            Lifecycle: {catalog.extensions.lifecycle.join(" -> ") || "register -> validate -> expose -> audit"}
+                          </p>
+                          <div className="mt-3 space-y-3">
+                            {EXTENSION_GROUPS.map(({ label, itemsKey }) => {
+                              const items = catalog.extensions[itemsKey];
+                              return (
+                              <div key={label} className="rounded-[8px] border border-[#ecebe8] bg-[#fbfbf9] px-3 py-2.5">
+                                <div className="flex items-center justify-between gap-2">
+                                  <p className="text-[12px] font-semibold text-[#37352f]">{label}</p>
+                                  <span className="rounded-full bg-white px-2 py-0.5 text-[11px] font-medium text-[#6b6b6b]">
+                                    {items.length}
+                                  </span>
+                                </div>
+                                <p className="mt-2 text-[12px] text-[#787774]">
+                                  {items.length
+                                    ? items
+                                        .map((item) => `${item.display_name} (${item.extension_id})`)
+                                        .join(", ")
+                                    : "No slots registered."}
+                                </p>
+                              </div>
+                              );
+                            })}
                           </div>
                         </div>
                       </div>

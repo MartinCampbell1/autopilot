@@ -21,6 +21,8 @@ import yaml
 from autopilot.core.capability_store import (
     DEFAULT_CONNECTORS,
     DEFAULT_SKILL_PACKS,
+    build_tool_activation_catalog,
+    build_tool_catalog,
     enrich_story_plan,
     load_connectors_registry,
     load_routing_policies_registry,
@@ -1107,6 +1109,27 @@ def _resolve_story_runtime_metadata(
     story: dict[str, Any],
     runtime: dict[str, Any],
 ) -> dict[str, Any]:
+    available_connectors = load_connectors_registry(config)
+    story_connector_ids = {
+        str(connector_id).strip()
+        for connector_id in story.get("connectors", [])
+        if str(connector_id).strip()
+    }
+    runtime_connector_ids = story_connector_ids or {
+        str((activation or {}).get("id") or "").strip()
+        for activation in runtime.get("connector_activation") or []
+        if str((activation or {}).get("id") or "").strip()
+    }
+    planned_tools = [
+        tool.model_dump()
+        for tool in build_tool_catalog(
+            [
+                connector
+                for connector in available_connectors
+                if connector.id in runtime_connector_ids
+            ]
+        )
+    ]
     launch_profile = normalize_launch_profile(state.get("launch_profile"))
     team_mode = runtime.get("team_mode")
     team_members = runtime.get("team_members") or []
@@ -1114,6 +1137,13 @@ def _resolve_story_runtime_metadata(
     review_phases = runtime.get("review_phases") or []
     pipeline_state = runtime.get("pipeline_state") or []
     connector_activation = runtime.get("connector_activation") or []
+    active_tools = [
+        tool.model_dump()
+        for tool in build_tool_activation_catalog(
+            connector_activation,
+            available_connectors=available_connectors,
+        )
+    ]
     activation_errors = runtime.get("activation_errors") or []
     has_runtime_plan = bool(
         team_members
@@ -1131,6 +1161,8 @@ def _resolve_story_runtime_metadata(
             "review_phases": review_phases or list(story.get("review_phases") or []),
             "pipeline_state": pipeline_state,
             "connector_activation": connector_activation,
+            "planned_tools": planned_tools,
+            "active_tools": active_tools,
             "activation_errors": activation_errors,
         }
 
@@ -1138,10 +1170,15 @@ def _resolve_story_runtime_metadata(
         story,
         launch_profile=launch_profile,
         provider=launch_profile.provider,
-        connectors=load_connectors_registry(config),
+        connectors=available_connectors,
         skill_packs=load_skill_packs_registry(config),
         routing_policies=load_routing_policies_registry(config),
     )
+    resolved_story_connector_ids = {
+        str(connector_id).strip()
+        for connector_id in (resolved.get("story") or {}).get("connectors", [])
+        if str(connector_id).strip()
+    }
     return {
         "team_mode": resolved["team_mode"],
         "team_members": runtime.get("team_members") or resolved["team_members"],
@@ -1153,6 +1190,20 @@ def _resolve_story_runtime_metadata(
             runtime.get("team_members") or resolved["team_members"],
         ),
         "connector_activation": runtime.get("connector_activation") or resolved["active_connectors"],
+        "planned_tools": planned_tools
+        or [
+            tool.model_dump()
+            for tool in build_tool_catalog(available_connectors)
+            if tool.tool_id in resolved_story_connector_ids
+        ],
+        "active_tools": runtime.get("active_tools")
+        or [
+            tool.model_dump()
+            for tool in build_tool_activation_catalog(
+                runtime.get("connector_activation") or resolved["active_connectors"],
+                available_connectors=available_connectors,
+            )
+        ],
         "activation_errors": runtime.get("activation_errors") or resolved["activation_errors"],
     }
 
@@ -1201,6 +1252,8 @@ def merge_project_stories(
                 "discoveries": build_story_discovery_context(state, story_id=int(story["id"])),
                 "pipeline_state": runtime_metadata["pipeline_state"],
                 "connector_activation": runtime_metadata["connector_activation"],
+                "tools": runtime_metadata["planned_tools"],
+                "active_tools": runtime_metadata["active_tools"],
                 "activation_errors": runtime_metadata["activation_errors"],
                 "worktree_path": runtime.get("worktree_path"),
                 "branch_name": runtime.get("branch_name"),
@@ -1317,6 +1370,11 @@ def build_project_detail(config: AutopilotConfig, project_id: str) -> dict[str, 
         for story in stories
         if story["id"] in running_story_ids or story.get("connector_activation")
     }
+    active_tools = {
+        str(story["id"]): story.get("active_tools", [])
+        for story in stories
+        if story["id"] in running_story_ids or story.get("active_tools")
+    }
     activation_errors = {
         str(story["id"]): story.get("activation_errors", [])
         for story in stories
@@ -1357,6 +1415,7 @@ def build_project_detail(config: AutopilotConfig, project_id: str) -> dict[str, 
         "discoveries": build_story_discovery_context(state, story_id=None),
         "team_assignments": team_assignments,
         "active_connectors": active_connectors,
+        "active_tools": active_tools,
         "activation_errors": activation_errors,
         "trace_summary": trace_summary,
         "trace_path": trace_file,

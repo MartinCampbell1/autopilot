@@ -3,9 +3,12 @@
 from autopilot.core.capability_store import (
     DEFAULT_CONNECTORS,
     DEFAULT_ROUTING_POLICIES,
+    ConnectorActivation,
     LaunchProfile,
     MCPConnector,
     RoutingPolicy,
+    build_tool_activation_catalog,
+    build_tool_contract,
     normalize_launch_profile,
     normalize_review_phases,
     activate_connector_set,
@@ -96,6 +99,35 @@ def test_invalid_required_connector_blocks_activation() -> None:
 
     assert activations[0].status == "validation_failed"
     assert blocking_errors == ["Broken HTTP: Missing required field `base_url`."]
+
+
+def test_tool_contract_exposes_public_schema_for_connector() -> None:
+    connector = next(item for item in DEFAULT_CONNECTORS if item.id == "shell_exec")
+
+    contract = build_tool_contract(connector)
+
+    assert contract.tool_id == "shell_exec"
+    assert contract.kind == "shell"
+    assert contract.scope == "workspace"
+    assert contract.approval_policy == "manual"
+
+
+def test_tool_activation_catalog_tracks_runtime_tool_state() -> None:
+    activation = ConnectorActivation(
+        id="browser_devtools",
+        name="Browser DevTools",
+        connector_type="builtin",
+        provider="codex",
+        required=False,
+        status="active",
+        reason="Connector activated for runtime planning.",
+    )
+
+    tools = build_tool_activation_catalog([activation], available_connectors=list(DEFAULT_CONNECTORS))
+
+    assert tools[0].tool_id == "browser_devtools"
+    assert tools[0].kind == "browser_devtools"
+    assert tools[0].status == "active"
 
 
 def test_parallel_preset_normalizes_to_team_parallel_mode() -> None:
