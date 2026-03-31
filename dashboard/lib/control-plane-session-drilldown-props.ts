@@ -187,6 +187,8 @@ export function buildSessionDrilldownSectionProps({
           linkedApprovalsCount: linkedApprovals.length,
           filteredIssuesCount: filteredIssues.length,
           linkedIssuesCount: linkedIssues.length,
+          linkedApprovals,
+          linkedIssues,
           entitySearch,
           onEntitySearchChange: setEntitySearch,
           onClearEntitySearch: () => {
@@ -195,12 +197,28 @@ export function buildSessionDrilldownSectionProps({
           sortedProfiles,
           busyActionKey,
           selectedRunId,
+          selectedSessionApprovalId,
+          selectedSessionIssueId,
           onCopySessionLink,
           canCopyFocusedLink,
           onCopyFocusedLink,
           latestPreviewRun,
           latestPreviewAppliedRun,
           onInspectRun: setSelectedRunId,
+          onInspectApproval: (approval) => {
+            syncLinkedSelection({
+              approvalId: approval.id,
+              issueId: approval.issue_id,
+              runtimeAgentId: approval.runtime_agent_ids[0],
+            });
+          },
+          onInspectIssue: (issue) => {
+            syncLinkedSelection({
+              issueId: issue.id,
+              approvalId: issue.approval_id,
+              runtimeAgentId: issue.runtime_agent_ids[0] || issue.runtime_agent_id,
+            });
+          },
           onApplyPreviewRun: (run) => {
             void applyPreviewRun(run);
           },
