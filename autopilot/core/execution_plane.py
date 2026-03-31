@@ -125,6 +125,8 @@ class ExecutionPlaneProjectSnapshot(BaseModel):
     orchestration: OrchestrationContext = Field(default_factory=OrchestrationContext)
     provenance: ProvenanceContext = Field(default_factory=ProvenanceContext)
     launch_profile: dict[str, Any] = Field(default_factory=dict)
+    provider_config: dict[str, Any] = Field(default_factory=dict)
+    runtime_profile: dict[str, Any] = Field(default_factory=dict)
     command_policy: dict[str, Any] = Field(default_factory=dict)
     runtime_agent_count: int = 0
     open_issue_count: int = 0
@@ -1399,6 +1401,8 @@ def build_execution_plane_project_snapshot(
         orchestration=OrchestrationContext.model_validate(context["orchestration"]),
         provenance=ProvenanceContext.model_validate(context["provenance"]),
         launch_profile=summary.get("launch_profile") or {},
+        provider_config=summary.get("provider_config") or {},
+        runtime_profile=summary.get("runtime_profile") or {},
         command_policy=command_policy,
         runtime_agent_count=len(runtime_agents),
         open_issue_count=len(open_issues),
@@ -1485,6 +1489,8 @@ def build_execution_plane_project_detail(
         orchestration=OrchestrationContext.model_validate(context["orchestration"]),
         provenance=ProvenanceContext.model_validate(context["provenance"]),
         launch_profile=detail.get("launch_profile") or {},
+        provider_config=detail.get("provider_config") or {},
+        runtime_profile=detail.get("runtime_profile") or {},
         command_policy=command_policy,
         runtime_agent_count=len(runtime_agents),
         open_issue_count=sum(1 for issue in issues if issue.get("status") == "open"),
