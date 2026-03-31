@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import time
+from dataclasses import asdict
 from pathlib import Path
 
 from autopilot.core.adapters import get_adapter, list_provider_families
@@ -176,4 +178,7 @@ class AccountManager:
         """Build environment variables for a CLI invocation using this profile."""
         env = os.environ.copy()
         adapter = get_adapter(profile.resolved_adapter_id)
+        if self.config is not None and not adapter.requires_managed_profile:
+            provider_config = self.config.resolve_provider_config(profile.provider, profile.name)
+            env["AUTOPILOT_PROVIDER_CONFIG_JSON"] = json.dumps(asdict(provider_config))
         return adapter.build_env(profile, env)
