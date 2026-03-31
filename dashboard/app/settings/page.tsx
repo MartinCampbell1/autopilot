@@ -38,7 +38,7 @@ export default function SettingsPage() {
         </header>
 
         <div className="px-6 py-6">
-          <div className="mb-6 grid gap-4 xl:grid-cols-2">
+          <div className="mb-6 grid gap-4 xl:grid-cols-3">
             <section className="rounded-[14px] border border-[#e5e5e3] bg-white px-5 py-4 shadow-[0_1px_3px_rgba(15,15,15,0.08),0_0_1px_rgba(15,15,15,0.04)]">
               <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#9b9a97]">Launch Checklist</p>
               <h2 className="mt-2 text-[18px] font-semibold tracking-[-0.02em] text-[#37352f]">
@@ -82,6 +82,27 @@ export default function SettingsPage() {
                 <span className="rounded-full bg-[#f1f1ef] px-2.5 py-1">4. Routing Policy</span>
                 <span className="rounded-full bg-[#f1f1ef] px-2.5 py-1">5. Intake & Launch</span>
               </div>
+            </section>
+
+            <section className="rounded-[14px] border border-[#e5e5e3] bg-white px-5 py-4 shadow-[0_1px_3px_rgba(15,15,15,0.08),0_0_1px_rgba(15,15,15,0.04)]">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#9b9a97]">Local-First Runtime</p>
+              <h2 className="mt-2 text-[18px] font-semibold tracking-[-0.02em] text-[#37352f]">
+                Local endpoint and command runtimes are supported
+              </h2>
+              <p className="mt-2 text-[14px] leading-relaxed text-[#6b6b6b]">
+                Autopilot can now execute against configured local providers such as an OpenAI-compatible
+                endpoint or a wrapper command, then route the same launch contract through local, cloud, or
+                hybrid runtime profiles.
+              </p>
+              <div className="mt-4 flex flex-wrap gap-2 text-[12px] text-[#787774]">
+                <span className="rounded-full bg-[#f1f1ef] px-2.5 py-1">1. Edit config.yaml</span>
+                <span className="rounded-full bg-[#f1f1ef] px-2.5 py-1">2. Run doctor --refresh</span>
+                <span className="rounded-full bg-[#f1f1ef] px-2.5 py-1">3. Choose provider in Intake</span>
+                <span className="rounded-full bg-[#f1f1ef] px-2.5 py-1">4. Launch with runtime profile</span>
+              </div>
+              <p className="mt-4 text-[12px] leading-relaxed text-[#787774]">
+                Canonical examples live in `README.md` and `docs/local-first-runtime.md` inside the repo.
+              </p>
             </section>
           </div>
 
