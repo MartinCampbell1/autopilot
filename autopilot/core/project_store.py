@@ -1397,7 +1397,12 @@ def _build_project_brief_contract(project: dict[str, Any]) -> dict[str, Any]:
     control_plane = dict(project.get("control_plane") or {})
     execution_brief = dict(control_plane.get("execution_brief") or {})
     task_source = resolve_project_task_source(project)
-    brief_relpath = str(execution_brief.get("relpath") or task_source.get("brief_ref") or "").strip()
+    brief_relpath = str(
+        execution_brief.get("relpath")
+        or task_source.get("brief_ref")
+        or project.get("prd")
+        or ".agents/tasks/prd.json"
+    ).strip()
     brief_title = str(execution_brief.get("title") or project.get("name") or "").strip()
     brief_path = (Path(project["path"]) / brief_relpath).resolve() if brief_relpath else None
     return {
@@ -1542,6 +1547,167 @@ def _write_project_handoff_artifact(
     return artifact
 
 
+def _format_project_handoff_ref(
+    handoff: dict[str, Any] | None,
+    artifact: dict[str, Any] | None,
+) -> str:
+    artifact_payload = dict(artifact or {})
+    if str(artifact_payload.get("ref_label") or "").strip():
+        return str(artifact_payload.get("ref_label") or "").strip()
+
+    handoff_payload = dict(handoff or {})
+    number = handoff_payload.get("number")
+    if number not in {"", None}:
+        return f"PR #{number}"
+    for key in ("head_branch", "story_title", "url"):
+        value = str(handoff_payload.get(key) or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _build_project_delivery_status(delivery_loop: dict[str, Any]) -> dict[str, Any]:
+    source = dict(delivery_loop.get("source") or {})
+    brief = dict(delivery_loop.get("brief") or {})
+    run = dict(delivery_loop.get("run") or {})
+    handoff = dict(delivery_loop.get("handoff") or {})
+    artifact = dict(delivery_loop.get("artifact") or {})
+    run_status = str(run.get("status") or "idle").strip() or "idle"
+    handoff_status = str(handoff.get("handoff_status") or "").strip().lower()
+    merge_state = str(handoff.get("merge_state") or "").strip().lower()
+    handoff_ref = _format_project_handoff_ref(handoff, artifact)
+
+    status = {
+        "stage": "source",
+        "status": "source_recorded",
+        "headline": "Source recorded",
+        "detail": f"Task source `{str(source.get('source_kind') or 'manual').strip() or 'manual'}` is attached to this project.",
+        "next_step": "Persist the brief and start the execution run.",
+        "handoff_ref": handoff_ref,
+        "artifact_present": bool(artifact.get("present")),
+        "brief_present": bool(brief.get("present")),
+    }
+
+    if not brief.get("present"):
+        status.update(
+            {
+                "stage": "brief",
+                "status": "brief_missing",
+                "headline": "Brief missing",
+                "detail": "No persisted brief or PRD is available for this project yet.",
+                "next_step": "Persist the brief or PRD before launch.",
+            }
+        )
+        return status
+
+    if run_status == "running":
+        status.update(
+            {
+                "stage": "run",
+                "status": "running",
+                "headline": "Execution running",
+                "detail": "Autopilot is actively working through the execution plan.",
+                "next_step": "Monitor the run until a PR or handoff artifact is produced.",
+            }
+        )
+        return status
+
+    if run_status == "paused":
+        status.update(
+            {
+                "stage": "run",
+                "status": "paused",
+                "headline": "Execution paused",
+                "detail": "The execution loop is paused before delivery is complete.",
+                "next_step": "Resume the run or resolve the blocking issue before continuing.",
+            }
+        )
+        return status
+
+    if run_status == "failed":
+        status.update(
+            {
+                "stage": "run",
+                "status": "failed",
+                "headline": "Execution failed",
+                "detail": "The last run stopped before reaching a clean handoff.",
+                "next_step": "Fix the blocking failure and rerun the project.",
+            }
+        )
+        return status
+
+    if merge_state == "merged" or handoff_status in {"merged", "merged_locally"}:
+        status.update(
+            {
+                "stage": "complete",
+                "status": "merged",
+                "headline": f"{handoff_ref} merged" if handoff_ref else "Merged",
+                "detail": "The source item has a merged delivery artifact.",
+                "next_step": "Close out the source item or continue with follow-up work.",
+            }
+        )
+        return status
+
+    if merge_state == "ready" or handoff_status == "approved_and_green":
+        status.update(
+            {
+                "stage": "handoff",
+                "status": "ready_to_merge",
+                "headline": f"{handoff_ref} ready to merge" if handoff_ref else "Ready to merge",
+                "detail": "Review and CI gates are green for the current handoff artifact.",
+                "next_step": "Merge the PR or record the final handoff outcome.",
+            }
+        )
+        return status
+
+    if merge_state == "blocked" or handoff_status in {"changes_requested", "ci_failed"}:
+        status.update(
+            {
+                "stage": "handoff",
+                "status": "blocked",
+                "headline": f"{handoff_ref} blocked" if handoff_ref else "Handoff blocked",
+                "detail": "The current handoff artifact is blocked by review feedback or failing gates.",
+                "next_step": "Address the blocked handoff state and sync the latest PR result.",
+            }
+        )
+        return status
+
+    if handoff_ref:
+        status.update(
+            {
+                "stage": "handoff",
+                "status": "in_review",
+                "headline": f"{handoff_ref} in review" if handoff_ref else "Handoff in review",
+                "detail": "A handoff artifact exists and is waiting for final review or merge readiness.",
+                "next_step": "Track review feedback and keep the handoff artifact in sync.",
+            }
+        )
+        return status
+
+    if run_status == "completed":
+        status.update(
+            {
+                "stage": "handoff",
+                "status": "handoff_pending",
+                "headline": "Awaiting handoff",
+                "detail": "Execution finished, but no PR or handoff artifact is recorded yet.",
+                "next_step": "Open a PR or attach a handoff artifact for the completed work.",
+            }
+        )
+        return status
+
+    status.update(
+        {
+            "stage": "run",
+            "status": "ready_to_run",
+            "headline": "Ready to run",
+            "detail": "The brief is recorded and the project is ready for execution.",
+            "next_step": "Launch the project run.",
+        }
+    )
+    return status
+
+
 def _build_project_delivery_loop(
     project: dict[str, Any],
     state: dict[str, Any],
@@ -1622,6 +1788,7 @@ def build_project_summary(config: AutopilotConfig, project: dict[str, Any]) -> d
     stories_done, stories_total = _project_progress_counts(stories)
     latest_handoff = _build_project_handoff_summary(stories)
     delivery_loop = _build_project_delivery_loop(project, state, stories)
+    delivery_status = _build_project_delivery_status(delivery_loop)
     current_story = next((story for story in stories if story["id"] == state.get("current_story_id")), None)
     last_event = state.get("timeline", [])[-1] if state.get("timeline") else None
     return {
@@ -1645,6 +1812,7 @@ def build_project_summary(config: AutopilotConfig, project: dict[str, Any]) -> d
         "task_source": resolve_project_task_source(project),
         "latest_handoff": latest_handoff,
         "delivery_loop": delivery_loop,
+        "delivery_status": delivery_status,
         "budget_policy": state.get("budget_policy", default_budget_policy()),
         "budget_usage": state.get("budget_usage", default_budget_usage()),
         "quality_policy": state.get("quality_policy", default_quality_policy()),

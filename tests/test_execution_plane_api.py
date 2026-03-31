@@ -662,6 +662,7 @@ def test_execution_plane_routes_create_list_and_detail_projects(
     assert detail["task_source"]["source_kind"] == "execution_brief"
     assert detail["delivery_loop"]["brief"]["present"] is True
     assert detail["delivery_loop"]["run"]["status"] == "idle"
+    assert detail["delivery_status"]["status"] == "ready_to_run"
     assert detail["command_policy"]["parallel_launch_requires_approval"] is True
     assert detail["provider_config"]["family"] == "codex"
     assert detail["runtime_profile"]["id"] == "cloud"
@@ -790,6 +791,7 @@ def test_execution_plane_github_pr_sync_and_reaction_routes(
     assert sync_payload["github_pr"]["state"] == "open"
     assert sync_payload["project"]["delivery_loop"]["artifact"]["ref_label"] == "PR #12"
     assert sync_payload["project"]["delivery_loop"]["artifact"]["present"] is True
+    assert sync_payload["project"]["delivery_status"]["status"] == "in_review"
 
     reaction_response = client.post(
         f"/api/execution-plane/projects/{project_id}/stories/1/github-reactions",
@@ -804,6 +806,7 @@ def test_execution_plane_github_pr_sync_and_reaction_routes(
     assert reaction_payload["github_pr"]["review_status"] == "changes_requested"
     assert reaction_payload["project"]["stories"][0]["github_pr"]["handoff_status"] == "changes_requested"
     assert reaction_payload["project"]["stories"][0]["handoff_artifact"]["ref_label"] == "PR #12"
+    assert reaction_payload["project"]["delivery_status"]["status"] == "blocked"
 
     issues_response = client.get(
         f"/api/execution-plane/projects/{project_id}/issues",
