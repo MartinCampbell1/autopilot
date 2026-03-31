@@ -56,6 +56,22 @@ import {
   toStringArray,
   toStringValue,
 } from "@/lib/control-plane-data";
+import {
+  buildQueueAdvanceFocusDelta,
+  buildScopedStorageKey,
+  emptySnoozedVisibilityRecord,
+  emptyVisibilityKeysRecord,
+  isPersistedAgentTimelineStateEmpty,
+  isPersistedLineageQueueStateEmpty,
+  persistQueueAdvanceFocusDelta,
+  readPersistedQueueAdvanceFocusDelta,
+  sanitizeOperatorVisibilityState,
+  sanitizePersistedAgentTimelineState,
+  sanitizePersistedLineageQueueState,
+  type PersistedAgentTimelineState,
+  type PersistedLineageQueueState,
+  visibleEntriesByOperatorVisibilityState,
+} from "@/lib/control-plane-operator-state";
 import { approvalStatusClass, passStatusClass } from "@/lib/control-plane-ui";
 import { useSSE } from "@/lib/sse";
 import type {
@@ -124,18 +140,6 @@ type LinkedSelectionContext = {
 type SessionContextKind = "" | "approval" | "issue" | "event";
 type LineageQueueKind = "attention" | "decisions";
 type TriagePriority = "critical" | "high" | "normal";
-type OperatorVisibilityState = {
-  dismissed: string[];
-  snoozedUntil: Record<string, number>;
-};
-type PersistedLineageQueueState = {
-  dismissed?: Partial<Record<LineageQueueKind, string[]>>;
-  snoozedUntil?: Partial<Record<LineageQueueKind, Record<string, number>>>;
-};
-type PersistedAgentTimelineState = {
-  dismissed?: string[];
-  snoozedUntil?: Record<string, number>;
-};
 type SessionLineageEntry = {
   key: string;
   runId: string;
@@ -1063,190 +1067,6 @@ function sessionLineageQueuePosition(
   return entries.findIndex((entry) => entry.key === current.key);
 }
 
-function emptyDismissedLineageQueueKeys(): Record<LineageQueueKind, string[]> {
-  return {
-    attention: [],
-    decisions: [],
-  };
-}
-
-function emptySnoozedLineageQueueUntil(): Record<LineageQueueKind, Record<string, number>> {
-  return {
-    attention: {},
-    decisions: {},
-  };
-}
-
-function sanitizeOperatorVisibilityState(
-  value:
-    | {
-        dismissed?: unknown;
-        snoozedUntil?: unknown;
-      }
-    | null
-    | undefined,
-  now: number
-): OperatorVisibilityState {
-  const dismissed = Array.isArray(value?.dismissed)
-    ? [...new Set(value.dismissed.filter((entry): entry is string => typeof entry === "string"))]
-    : [];
-  const snoozedUntil: Record<string, number> = {};
-  const rawSnoozed = asRecord(value?.snoozedUntil);
-  if (rawSnoozed) {
-    Object.entries(rawSnoozed).forEach(([entryKey, until]) => {
-      if (!entryKey) return;
-      if (typeof until !== "number" || !Number.isFinite(until)) return;
-      if (until <= now) return;
-      snoozedUntil[entryKey] = until;
-    });
-  }
-  return {
-    dismissed,
-    snoozedUntil,
-  };
-}
-
-function isOperatorVisibilityStateEmpty(state: OperatorVisibilityState): boolean {
-  return state.dismissed.length === 0 && Object.keys(state.snoozedUntil).length === 0;
-}
-
-function sanitizePersistedLineageQueueState(
-  value: PersistedLineageQueueState | null | undefined,
-  now: number
-): {
-  dismissed: Record<LineageQueueKind, string[]>;
-  snoozedUntil: Record<LineageQueueKind, Record<string, number>>;
-} {
-  const dismissed = emptyDismissedLineageQueueKeys();
-  const snoozedUntil = emptySnoozedLineageQueueUntil();
-  const kinds: LineageQueueKind[] = ["attention", "decisions"];
-
-  kinds.forEach((kind) => {
-    const sanitized = sanitizeOperatorVisibilityState(
-      {
-        dismissed: value?.dismissed?.[kind],
-        snoozedUntil: value?.snoozedUntil?.[kind],
-      },
-      now
-    );
-    dismissed[kind] = sanitized.dismissed;
-    snoozedUntil[kind] = sanitized.snoozedUntil;
-  });
-
-  return {
-    dismissed,
-    snoozedUntil,
-  };
-}
-
-function isPersistedLineageQueueStateEmpty(state: {
-  dismissed: Record<LineageQueueKind, string[]>;
-  snoozedUntil: Record<LineageQueueKind, Record<string, number>>;
-}): boolean {
-  return (
-    isOperatorVisibilityStateEmpty({
-      dismissed: state.dismissed.attention,
-      snoozedUntil: state.snoozedUntil.attention,
-    }) &&
-    isOperatorVisibilityStateEmpty({
-      dismissed: state.dismissed.decisions,
-      snoozedUntil: state.snoozedUntil.decisions,
-    })
-  );
-}
-
-function lineageQueueStorageKey(sessionId: string): string {
-  return `${LINEAGE_QUEUE_STORAGE_PREFIX}${sessionId}`;
-}
-
-function sanitizePersistedAgentTimelineState(
-  value: PersistedAgentTimelineState | null | undefined,
-  now: number
-): {
-  dismissed: string[];
-  snoozedUntil: Record<string, number>;
-} {
-  return sanitizeOperatorVisibilityState(value, now);
-}
-
-function isPersistedAgentTimelineStateEmpty(state: {
-  dismissed: string[];
-  snoozedUntil: Record<string, number>;
-}): boolean {
-  return isOperatorVisibilityStateEmpty(state);
-}
-
-function agentTimelineStorageKey(runtimeAgentId: string): string {
-  return `${AGENT_TIMELINE_STORAGE_PREFIX}${runtimeAgentId}`;
-}
-
-function sessionQueueFocusStorageKey(sessionId: string): string {
-  return `${SESSION_QUEUE_FOCUS_STORAGE_PREFIX}${sessionId}`;
-}
-
-function agentQueueFocusStorageKey(runtimeAgentId: string): string {
-  return `${AGENT_QUEUE_FOCUS_STORAGE_PREFIX}${runtimeAgentId}`;
-}
-
-function sanitizeQueueAdvanceFocusDelta(
-  value: QueueAdvanceFocusDelta | null | undefined
-): QueueAdvanceFocusDelta | null {
-  if (!value || typeof value !== "object") return null;
-  const fromLabel = toStringValue(value.fromLabel);
-  const toLabel = toStringValue(value.toLabel);
-  const timestamp = toStringValue(value.timestamp);
-  const fromCount = Number(value.fromCount);
-  const toCount = Number(value.toCount);
-  if (!fromLabel || !toLabel || !timestamp) return null;
-  if (!Number.isFinite(fromCount) || !Number.isFinite(toCount)) return null;
-  return {
-    fromLabel,
-    toLabel,
-    fromCount,
-    toCount,
-    timestamp,
-  };
-}
-
-function buildQueueAdvanceFocusDelta(
-  fromLabel: string,
-  toLabel: string,
-  fromCount: number,
-  toCount: number
-): QueueAdvanceFocusDelta {
-  return {
-    fromLabel,
-    toLabel,
-    fromCount,
-    toCount,
-    timestamp: new Date().toISOString(),
-  };
-}
-
-function readPersistedQueueAdvanceFocusDelta(storageKey: string): QueueAdvanceFocusDelta | null {
-  if (typeof window === "undefined") return null;
-  const raw = window.localStorage.getItem(storageKey);
-  if (!raw) return null;
-  try {
-    return sanitizeQueueAdvanceFocusDelta(JSON.parse(raw) as QueueAdvanceFocusDelta);
-  } catch {
-    return null;
-  }
-}
-
-function persistQueueAdvanceFocusDelta(
-  storageKey: string,
-  value: QueueAdvanceFocusDelta | null | undefined
-): void {
-  if (typeof window === "undefined") return;
-  const sanitized = sanitizeQueueAdvanceFocusDelta(value);
-  if (!sanitized) {
-    window.localStorage.removeItem(storageKey);
-    return;
-  }
-  window.localStorage.setItem(storageKey, JSON.stringify(sanitized));
-}
-
 function buildQueueAdvanceNoticeActionProps(args: {
   feedback: QueueAdvanceFeedback<QueueAdvanceTarget> | null;
   onOpenTarget: (target: QueueAdvanceTarget | null | undefined) => void;
@@ -1270,21 +1090,6 @@ function buildQueueAdvanceNoticeActionProps(args: {
     onResetFocus,
     onOpenMatchingQueue,
   };
-}
-
-function visibleEntriesByOperatorVisibilityState<T>(
-  entries: T[],
-  getKey: (entry: T) => string,
-  state: OperatorVisibilityState,
-  now: number
-): T[] {
-  return entries.filter((entry) => {
-    const entryKey = getKey(entry);
-    if (!entryKey) return true;
-    if (state.dismissed.includes(entryKey)) return false;
-    const snoozedUntil = state.snoozedUntil[entryKey] ?? 0;
-    return snoozedUntil <= now;
-  });
 }
 
 export default function ControlPlanePage() {
@@ -1330,16 +1135,10 @@ export default function ControlPlanePage() {
   } | null>(null);
   const [dismissedLineageQueueKeys, setDismissedLineageQueueKeys] = useState<
     Record<LineageQueueKind, string[]>
-  >({
-    attention: [],
-    decisions: [],
-  });
+  >(() => emptyVisibilityKeysRecord(SESSION_LINEAGE_QUEUE_KEYS));
   const [snoozedLineageQueueUntil, setSnoozedLineageQueueUntil] = useState<
     Record<LineageQueueKind, Record<string, number>>
-  >({
-    attention: {},
-    decisions: {},
-  });
+  >(() => emptySnoozedVisibilityRecord(SESSION_LINEAGE_QUEUE_KEYS));
   const [lineageQueueNow, setLineageQueueNow] = useState(() => Date.now());
   const [pendingSessionRowDomId, setPendingSessionRowDomId] = useState("");
   const [pendingAgentTimelineRowDomId, setPendingAgentTimelineRowDomId] = useState("");
@@ -1559,8 +1358,8 @@ export default function ControlPlanePage() {
 
   useEffect(() => {
     if (!selectedSessionId) {
-      setDismissedLineageQueueKeys(emptyDismissedLineageQueueKeys());
-      setSnoozedLineageQueueUntil(emptySnoozedLineageQueueUntil());
+      setDismissedLineageQueueKeys(emptyVisibilityKeysRecord(SESSION_LINEAGE_QUEUE_KEYS));
+      setSnoozedLineageQueueUntil(emptySnoozedVisibilityRecord(SESSION_LINEAGE_QUEUE_KEYS));
       setHydratedLineageQueueSessionId("");
       return;
     }
@@ -1570,29 +1369,33 @@ export default function ControlPlanePage() {
     setHydratedLineageQueueSessionId("");
 
     if (typeof window === "undefined") {
-      setDismissedLineageQueueKeys(emptyDismissedLineageQueueKeys());
-      setSnoozedLineageQueueUntil(emptySnoozedLineageQueueUntil());
+      setDismissedLineageQueueKeys(emptyVisibilityKeysRecord(SESSION_LINEAGE_QUEUE_KEYS));
+      setSnoozedLineageQueueUntil(emptySnoozedVisibilityRecord(SESSION_LINEAGE_QUEUE_KEYS));
       setHydratedLineageQueueSessionId(selectedSessionId);
       return;
     }
 
-    const storageKey = lineageQueueStorageKey(selectedSessionId);
+    const storageKey = buildScopedStorageKey(LINEAGE_QUEUE_STORAGE_PREFIX, selectedSessionId);
     const raw = window.localStorage.getItem(storageKey);
-    let parsed: PersistedLineageQueueState | null = null;
+    let parsed: PersistedLineageQueueState<LineageQueueKind> | null = null;
     if (raw) {
       try {
-        parsed = JSON.parse(raw) as PersistedLineageQueueState;
+        parsed = JSON.parse(raw) as PersistedLineageQueueState<LineageQueueKind>;
       } catch {
         parsed = null;
       }
     }
 
-    const sanitized = sanitizePersistedLineageQueueState(parsed, now);
+    const sanitized = sanitizePersistedLineageQueueState(
+      parsed,
+      now,
+      SESSION_LINEAGE_QUEUE_KEYS
+    );
     setDismissedLineageQueueKeys(sanitized.dismissed);
     setSnoozedLineageQueueUntil(sanitized.snoozedUntil);
     setHydratedLineageQueueSessionId(selectedSessionId);
 
-    if (isPersistedLineageQueueStateEmpty(sanitized)) {
+    if (isPersistedLineageQueueStateEmpty(sanitized, SESSION_LINEAGE_QUEUE_KEYS)) {
       window.localStorage.removeItem(storageKey);
       return;
     }
@@ -1610,11 +1413,12 @@ export default function ControlPlanePage() {
         dismissed: dismissedLineageQueueKeys,
         snoozedUntil: snoozedLineageQueueUntil,
       },
-      lineageQueueNow
+      lineageQueueNow,
+      SESSION_LINEAGE_QUEUE_KEYS
     );
-    const storageKey = lineageQueueStorageKey(selectedSessionId);
+    const storageKey = buildScopedStorageKey(LINEAGE_QUEUE_STORAGE_PREFIX, selectedSessionId);
 
-    if (isPersistedLineageQueueStateEmpty(sanitized)) {
+    if (isPersistedLineageQueueStateEmpty(sanitized, SESSION_LINEAGE_QUEUE_KEYS)) {
       window.localStorage.removeItem(storageKey);
       return;
     }
@@ -1634,7 +1438,10 @@ export default function ControlPlanePage() {
       return;
     }
 
-    const storageKey = sessionQueueFocusStorageKey(selectedSessionId);
+    const storageKey = buildScopedStorageKey(
+      SESSION_QUEUE_FOCUS_STORAGE_PREFIX,
+      selectedSessionId
+    );
     setHydratedSessionQueueFocusStorageKey("");
 
     if (typeof window === "undefined") {
@@ -1649,7 +1456,10 @@ export default function ControlPlanePage() {
 
   useEffect(() => {
     if (!selectedSessionId) return;
-    const storageKey = sessionQueueFocusStorageKey(selectedSessionId);
+    const storageKey = buildScopedStorageKey(
+      SESSION_QUEUE_FOCUS_STORAGE_PREFIX,
+      selectedSessionId
+    );
     if (hydratedSessionQueueFocusStorageKey !== storageKey) {
       return;
     }
@@ -1757,11 +1567,13 @@ export default function ControlPlanePage() {
     if (typeof window === "undefined") {
       setDismissedAgentTimelineKeys([]);
       setSnoozedAgentTimelineUntil({});
-      setHydratedAgentTimelineStorageKey(agentTimelineStorageKey(selectedAgentId));
+      setHydratedAgentTimelineStorageKey(
+        buildScopedStorageKey(AGENT_TIMELINE_STORAGE_PREFIX, selectedAgentId)
+      );
       return;
     }
 
-    const storageKey = agentTimelineStorageKey(selectedAgentId);
+    const storageKey = buildScopedStorageKey(AGENT_TIMELINE_STORAGE_PREFIX, selectedAgentId);
     const raw = window.localStorage.getItem(storageKey);
     let parsed: PersistedAgentTimelineState | null = null;
     if (raw) {
@@ -1786,7 +1598,7 @@ export default function ControlPlanePage() {
 
   useEffect(() => {
     if (!selectedAgentId) return;
-    const storageKey = agentTimelineStorageKey(selectedAgentId);
+    const storageKey = buildScopedStorageKey(AGENT_TIMELINE_STORAGE_PREFIX, selectedAgentId);
     if (hydratedAgentTimelineStorageKey !== storageKey) {
       return;
     }
@@ -1820,7 +1632,7 @@ export default function ControlPlanePage() {
       return;
     }
 
-    const storageKey = agentQueueFocusStorageKey(selectedAgentId);
+    const storageKey = buildScopedStorageKey(AGENT_QUEUE_FOCUS_STORAGE_PREFIX, selectedAgentId);
     setHydratedAgentQueueFocusStorageKey("");
 
     if (typeof window === "undefined") {
@@ -1835,7 +1647,7 @@ export default function ControlPlanePage() {
 
   useEffect(() => {
     if (!selectedAgentId) return;
-    const storageKey = agentQueueFocusStorageKey(selectedAgentId);
+    const storageKey = buildScopedStorageKey(AGENT_QUEUE_FOCUS_STORAGE_PREFIX, selectedAgentId);
     if (hydratedAgentQueueFocusStorageKey !== storageKey) {
       return;
     }
@@ -2640,7 +2452,11 @@ export default function ControlPlanePage() {
     [persistedLineageQueueState]
   );
   const hasPersistedLineageQueuePreferences = useMemo(
-    () => !isPersistedLineageQueueStateEmpty(persistedLineageQueueState),
+    () =>
+      !isPersistedLineageQueueStateEmpty(
+        persistedLineageQueueState,
+        SESSION_LINEAGE_QUEUE_KEYS
+      ),
     [persistedLineageQueueState]
   );
   const selectedSessionLineageTraits = useMemo(() => {
@@ -2824,13 +2640,15 @@ export default function ControlPlanePage() {
     setLineageQueueNow(Date.now());
   }, []);
   const resetSessionLineageQueuePreferences = useCallback(() => {
-    setDismissedLineageQueueKeys(emptyDismissedLineageQueueKeys());
-    setSnoozedLineageQueueUntil(emptySnoozedLineageQueueUntil());
+    setDismissedLineageQueueKeys(emptyVisibilityKeysRecord(SESSION_LINEAGE_QUEUE_KEYS));
+    setSnoozedLineageQueueUntil(emptySnoozedVisibilityRecord(SESSION_LINEAGE_QUEUE_KEYS));
     setLineageQueueNow(Date.now());
     setNotice("Session lineage queue state reset.");
     setErrorMessage("");
     if (selectedSessionId && typeof window !== "undefined") {
-      window.localStorage.removeItem(lineageQueueStorageKey(selectedSessionId));
+      window.localStorage.removeItem(
+        buildScopedStorageKey(LINEAGE_QUEUE_STORAGE_PREFIX, selectedSessionId)
+      );
     }
   }, [selectedSessionId]);
   const toggleSessionLineageQueueExpansion = useCallback((filter: LineageQueueKind) => {
@@ -2926,7 +2744,9 @@ export default function ControlPlanePage() {
     setNotice("Agent timeline state reset.");
     setErrorMessage("");
     if (selectedAgentId && typeof window !== "undefined") {
-      window.localStorage.removeItem(agentTimelineStorageKey(selectedAgentId));
+      window.localStorage.removeItem(
+        buildScopedStorageKey(AGENT_TIMELINE_STORAGE_PREFIX, selectedAgentId)
+      );
     }
   }, [selectedAgentId]);
   const exportAgentTimelinePreferences = useCallback(async () => {
