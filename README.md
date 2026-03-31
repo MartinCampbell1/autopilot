@@ -110,6 +110,16 @@ Then validate and use it:
 
 The intake dashboard now lets you choose both `Execution Provider` and `Runtime Profile` before launch. For the full local-first contract, examples, and behavior notes, see [docs/local-first-runtime.md](/Users/martin/Desktop/autopilot/docs/local-first-runtime.md).
 
+## Tool Layer And Extensions
+
+Autopilot now exposes one user-facing tools layer over the local connector registry instead of asking operators to reason about raw internal connector records.
+
+- each tool contract exposes `tool_id`, `kind`, `transport`, `scope`, `approval_policy`, and `provider_compatibility`
+- project and story payloads surface both connector activation and the derived public tool activation state
+- the capability catalog also exposes extension slots for providers, runtimes, trackers, and notifiers with a shared lifecycle of `register -> validate -> expose -> audit`
+
+Current documented extension examples live in [docs/extensions.md](/Users/martin/Desktop/autopilot/docs/extensions.md).
+
 ## Official Verification Baseline
 
 ```bash

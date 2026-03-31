@@ -199,8 +199,27 @@ export function StoryDetailPanel({
 
             <div className="mt-4 space-y-3 rounded-xl border border-[#ecebe8] bg-[#fbfbf9] p-4 text-[13px] text-[#6b6b6b]">
               <div>
-                <p className="text-[11px] uppercase tracking-[0.08em] text-[#9b9a97]">Planned Connectors</p>
-                <p className="mt-1 text-[#37352f]">{story.connectors?.join(", ") || "None"}</p>
+                <p className="text-[11px] uppercase tracking-[0.08em] text-[#9b9a97]">Planned Tools</p>
+                {story.tools?.length ? (
+                  <div className="mt-2 space-y-2">
+                    {story.tools.map((tool) => (
+                      <div key={tool.tool_id} className="rounded-[10px] border border-[#ecebe8] bg-white px-3 py-3">
+                        <div className="flex items-center justify-between gap-3">
+                          <p className="text-[13px] font-medium text-[#37352f]">{tool.name}</p>
+                          <span className="rounded-full bg-[#f1f1ef] px-2.5 py-1 text-[11px] text-[#787774]">
+                            {tool.kind}
+                          </span>
+                        </div>
+                        <p className="mt-1 text-[12px] text-[#787774]">{tool.tool_id}</p>
+                        <p className="mt-2 text-[12px] text-[#6b6b6b]">
+                          Scope: {tool.scope} · Approval: {tool.approval_policy}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="mt-1 text-[#37352f]">{story.connectors?.join(", ") || "None"}</p>
+                )}
               </div>
               <div>
                 <p className="text-[11px] uppercase tracking-[0.08em] text-[#9b9a97]">Activation Errors</p>
@@ -236,8 +255,23 @@ export function StoryDetailPanel({
             </div>
 
             <div className="mt-4 space-y-3 rounded-xl border border-[#ecebe8] bg-[#fbfbf9] p-4 text-[13px] text-[#6b6b6b]">
-              <p className="text-[11px] uppercase tracking-[0.08em] text-[#9b9a97]">Runtime-Active Connectors</p>
-              {story.connector_activation?.length ? (
+              <p className="text-[11px] uppercase tracking-[0.08em] text-[#9b9a97]">Runtime-Active Tools</p>
+              {story.active_tools?.length ? (
+                story.active_tools.map((tool) => (
+                  <div key={tool.tool_id} className="rounded-[10px] border border-[#ecebe8] bg-white px-3 py-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <p className="text-[13px] font-medium text-[#37352f]">{tool.name}</p>
+                      <span className="rounded-full bg-[#f1f1ef] px-2.5 py-1 text-[11px] text-[#787774]">
+                        {tool.status}
+                      </span>
+                    </div>
+                    <p className="mt-1 text-[12px] text-[#787774]">{tool.tool_id}</p>
+                    <p className="mt-2 text-[12px] text-[#6b6b6b]">
+                      {tool.kind} · {tool.scope} · {tool.reason || "No activation note."}
+                    </p>
+                  </div>
+                ))
+              ) : story.connector_activation?.length ? (
                 story.connector_activation.map((connector) => (
                   <div key={connector.id} className="rounded-[10px] border border-[#ecebe8] bg-white px-3 py-3">
                     <div className="flex items-center justify-between gap-3">
@@ -251,7 +285,7 @@ export function StoryDetailPanel({
                   </div>
                 ))
               ) : (
-                <p className="text-[#9b9a97]">No connector activation recorded yet.</p>
+                <p className="text-[#9b9a97]">No tool activation recorded yet.</p>
               )}
             </div>
           </TabsContent>

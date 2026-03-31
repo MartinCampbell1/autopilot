@@ -408,7 +408,10 @@ def test_build_project_detail_resolves_launch_profile_team_and_connectors(tmp_pa
     assert story["review_phases"] == ["security", "architecture", "tests"]
     assert [entry["stage"] for entry in story["pipeline_state"]] == ["research", "implement", "review"]
     assert any(member["execution_role"] == "specialist" for member in story["team_members"])
+    assert any(tool["tool_id"] == "browser_devtools" for tool in story["tools"])
+    assert any(tool["tool_id"] == "browser_devtools" for tool in story["active_tools"])
     assert any(connector["id"] == "browser_devtools" for connector in story["connector_activation"])
+    assert any(tool["tool_id"] == "browser_devtools" for tool in detail["active_tools"]["1"])
 
 
 def test_build_project_detail_resolves_local_provider_contract(tmp_path: Path) -> None:
