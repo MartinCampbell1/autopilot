@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { BreakdownChips, SessionMetric } from "@/components/control-plane-display";
+import { BreakdownChips, RelationshipStrip, SessionMetric } from "@/components/control-plane-display";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -13,7 +13,9 @@ import {
 } from "@/lib/control-plane-ui";
 import { formatTimestamp } from "@/lib/control-plane-data";
 import type {
+  ExecutionApprovalRecord,
   ExecutionAgentActionRunRecord,
+  ExecutionIssueRecord,
   OrchestratorSessionControl,
   OrchestratorSessionControlProfile,
   OrchestratorSessionControlRecommendation,
@@ -33,18 +35,24 @@ type SessionDrilldownControlSectionProps = {
   linkedApprovalsCount: number;
   filteredIssuesCount: number;
   linkedIssuesCount: number;
+  linkedApprovals: ExecutionApprovalRecord[];
+  linkedIssues: ExecutionIssueRecord[];
   entitySearch: string;
   onEntitySearchChange: (value: string) => void;
   onClearEntitySearch: () => void;
   sortedProfiles: OrchestratorSessionControlProfile[];
   busyActionKey: string;
   selectedRunId: string;
+  selectedSessionApprovalId: string;
+  selectedSessionIssueId: string;
   onCopySessionLink: () => void;
   canCopyFocusedLink: boolean;
   onCopyFocusedLink: () => void;
   latestPreviewRun: ExecutionAgentActionRunRecord | null;
   latestPreviewAppliedRun: ExecutionAgentActionRunRecord | null;
   onInspectRun: (runId: string) => void;
+  onInspectApproval: (approval: ExecutionApprovalRecord) => void;
+  onInspectIssue: (issue: ExecutionIssueRecord) => void;
   onApplyPreviewRun: (run: ExecutionAgentActionRunRecord) => void;
   onApplyControlPlan: (profile: OrchestratorSessionControlProfile) => void;
   onApplyRecommendation: (recommendation: OrchestratorSessionControlRecommendation) => void;
@@ -63,23 +71,31 @@ export function SessionDrilldownControlSection({
   linkedApprovalsCount,
   filteredIssuesCount,
   linkedIssuesCount,
+  linkedApprovals,
+  linkedIssues,
   entitySearch,
   onEntitySearchChange,
   onClearEntitySearch,
   sortedProfiles,
   busyActionKey,
   selectedRunId,
+  selectedSessionApprovalId,
+  selectedSessionIssueId,
   onCopySessionLink,
   canCopyFocusedLink,
   onCopyFocusedLink,
   latestPreviewRun,
   latestPreviewAppliedRun,
   onInspectRun,
+  onInspectApproval,
+  onInspectIssue,
   onApplyPreviewRun,
   onApplyControlPlan,
   onApplyRecommendation,
 }: SessionDrilldownControlSectionProps) {
   const latestPreviewCommandCounts = (latestPreviewRun?.diff_summary?.command_counts ||
+    {}) as Record<string, number>;
+  const latestPreviewPolicyReasonCounts = (latestPreviewRun?.diff_summary?.policy_reason_counts ||
     {}) as Record<string, number>;
   const latestPreviewWhy = Array.isArray(latestPreviewRun?.diff_summary?.why)
     ? latestPreviewRun?.diff_summary?.why.filter(
@@ -96,6 +112,109 @@ export function SessionDrilldownControlSection({
   const selectedPreview =
     Boolean(latestPreviewRun) &&
     selectedRunId === (latestPreviewRun?.preview_id || latestPreviewRun?.id || "");
+  const latestPreviewApprovalIds = Array.from(
+    new Set(
+      (latestPreviewAppliedRun?.results || [])
+        .map((result) => {
+          if (!result || typeof result !== "object" || Array.isArray(result)) return "";
+          const approval = (result as Record<string, unknown>).approval;
+          if (!approval || typeof approval !== "object" || Array.isArray(approval)) return "";
+          return typeof (approval as Record<string, unknown>).id === "string"
+            ? ((approval as Record<string, unknown>).id as string)
+            : "";
+        })
+        .filter((value) => value.trim().length > 0)
+    )
+  );
+  const latestPreviewIssueIds = Array.from(
+    new Set(
+      (latestPreviewAppliedRun?.results || [])
+        .map((result) => {
+          if (!result || typeof result !== "object" || Array.isArray(result)) return "";
+          const issue = (result as Record<string, unknown>).issue;
+          if (!issue || typeof issue !== "object" || Array.isArray(issue)) return "";
+          return typeof (issue as Record<string, unknown>).id === "string"
+            ? ((issue as Record<string, unknown>).id as string)
+            : "";
+        })
+        .filter((value) => value.trim().length > 0)
+    )
+  );
+  const latestPreviewApprovals = latestPreviewApprovalIds
+    .map((approvalId) => linkedApprovals.find((approval) => approval.id === approvalId) || null)
+    .filter((approval): approval is ExecutionApprovalRecord => approval !== null);
+  const latestPreviewIssues = latestPreviewIssueIds
+    .map((issueId) => linkedIssues.find((issue) => issue.id === issueId) || null)
+    .filter((issue): issue is ExecutionIssueRecord => issue !== null);
+  const latestPreviewApprovalStatusCounts = latestPreviewApprovals.reduce<Record<string, number>>(
+    (counts, approval) => {
+      counts[approval.status] = (counts[approval.status] || 0) + 1;
+      return counts;
+    },
+    {}
+  );
+  const latestPreviewIssueStatusCounts = latestPreviewIssues.reduce<Record<string, number>>(
+    (counts, issue) => {
+      counts[issue.status] = (counts[issue.status] || 0) + 1;
+      return counts;
+    },
+    {}
+  );
+  const previewTransitionItems = latestPreviewRun
+    ? [
+        {
+          key: `preview-${latestPreviewRun.id}`,
+          label: `preview ${latestPreviewRun.preview_id || latestPreviewRun.id}`,
+          tone: "run" as const,
+          active: selectedPreview,
+          onClick: () => {
+            onInspectRun(latestPreviewRun.id);
+          },
+        },
+        ...(latestPreviewAppliedRun
+          ? [
+              {
+                key: `run-${latestPreviewAppliedRun.id}`,
+                label: `run ${latestPreviewAppliedRun.id}`,
+                tone: "event" as const,
+                active: selectedRunId === latestPreviewAppliedRun.id,
+                onClick: () => {
+                  onInspectRun(latestPreviewAppliedRun.id);
+                },
+              },
+            ]
+          : []),
+        ...latestPreviewApprovals.slice(0, 3).map((approval) => ({
+          key: `approval-${approval.id}`,
+          label: `approval ${approval.id} · ${approval.status}`,
+          tone: "approval" as const,
+          active: selectedSessionApprovalId === approval.id,
+          onClick: () => {
+            onInspectApproval(approval);
+          },
+        })),
+        ...latestPreviewIssues.slice(0, 3).map((issue) => ({
+          key: `issue-${issue.id}`,
+          label: `issue ${issue.id} · ${issue.status}`,
+          tone: "issue" as const,
+          active: selectedSessionIssueId === issue.id,
+          onClick: () => {
+            onInspectIssue(issue);
+          },
+        })),
+      ]
+    : [];
+  const latestPreviewDecisionHint = latestPreviewApprovals.some((approval) => approval.status === "pending")
+    ? "Pending approvals were created from this preview. Review them in Linked Decisions before mutating the session further."
+    : latestPreviewApprovals.some((approval) => approval.status === "approved")
+      ? "At least one approval is already approved. Use Linked Decisions to apply the approved action."
+      : latestPreviewIssues.some((issue) => issue.status !== "resolved")
+        ? "Linked issues remain open for this preview path. Resolve or reject them before retrying apply."
+        : latestPreviewAppliedRun
+          ? "Preview has been applied and no unresolved approval backlog is linked to this path."
+          : latestPreviewRun?.approval_required
+            ? "Applying this preview will request approvals instead of mutating directly."
+            : "Preview is ready to apply directly with the current policy.";
   return (
     <>
       <div className="flex flex-wrap items-start justify-between gap-4">
@@ -449,6 +568,32 @@ export function SessionDrilldownControlSection({
               emptyText="No command breakdown recorded for this preview."
             />
 
+            <RelationshipStrip label="Transition Path" items={previewTransitionItems} />
+
+            {Object.keys(latestPreviewPolicyReasonCounts).length > 0 && (
+              <BreakdownChips
+                label="Gate Reasons"
+                values={latestPreviewPolicyReasonCounts}
+                emptyText="No policy gate reasons recorded for this preview."
+              />
+            )}
+
+            {latestPreviewApprovals.length > 0 && (
+              <BreakdownChips
+                label="Approval States"
+                values={latestPreviewApprovalStatusCounts}
+                emptyText="No approvals are linked to this preview path."
+              />
+            )}
+
+            {latestPreviewIssues.length > 0 && (
+              <BreakdownChips
+                label="Issue States"
+                values={latestPreviewIssueStatusCounts}
+                emptyText="No issues are linked to this preview path."
+              />
+            )}
+
             {latestPreviewWhy.length > 0 && (
               <div className="flex flex-wrap gap-2">
                 {latestPreviewWhy.slice(0, 4).map((reason) => (
@@ -462,6 +607,8 @@ export function SessionDrilldownControlSection({
                 ))}
               </div>
             )}
+
+            <p className="text-[12px] text-[#6b6b6b]">{latestPreviewDecisionHint}</p>
           </div>
         )}
       </div>
