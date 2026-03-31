@@ -4,8 +4,15 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
-from autopilot.cli.run import _ready_open_stories, _write_ralph_story_snapshot, _write_team_context
+from autopilot.cli.run import (
+    _project_branch_policy,
+    _ready_open_stories,
+    _should_use_story_worktree,
+    _write_ralph_story_snapshot,
+    _write_team_context,
+)
 
 
 def test_write_ralph_story_snapshot_selects_only_requested_story(tmp_path: Path) -> None:
@@ -183,3 +190,42 @@ def test_write_team_context_includes_shared_discoveries(tmp_path: Path) -> None:
     assert payload["team_mode"] == "team"
     assert payload["shared_discovery_summary"]["warning"] == 1
     assert payload["shared_discoveries"][0]["title"] == "Rate limit"
+
+
+def test_project_branch_policy_uses_task_source_contract() -> None:
+    policy = _project_branch_policy(
+        {
+            "task_source": {
+                "source_kind": "github_issue",
+                "external_id": "42",
+                "repo": "martin/autopilot",
+                "branch_policy": "isolated_worktree",
+                "brief_ref": "",
+            }
+        }
+    )
+
+    assert policy == "isolated_worktree"
+
+
+def test_should_use_story_worktree_for_isolated_branch_policy(tmp_path: Path) -> None:
+    project_dir = tmp_path / "project"
+    project_dir.mkdir(parents=True)
+    (project_dir / ".git").write_text("gitdir: .git")
+
+    should_use = _should_use_story_worktree(
+        {
+            "task_source": {
+                "source_kind": "local_brief",
+                "external_id": "",
+                "repo": str(project_dir),
+                "branch_policy": "isolated_worktree",
+                "brief_ref": ".agents/tasks/prd.json",
+            }
+        },
+        project_dir,
+        SimpleNamespace(project_concurrency_mode="sequential"),
+        parallel_slot=False,
+    )
+
+    assert should_use is True

@@ -109,6 +109,34 @@ def test_load_project_state_after_register_and_save(tmp_path: Path) -> None:
     assert loaded["budget_usage"]["project"]["worker_iterations"] == 0
 
 
+def test_register_project_persists_task_source_contract(tmp_path: Path) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    project_dir = tmp_path / "task-source-project"
+    project_dir.mkdir(parents=True)
+
+    project = register_project(
+        config,
+        name="Task Source Project",
+        project_path=project_dir,
+        task_source={
+            "source_kind": "github_issue",
+            "external_id": "42",
+            "repo": "martin/autopilot",
+            "branch_policy": "isolated_worktree",
+            "brief_ref": "",
+        },
+    )
+    prd = normalize_prd({"title": "Task Source Project", "stories": [{"id": 1, "title": "Bootstrap", "description": "Start"}]})
+    save_project_prd(project, prd)
+    ensure_project_state(config, project, seed_mode="new")
+
+    detail = build_project_detail(config, project["id"])
+
+    assert detail["task_source"]["source_kind"] == "github_issue"
+    assert detail["task_source"]["external_id"] == "42"
+    assert detail["task_source"]["branch_policy"] == "isolated_worktree"
+
+
 def test_normalize_prd_enriches_story_routing_and_phases() -> None:
     prd = normalize_prd(
         {

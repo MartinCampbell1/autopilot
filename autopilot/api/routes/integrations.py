@@ -134,6 +134,26 @@ def _tracker_item_prd(request: TrackerItemTriggerRequest, tracker_display_name: 
     }
 
 
+def _github_issue_task_source(request: GitHubIssueTriggerRequest) -> dict[str, str]:
+    return {
+        "source_kind": "github_issue",
+        "external_id": str(request.issue.id or request.issue.number),
+        "repo": request.repository.full_name or request.repository.name or "",
+        "branch_policy": "isolated_worktree",
+        "brief_ref": "",
+    }
+
+
+def _tracker_item_task_source(request: TrackerItemTriggerRequest) -> dict[str, str]:
+    return {
+        "source_kind": "tracker_item",
+        "external_id": request.item.external_id,
+        "repo": request.repository.full_name or request.repository.name or "",
+        "branch_policy": "isolated_worktree",
+        "brief_ref": "",
+    }
+
+
 @router.post("/github/issues")
 async def ingest_github_issue_trigger(request: GitHubIssueTriggerRequest) -> dict[str, Any]:
     config = get_config()
@@ -173,6 +193,7 @@ async def ingest_github_issue_trigger(request: GitHubIssueTriggerRequest) -> dic
             project_path=request.project_path,
             priority=request.priority,
             launch=request.launch,
+            task_source=_github_issue_task_source(request),
         )
         project = get_project_entry(config, project_id=created_project.project_id, include_archived=True)
         created = True
@@ -257,6 +278,7 @@ async def ingest_tracker_item_trigger(request: TrackerItemTriggerRequest) -> dic
             project_path=request.project_path,
             priority=request.priority,
             launch=request.launch,
+            task_source=_tracker_item_task_source(request),
         )
         project = get_project_entry(config, project_id=created_project.project_id, include_archived=True)
         created = True
