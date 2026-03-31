@@ -1026,6 +1026,8 @@ def emit_project_event(
     state = load_project_state(config, project_id)
     if not state:
         return {}
+    project = get_project_entry(config, project_id=project_id, include_archived=True)
+    task_source = resolve_project_task_source(project or {}) if project is not None else normalize_task_source(None)
 
     event_record = {
         "event": event,
@@ -1034,9 +1036,14 @@ def emit_project_event(
         "status": status,
         "message": _sanitize_message(message),
         "timestamp": utcnow_iso(),
+        "task_source": task_source,
     }
     if extra:
         event_record.update(extra)
+    if project is not None and story_id is not None:
+        handoff = _build_event_story_handoff_summary(project, state, story_id=story_id)
+        if handoff is not None:
+            event_record["handoff"] = handoff
 
     timeline = state.setdefault("timeline", [])
     timeline.append(event_record)
@@ -1385,44 +1392,42 @@ def _project_progress_counts(stories: list[dict[str, Any]]) -> tuple[int, int]:
     return done, total
 
 
-def _build_project_handoff_summary(stories: list[dict[str, Any]]) -> dict[str, Any] | None:
-    candidates: list[dict[str, Any]] = []
-    for story in stories:
-        github_pr = dict(story.get("github_pr") or {})
-        if not github_pr:
-            continue
-        if not (
-            github_pr.get("number")
-            or github_pr.get("url")
-            or str(github_pr.get("handoff_status") or "").strip().lower() not in {"", "not_requested"}
-            or str(github_pr.get("merge_state") or "").strip().lower() not in {"", "not_ready"}
-            or str(story.get("branch_name") or "").strip()
-        ):
-            continue
-        candidates.append(
-            {
-                "story_id": int(story["id"]),
-                "story_title": str(story.get("title") or ""),
-                "head_branch": str(github_pr.get("head_branch") or story.get("branch_name") or "").strip(),
-                "number": github_pr.get("number"),
-                "url": str(github_pr.get("url") or "").strip(),
-                "state": str(github_pr.get("state") or "").strip(),
-                "ci_status": str(github_pr.get("ci_status") or "").strip(),
-                "review_status": str(github_pr.get("review_status") or "").strip(),
-                "handoff_status": str(github_pr.get("handoff_status") or "").strip(),
-                "merge_state": str(github_pr.get("merge_state") or "").strip(),
-                "updated_at": (
-                    github_pr.get("updated_at")
-                    or story.get("updated_at")
-                    or story.get("completed_at")
-                    or story.get("started_at")
-                ),
-            }
-        )
+def _build_story_handoff_summary(story: dict[str, Any]) -> dict[str, Any] | None:
+    github_pr = dict(story.get("github_pr") or {})
+    if not github_pr:
+        return None
+    if not (
+        github_pr.get("number")
+        or github_pr.get("url")
+        or str(github_pr.get("handoff_status") or "").strip().lower() not in {"", "not_requested"}
+        or str(github_pr.get("merge_state") or "").strip().lower() not in {"", "not_ready"}
+        or str(story.get("branch_name") or "").strip()
+    ):
+        return None
+    return {
+        "story_id": int(story["id"]),
+        "story_title": str(story.get("title") or ""),
+        "head_branch": str(github_pr.get("head_branch") or story.get("branch_name") or "").strip(),
+        "number": github_pr.get("number"),
+        "url": str(github_pr.get("url") or "").strip(),
+        "state": str(github_pr.get("state") or "").strip(),
+        "ci_status": str(github_pr.get("ci_status") or "").strip(),
+        "review_status": str(github_pr.get("review_status") or "").strip(),
+        "handoff_status": str(github_pr.get("handoff_status") or "").strip(),
+        "merge_state": str(github_pr.get("merge_state") or "").strip(),
+        "updated_at": (
+            github_pr.get("updated_at")
+            or story.get("updated_at")
+            or story.get("completed_at")
+            or story.get("started_at")
+        ),
+    }
 
+
+def _build_project_handoff_summary(stories: list[dict[str, Any]]) -> dict[str, Any] | None:
+    candidates = [summary for story in stories if (summary := _build_story_handoff_summary(story)) is not None]
     if not candidates:
         return None
-
     candidates.sort(
         key=lambda candidate: (
             str(candidate.get("updated_at") or ""),
@@ -1431,6 +1436,75 @@ def _build_project_handoff_summary(stories: list[dict[str, Any]]) -> dict[str, A
         reverse=True,
     )
     return candidates[0]
+
+
+def _build_project_delivery_loop(
+    project: dict[str, Any],
+    state: dict[str, Any],
+    stories: list[dict[str, Any]],
+) -> dict[str, Any]:
+    control_plane = dict(project.get("control_plane") or {})
+    execution_brief = dict(control_plane.get("execution_brief") or {})
+    brief_relpath = str(execution_brief.get("relpath") or "").strip()
+    brief_path = (Path(project["path"]) / brief_relpath).resolve() if brief_relpath else None
+    current_story = next((story for story in stories if story["id"] == state.get("current_story_id")), None)
+    last_event = state.get("timeline", [])[-1] if state.get("timeline") else None
+    return {
+        "source": resolve_project_task_source(project),
+        "brief": {
+            "title": str(execution_brief.get("title") or "").strip(),
+            "relpath": brief_relpath,
+            "path": str(brief_path) if brief_path is not None and brief_path.exists() else "",
+            "present": bool(brief_path is not None and brief_path.exists()),
+        },
+        "run": {
+            "status": str(state.get("status") or "idle"),
+            "started_at": state.get("started_at"),
+            "finished_at": state.get("finished_at"),
+            "current_story_id": state.get("current_story_id"),
+            "current_story_title": current_story.get("title") if current_story else None,
+            "last_event": (
+                {
+                    "event": last_event.get("event"),
+                    "status": last_event.get("status"),
+                    "message": last_event.get("message"),
+                    "timestamp": last_event.get("timestamp"),
+                }
+                if last_event
+                else None
+            ),
+        },
+        "handoff": _build_project_handoff_summary(stories),
+    }
+
+
+def _build_event_story_handoff_summary(
+    project: dict[str, Any],
+    state: dict[str, Any],
+    *,
+    story_id: int,
+) -> dict[str, Any] | None:
+    story_definition = next(
+        (story for story in load_project_prd(project, seed_mode="migrate").get("stories", []) if int(story["id"]) == int(story_id)),
+        None,
+    )
+    if story_definition is None:
+        return None
+    runtime_story = dict((state.get("story_state", {}) or {}).get(str(story_id)) or {})
+    story_payload = {
+        "id": int(story_id),
+        "title": str(story_definition.get("title") or ""),
+        "branch_name": runtime_story.get("branch_name"),
+        "started_at": runtime_story.get("started_at"),
+        "completed_at": runtime_story.get("completed_at"),
+        "updated_at": runtime_story.get("updated_at"),
+        "github_pr": normalize_story_github_pr(
+            project["name"],
+            story_definition,
+            existing=runtime_story.get("github_pr") or {},
+        ),
+    }
+    return _build_story_handoff_summary(story_payload)
 
 
 def _resolve_launch_contract(
@@ -1451,6 +1525,7 @@ def build_project_summary(config: AutopilotConfig, project: dict[str, Any]) -> d
     stories = merge_project_stories(config, project, state)
     stories_done, stories_total = _project_progress_counts(stories)
     latest_handoff = _build_project_handoff_summary(stories)
+    delivery_loop = _build_project_delivery_loop(project, state, stories)
     current_story = next((story for story in stories if story["id"] == state.get("current_story_id")), None)
     last_event = state.get("timeline", [])[-1] if state.get("timeline") else None
     return {
@@ -1473,6 +1548,7 @@ def build_project_summary(config: AutopilotConfig, project: dict[str, Any]) -> d
         "runtime_profile": runtime_profile,
         "task_source": resolve_project_task_source(project),
         "latest_handoff": latest_handoff,
+        "delivery_loop": delivery_loop,
         "budget_policy": state.get("budget_policy", default_budget_policy()),
         "budget_usage": state.get("budget_usage", default_budget_usage()),
         "quality_policy": state.get("quality_policy", default_quality_policy()),

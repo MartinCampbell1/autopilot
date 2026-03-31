@@ -46,6 +46,12 @@ function sentenceCase(value?: string | null) {
   return value ? value.replaceAll("_", " ") : "Unknown";
 }
 
+function formatTaskSource(event: TimelineEvent) {
+  const taskSource = event.task_source;
+  if (!taskSource) return "";
+  return [taskSource.source_kind, taskSource.external_id, taskSource.repo].filter(Boolean).join(" / ");
+}
+
 export function StoryDetailPanel({
   projectId,
   projectStatus,
@@ -306,6 +312,32 @@ export function StoryDetailPanel({
                       <span className="text-[11px] text-[#9b9a97]">{formatTimestamp(event.timestamp)}</span>
                     </div>
                     <p className="mt-2 text-[13px] leading-relaxed text-[#37352f]">{event.message}</p>
+                    {(event.task_source || event.handoff) && (
+                      <div className="mt-3 grid gap-3 md:grid-cols-2">
+                        {event.task_source && (
+                          <div className="rounded-[10px] border border-[#ecebe8] bg-[#fbfbf9] px-3 py-3">
+                            <p className="text-[11px] uppercase tracking-[0.08em] text-[#9b9a97]">Source</p>
+                            <p className="mt-1 text-[12px] font-medium text-[#37352f]">{formatTaskSource(event)}</p>
+                            <p className="mt-2 text-[11px] text-[#787774]">
+                              Branch policy: {event.task_source.branch_policy}
+                            </p>
+                          </div>
+                        )}
+                        {event.handoff && (
+                          <div className="rounded-[10px] border border-[#ecebe8] bg-[#fbfbf9] px-3 py-3">
+                            <p className="text-[11px] uppercase tracking-[0.08em] text-[#9b9a97]">Handoff</p>
+                            <p className="mt-1 text-[12px] font-medium text-[#37352f]">
+                              {event.handoff.number
+                                ? `PR #${event.handoff.number}`
+                                : event.handoff.head_branch || event.handoff.story_title}
+                            </p>
+                            <p className="mt-2 text-[11px] text-[#787774]">
+                              {sentenceCase(event.handoff.handoff_status)} / {sentenceCase(event.handoff.merge_state)}
+                            </p>
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
                 ))
               )}

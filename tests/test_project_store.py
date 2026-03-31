@@ -595,6 +595,61 @@ def test_build_project_summary_includes_latest_handoff(tmp_path: Path) -> None:
     assert summary["latest_handoff"]["number"] == 12
     assert summary["latest_handoff"]["handoff_status"] == "approved_and_green"
     assert summary["latest_handoff"]["merge_state"] == "ready"
+    assert summary["delivery_loop"]["source"]["source_kind"] == "manual"
+    assert summary["delivery_loop"]["handoff"]["number"] == 12
+
+
+def test_emit_project_event_records_task_source_and_handoff(tmp_path: Path) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    project_dir = tmp_path / "event-provenance-project"
+    project_dir.mkdir(parents=True)
+
+    project = register_project(
+        config,
+        name="Event Provenance Project",
+        project_path=project_dir,
+        task_source={
+            "source_kind": "github_issue",
+            "external_id": "42",
+            "repo": "martin/autopilot",
+            "branch_policy": "isolated_worktree",
+            "brief_ref": "",
+        },
+    )
+    prd = normalize_prd(
+        {
+            "title": "Event Provenance Project",
+            "stories": [{"id": 1, "title": "Bootstrap", "description": "Start"}],
+        }
+    )
+    save_project_prd(project, prd)
+    state = ensure_project_state(config, project, seed_mode="new")
+    state["story_state"]["1"]["branch_name"] = "autopilot/event-provenance-project/story-1-bootstrap"
+    state["story_state"]["1"]["github_pr"] = {
+        "number": 21,
+        "url": "https://github.com/example/repo/pull/21",
+        "review_status": "approved",
+        "ci_status": "green",
+        "updated_at": "2026-03-31T12:00:00Z",
+    }
+    save_project_state(config, project["id"], state)
+
+    emit_project_event(
+        config,
+        project["id"],
+        event="story_done",
+        status="done",
+        message="Bootstrap completed and handed off.",
+        story_id=1,
+    )
+
+    detail = build_project_detail(config, project["id"])
+    event = detail["timeline"][-1]
+
+    assert event["task_source"]["source_kind"] == "github_issue"
+    assert event["task_source"]["external_id"] == "42"
+    assert event["handoff"]["number"] == 21
+    assert event["handoff"]["handoff_status"] == "approved_and_green"
 
 
 def test_update_project_budget_policy_persists_changes(tmp_path: Path) -> None:
