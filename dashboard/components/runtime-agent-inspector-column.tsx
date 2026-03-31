@@ -8,6 +8,11 @@ import {
 } from "@/components/control-plane-display";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import type {
+  AgentTimelineEntry,
+  LinkedSelectionContext,
+  TriagePriority,
+} from "@/lib/control-plane-models";
 import {
   approvalStatusClass,
   passStatusClass,
@@ -20,33 +25,9 @@ import type {
   ExecutionRuntimeAgentDetail,
 } from "@/lib/types";
 
-type AgentTimelineEntry = {
-  kind: "approval" | "issue" | "event";
-  id: string;
-  timestamp: string;
-  status: string;
-  title: string;
-  subtitle: string;
-  message: string;
-  approval?: ExecutionApprovalRecord;
-  issue?: ExecutionIssueRecord;
-  event?: Record<string, unknown>;
-};
-
-type TriagePriority = "critical" | "high" | "normal";
-
 type RelatedRunLink = {
   run: ExecutionAgentActionRunRecord;
   resultIndex: number;
-};
-
-type LinkedSelectionPayload = {
-  runId?: string;
-  resultIndex?: number;
-  approvalId?: string;
-  issueId?: string;
-  runtimeAgentId?: string;
-  event?: Record<string, unknown> | null;
 };
 
 type RunResultDetails = {
@@ -72,7 +53,7 @@ type RuntimeAgentInspectorColumnProps = {
   asRecord: (value: unknown) => Record<string, unknown> | null;
   describeRunResult: (result: Record<string, unknown>) => RunResultDetails;
   onSelectTimelineEntry: (entry: AgentTimelineEntry) => void;
-  onSyncLinkedSelection: (payload: LinkedSelectionPayload) => void;
+  onSyncLinkedSelection: (payload: LinkedSelectionContext) => void;
   onFocusRuntimeAgent: (runtimeAgentId: string) => void;
   onSelectRun: (runId: string, resultIndex: number) => void;
   onApproveApproval: (approval: ExecutionApprovalRecord) => void;

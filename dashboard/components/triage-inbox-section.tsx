@@ -9,41 +9,14 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import type {
+  TriageInboxFeedback,
+  TriageInboxFeedbackGroup,
+  TriageInboxItem,
+} from "@/lib/control-plane-models";
 import { triagePriorityClass } from "@/lib/control-plane-ui";
 
-type TriagePriority = "critical" | "high" | "normal";
 type TriageInboxFeedbackTone = "all" | "success" | "info";
-
-type TriageInboxItem = {
-  key: string;
-  label: string;
-  queueDetail: string;
-  title: string;
-  subtitle: string;
-  timestamp: string;
-  status: string;
-  statusClassName: string;
-  priority: TriagePriority;
-  syncedWithSelection: boolean;
-  onInspect: () => void;
-  onSnooze: () => void;
-  onDismiss: () => void;
-};
-
-type TriageInboxFeedback = {
-  itemKey: string;
-  itemLabel: string;
-  message: string;
-  tone: "info" | "success";
-  timestamp: string;
-};
-
-type TriageInboxFeedbackGroup = {
-  itemKey: string;
-  itemLabel: string;
-  entries: TriageInboxFeedback[];
-  isActive: boolean;
-};
 
 type TriageInboxSectionProps = {
   triageInboxItemCount: number;

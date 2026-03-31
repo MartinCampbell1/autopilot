@@ -72,6 +72,26 @@ import {
   type PersistedLineageQueueState,
   visibleEntriesByOperatorVisibilityState,
 } from "@/lib/control-plane-operator-state";
+import {
+  AGENT_PRIORITY_QUEUE_KEYS,
+  SESSION_LINEAGE_QUEUE_KEYS,
+  type AgentPriorityQueueKind,
+  type AgentScopedOutcome,
+  type AgentTimelineEntry,
+  type LinkedSelectionContext,
+  type LineageQueueKind,
+  type PendingAgentTimelineTarget,
+  type QueueAdvanceTarget,
+  type SessionQueueAdvanceTarget,
+  type SessionContextKind,
+  type SessionLineageEntry,
+  type SessionLineageTrait,
+  type TriageInboxFeedback,
+  type TriageInboxFeedbackGroup,
+  type TriageInboxItem,
+  type TriagePriority,
+  type AgentQueueAdvanceTarget,
+} from "@/lib/control-plane-models";
 import { approvalStatusClass, passStatusClass } from "@/lib/control-plane-ui";
 import { useSSE } from "@/lib/sse";
 import type {
@@ -97,113 +117,6 @@ const AGENT_TIMELINE_STORAGE_PREFIX = "control-plane:agent-timeline:";
 const SESSION_QUEUE_FOCUS_STORAGE_PREFIX = "control-plane:session-queue-focus:";
 const AGENT_QUEUE_FOCUS_STORAGE_PREFIX = "control-plane:agent-queue-focus:";
 const TRIAGE_INBOX_FEEDBACK_LIMIT = 5;
-const SESSION_LINEAGE_QUEUE_KEYS: LineageQueueKind[] = ["attention", "decisions"];
-const AGENT_PRIORITY_QUEUE_KEYS = ["critical", "high"] as const;
-
-type AgentScopedOutcome = {
-  run: ExecutionAgentActionRunRecord;
-  result: Record<string, unknown>;
-  resultIndex: number;
-  timestamp: string;
-  runtimeAgentIds: string[];
-};
-
-type AgentTimelineEntry = {
-  kind: "approval" | "issue" | "event";
-  id: string;
-  timestamp: string;
-  status: string;
-  title: string;
-  subtitle: string;
-  message: string;
-  approval?: ExecutionApprovalRecord;
-  issue?: ExecutionIssueRecord;
-  event?: Record<string, unknown>;
-};
-
-type PendingAgentTimelineTarget = {
-  runtimeAgentId: string;
-  runId: string;
-  approvalId: string;
-  issueId: string;
-};
-
-type LinkedSelectionContext = {
-  runId?: string;
-  resultIndex?: number;
-  approvalId?: string;
-  issueId?: string;
-  runtimeAgentId?: string;
-  event?: Record<string, unknown> | null;
-};
-
-type SessionContextKind = "" | "approval" | "issue" | "event";
-type LineageQueueKind = "attention" | "decisions";
-type TriagePriority = "critical" | "high" | "normal";
-type SessionLineageEntry = {
-  key: string;
-  runId: string;
-  resultIndex: number;
-  timestamp: string;
-  status: string;
-  title: string;
-  subtitle: string;
-  message: string;
-  approvalId: string;
-  issueId: string;
-  eventKey: string;
-  eventName: string;
-  runtimeAgentId: string;
-  projectId: string;
-  projectName: string;
-  storyId: number | null;
-  storyTitle: string;
-  event: Record<string, unknown> | null;
-};
-type SessionLineageTrait = {
-  key: string;
-  label: string;
-  className: string;
-};
-type TriageInboxItem = {
-  key: string;
-  label: string;
-  queueDetail: string;
-  title: string;
-  subtitle: string;
-  timestamp: string;
-  status: string;
-  statusClassName: string;
-  priority: TriagePriority;
-  syncedWithSelection: boolean;
-  onInspect: () => void;
-  onSnooze: () => void;
-  onDismiss: () => void;
-};
-type TriageInboxFeedback = {
-  itemKey: string;
-  itemLabel: string;
-  message: string;
-  tone: "info" | "success";
-  timestamp: string;
-};
-type TriageInboxFeedbackGroup = {
-  itemKey: string;
-  itemLabel: string;
-  entries: TriageInboxFeedback[];
-  isActive: boolean;
-};
-type SessionQueueAdvanceTarget = {
-  kind: "session-lineage";
-  filter: string;
-  entry: SessionLineageEntry;
-};
-type AgentQueueAdvanceTarget = {
-  kind: "agent-timeline";
-  priority: (typeof AGENT_PRIORITY_QUEUE_KEYS)[number];
-  entry: AgentTimelineEntry;
-};
-type QueueAdvanceTarget = SessionQueueAdvanceTarget | AgentQueueAdvanceTarget;
 
 function agentTimelineEntryKey(entry: AgentTimelineEntry): string {
   return `${entry.kind}:${entry.id}`;
@@ -239,7 +152,7 @@ function sessionQueueAdvanceTarget(
 }
 
 function agentQueueAdvanceTarget(
-  priority: (typeof AGENT_PRIORITY_QUEUE_KEYS)[number],
+  priority: AgentPriorityQueueKind,
   entry: AgentTimelineEntry
 ): AgentQueueAdvanceTarget {
   return {

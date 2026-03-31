@@ -4,19 +4,12 @@ import { SessionMetric } from "@/components/control-plane-display";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import type { AgentScopedOutcome } from "@/lib/control-plane-models";
 import { passStatusClass } from "@/lib/control-plane-ui";
 import type {
   ExecutionAgentActionRunRecord,
   ExecutionRuntimeAgentDetail,
 } from "@/lib/types";
-
-type AgentScopedOutcome = {
-  run: ExecutionAgentActionRunRecord;
-  result: Record<string, unknown>;
-  resultIndex: number;
-  timestamp: string;
-  runtimeAgentIds: string[];
-};
 
 type RunResultDetails = {
   title: string;

@@ -17,6 +17,13 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { AGENT_PRIORITY_QUEUE_KEYS } from "@/lib/control-plane-models";
+import type {
+  AgentPriorityQueueKind,
+  AgentTimelineEntry,
+  LinkedSelectionContext,
+  TriagePriority,
+} from "@/lib/control-plane-models";
 import {
   approvalStatusClass,
   passStatusClass,
@@ -28,36 +35,11 @@ import type {
   ExecutionIssueRecord,
   ExecutionRuntimeAgentDetail,
 } from "@/lib/types";
-
-type TriagePriority = "critical" | "high" | "normal";
-type AgentPriorityQueueKey = "critical" | "high";
 type AgentTimelineFilter = "all" | "approvals" | "issues" | "events" | "attention";
-
-type AgentTimelineEntry = {
-  kind: "approval" | "issue" | "event";
-  id: string;
-  timestamp: string;
-  status: string;
-  title: string;
-  subtitle: string;
-  message: string;
-  approval?: ExecutionApprovalRecord;
-  issue?: ExecutionIssueRecord;
-  event?: Record<string, unknown>;
-};
 
 type RelatedRunLink = {
   run: ExecutionAgentActionRunRecord;
   resultIndex: number;
-};
-
-type LinkedSelectionPayload = {
-  runId?: string;
-  resultIndex?: number;
-  approvalId?: string;
-  issueId?: string;
-  runtimeAgentId?: string;
-  event?: Record<string, unknown> | null;
 };
 
 type RunResultDetails = {
@@ -89,8 +71,8 @@ type RuntimeAgentTimelineSectionProps = {
   agentQueueAdvanceNoticeActions: QueueAdvanceNoticeActionProps;
   nextCriticalAgentTimelineEntry: AgentTimelineEntry | null;
   nextHighAgentTimelineEntry: AgentTimelineEntry | null;
-  expandedAgentPriorityQueues: AgentPriorityQueueKey[];
-  currentAgentPriorityQueue: AgentPriorityQueueKey | "";
+  expandedAgentPriorityQueues: AgentPriorityQueueKind[];
+  currentAgentPriorityQueue: AgentPriorityQueueKind | "";
   onExpandAllAgentPriorityQueues: () => void;
   onCollapseAllAgentPriorityQueues: () => void;
   onOpenCurrentAgentPriorityQueue: () => void;
@@ -100,7 +82,7 @@ type RuntimeAgentTimelineSectionProps = {
   highAgentTimelineQueue: AgentTimelineEntry[];
   highAgentTimelineTotal: number;
   highAgentTimelinePosition: number;
-  onToggleAgentPriorityQueueExpansion: (queue: AgentPriorityQueueKey) => void;
+  onToggleAgentPriorityQueueExpansion: (queue: AgentPriorityQueueKind) => void;
   filteredAgentTimelineEntriesCount: number;
   visibleAgentTimelineEntries: AgentTimelineEntry[];
   selectedAgentTimelineEntry: AgentTimelineEntry | null;
@@ -117,7 +99,7 @@ type RuntimeAgentTimelineSectionProps = {
   asRecord: (value: unknown) => Record<string, unknown> | null;
   describeRunResult: (result: Record<string, unknown>) => RunResultDetails;
   onSelectTimelineEntry: (entry: AgentTimelineEntry) => void;
-  onSyncLinkedSelection: (payload: LinkedSelectionPayload) => void;
+  onSyncLinkedSelection: (payload: LinkedSelectionContext) => void;
   onFocusRuntimeAgent: (runtimeAgentId: string) => void;
   onSelectRun: (runId: string, resultIndex: number) => void;
   onApproveApproval: (approval: ExecutionApprovalRecord) => void;
@@ -131,7 +113,7 @@ type RuntimeAgentTimelineSectionProps = {
   onSnoozeAgentTimelineEntry: (entry: AgentTimelineEntry) => void;
   onDismissAgentTimelineEntry: (entry: AgentTimelineEntry) => void;
   onAdvanceAgentPriorityQueueFromEntry: (
-    priority: AgentPriorityQueueKey,
+    priority: AgentPriorityQueueKind,
     entry: AgentTimelineEntry
   ) => void;
   onFindAgentTimelineEntryInSession: (entry: AgentTimelineEntry) => void;
@@ -140,8 +122,6 @@ type RuntimeAgentTimelineSectionProps = {
   agentTimelinePriority: (entry: AgentTimelineEntry) => TriagePriority;
   agentTimelineRowDomId: (runtimeAgentId: string, entryKey: string) => string;
 };
-
-const AGENT_PRIORITY_QUEUE_KEYS: AgentPriorityQueueKey[] = ["critical", "high"];
 
 export function RuntimeAgentTimelineSection({
   selectedAgent,

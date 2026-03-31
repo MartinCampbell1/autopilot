@@ -29,39 +29,17 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { SESSION_LINEAGE_QUEUE_KEYS } from "@/lib/control-plane-models";
+import type {
+  LineageQueueKind,
+  SessionLineageEntry,
+  SessionLineageTrait,
+  TriagePriority,
+} from "@/lib/control-plane-models";
 import { passStatusClass, triagePriorityClass } from "@/lib/control-plane-ui";
 import type { ExecutionPlaneCountMap } from "@/lib/types";
 
-type LineageQueueKind = "attention" | "decisions";
 type SessionLineageFilter = "all" | LineageQueueKind | "agent-linked";
-type TriagePriority = "critical" | "high" | "normal";
-
-type SessionLineageEntry = {
-  key: string;
-  runId: string;
-  resultIndex: number;
-  timestamp: string;
-  status: string;
-  title: string;
-  subtitle: string;
-  message: string;
-  approvalId: string;
-  issueId: string;
-  eventKey: string;
-  eventName: string;
-  runtimeAgentId: string;
-  projectId: string;
-  projectName: string;
-  storyId: number | null;
-  storyTitle: string;
-  event: Record<string, unknown> | null;
-};
-
-type SessionLineageTrait = {
-  key: string;
-  label: string;
-  className: string;
-};
 
 type SessionLineageSectionProps = {
   hasSelectedSession: boolean;
@@ -130,8 +108,6 @@ type SessionLineageSectionProps = {
   visibleSessionLineageEntries: SessionLineageEntry[];
   onSelectRunOutcome: (runId: string, resultIndex: number) => void;
 };
-
-const SESSION_LINEAGE_QUEUE_KEYS: LineageQueueKind[] = ["attention", "decisions"];
 
 function workspaceHrefForEntry(entry: SessionLineageEntry): string {
   if (entry.projectId && entry.storyId) {
