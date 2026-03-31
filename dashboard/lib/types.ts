@@ -3,11 +3,33 @@ export type ProjectRunStatus = "idle" | "running" | "paused" | "completed" | "fa
 
 export interface LaunchProfile {
   preset: "fast" | "team" | "parallel" | string;
+  provider?: string;
+  provider_config_id?: string;
+  runtime_profile_id?: string;
   story_execution_mode: "solo" | "team" | string;
   project_concurrency_mode: "sequential" | "parallel" | string;
   max_parallel_stories: number;
   story_pipeline?: string[];
   review_phases?: string[];
+}
+
+export interface ProviderConfig {
+  id: string;
+  family: string;
+  mode: string;
+  transport: string;
+  endpoint?: string | null;
+  command?: string[];
+  auth_strategy: string;
+  capabilities: string[];
+}
+
+export interface RuntimeProfile {
+  id: string;
+  sandbox_mode: string;
+  network_policy: string;
+  filesystem_policy: string;
+  default_tools: string[];
 }
 
 export interface LaunchPreset {
@@ -165,6 +187,8 @@ export interface ProjectSummary {
   last_message?: string;
   pid?: number | null;
   launch_profile?: LaunchProfile;
+  provider_config?: ProviderConfig;
+  runtime_profile?: RuntimeProfile;
   budget_policy?: RuntimeBudgetPolicy;
   budget_usage?: RuntimeBudgetUsage;
 }
@@ -809,6 +833,8 @@ export interface CapabilitiesCatalog {
   connector_types: ConnectorTypeSchema[];
   routing_policies: RoutingPolicy[];
   launch_presets: LaunchPreset[];
+  provider_configs: ProviderConfig[];
+  runtime_profiles: RuntimeProfile[];
 }
 
 export interface CreateProjectResult {
