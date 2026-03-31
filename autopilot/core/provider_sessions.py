@@ -16,7 +16,7 @@ def is_valid_provider(provider: str) -> bool:
     return provider in set(list_provider_families())
 
 
-def provider_source_dir(provider: str, home: Path | None = None) -> Path:
+def provider_source_dir(provider: str, home: Path | None = None) -> Path | None:
     """Return the default source directory for a provider's logged-in session."""
     adapter = get_adapter(provider)
     return adapter.session_source_dir(home or Path.home())
@@ -39,12 +39,16 @@ def import_current_session(provider: str, profiles_dir: Path, home: Path | None 
         raise ValueError(f"Unsupported provider: {provider}")
 
     adapter = get_adapter(provider)
+    if not adapter.requires_managed_profile:
+        raise ValueError(f"{provider} uses stateless local execution and does not support session import.")
     return adapter.import_session(profiles_dir, home or Path.home())
 
 
 def open_login_terminal(provider: str, cwd: Path | None = None) -> str:
     """Open an interactive provider login flow in a separate terminal window."""
     command = provider_login_command(provider)
+    if not command:
+        raise ValueError(f"{provider} uses stateless local execution and does not require login.")
     command_str = shlex.join(command)
 
     if sys.platform == "darwin":

@@ -69,9 +69,13 @@ class AdapterRuntimeMetadata:
     profile_path: str | None
     runtime_home: str | None
     session_strategy: str
+    provider_mode: str = "cloud"
+    transport: str = "command"
+    auth_strategy: str = "managed_session"
     env_overrides: dict[str, str] = field(default_factory=dict)
     supports_model_override: bool = False
     supports_quota_probe: bool = True
+    capabilities: list[str] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -155,7 +159,12 @@ class LocalProviderAdapter(ABC):
     cli_name: str
     install_hint: str
     session_strategy = "managed_runtime_home"
+    provider_mode = "cloud"
+    transport = "command"
+    auth_strategy = "managed_session"
+    requires_managed_profile = True
     supports_model_override = False
+    supported_modes: tuple[AdapterMode, ...] = (AdapterMode.EXEC, AdapterMode.REVIEW)
 
     @property
     def canonical_provider(self) -> str:
@@ -163,6 +172,13 @@ class LocalProviderAdapter(ABC):
 
     def runtime_home(self, profile: Profile) -> Path:
         return Path(profile.path)
+
+    @property
+    def capabilities(self) -> list[str]:
+        return [mode.value for mode in self.supported_modes]
+
+    def default_command(self) -> list[str]:
+        return [self.cli_name]
 
     def runtime_env_overrides(self, profile: Profile) -> dict[str, str]:
         return {}
@@ -191,8 +207,12 @@ class LocalProviderAdapter(ABC):
             profile_path=profile_path,
             runtime_home=runtime_home,
             session_strategy=self.session_strategy,
+            provider_mode=self.provider_mode,
+            transport=self.transport,
+            auth_strategy=self.auth_strategy,
             env_overrides=env_overrides,
             supports_model_override=self.supports_model_override,
+            capabilities=self.capabilities,
         )
 
     def diagnostics(
@@ -244,7 +264,7 @@ class LocalProviderAdapter(ABC):
             )
 
         resume_state = self.resume_state(profile) if profile is not None else None
-        if profile is not None and not resume_state.available:
+        if profile is not None and self.requires_managed_profile and not resume_state.available:
             notes.append("Managed runtime home exists but no resumable session files were found.")
             diagnostics.notes = notes
             diagnostics.elapsed_sec = round(time.monotonic() - started_at, 2)
@@ -394,6 +414,13 @@ class LocalProviderAdapter(ABC):
 
     def resume_state(self, profile: Profile | None) -> AdapterResumeState:
         runtime_home = self.runtime_home(profile) if profile is not None else self.session_source_dir(Path.home())
+        if runtime_home is None:
+            return AdapterResumeState(
+                strategy=self.session_strategy,
+                state_path="",
+                available=not self.requires_managed_profile,
+                metadata={"adapter_id": self.adapter_id, "provider_family": self.provider_family},
+            )
         session_files = [str(path.relative_to(runtime_home)) for path in self.resume_state_paths(runtime_home)]
         return AdapterResumeState(
             strategy=self.session_strategy,
@@ -404,14 +431,19 @@ class LocalProviderAdapter(ABC):
         )
 
     def has_logged_in_session(self, home: Path | None = None) -> bool:
-        return bool(self.resume_state_paths(self.session_source_dir(home or Path.home())))
+        source_dir = self.session_source_dir(home or Path.home())
+        if source_dir is None:
+            return False
+        return bool(self.resume_state_paths(source_dir))
 
     def login_command(self) -> list[str]:
         return list(self.provider_login_command())
 
     def import_session(self, profiles_dir: Path, home: Path | None = None) -> str:
+        if not self.requires_managed_profile:
+            raise ValueError(f"{self.provider_family} uses stateless local execution and does not support session import.")
         source_home = self.session_source_dir(home or Path.home())
-        if not self.has_logged_in_session(home):
+        if source_home is None or not self.has_logged_in_session(home):
             raise FileNotFoundError(f"No active {self.provider_family} session found at {source_home}")
 
         destination = self._next_profile_destination(profiles_dir)
@@ -505,7 +537,7 @@ class LocalProviderAdapter(ABC):
         """Return the interactive CLI login command."""
 
     @abstractmethod
-    def session_source_dir(self, home: Path) -> Path:
+    def session_source_dir(self, home: Path) -> Path | None:
         """Return the root directory containing the provider session state."""
 
     @abstractmethod
@@ -536,6 +568,7 @@ class CodexLocalAdapter(LocalProviderAdapter):
     cli_name = "codex"
     install_hint = "npm i -g @openai/codex"
     supports_model_override = True
+    supported_modes = (AdapterMode.EXEC, AdapterMode.REVIEW, AdapterMode.CRITIC)
 
     def check_installed_command(self) -> list[str]:
         return ["codex", "--version"]
@@ -543,7 +576,7 @@ class CodexLocalAdapter(LocalProviderAdapter):
     def provider_login_command(self) -> list[str]:
         return ["codex", "login"]
 
-    def session_source_dir(self, home: Path) -> Path:
+    def session_source_dir(self, home: Path) -> Path | None:
         return home / ".codex"
 
     def runtime_home_from_profile_dir(self, profile_dir: Path) -> Path:
@@ -664,7 +697,7 @@ class ClaudeLocalAdapter(_ManagedHomeCliAdapter):
     def provider_login_command(self) -> list[str]:
         return ["claude", "auth", "login"]
 
-    def session_source_dir(self, home: Path) -> Path:
+    def session_source_dir(self, home: Path) -> Path | None:
         return home
 
     def resume_state_paths(self, runtime_home: Path) -> list[Path]:
@@ -688,7 +721,7 @@ class GeminiLocalAdapter(_ManagedHomeCliAdapter):
     def provider_login_command(self) -> list[str]:
         return ["gemini"]
 
-    def session_source_dir(self, home: Path) -> Path:
+    def session_source_dir(self, home: Path) -> Path | None:
         return home
 
     def resume_state_paths(self, runtime_home: Path) -> list[Path]:
@@ -698,10 +731,45 @@ class GeminiLocalAdapter(_ManagedHomeCliAdapter):
         return ["gemini", "-p", prompt]
 
 
+class OllamaLocalAdapter(LocalProviderAdapter):
+    adapter_id = "ollama_local"
+    provider_family = "ollama"
+    cli_name = "ollama"
+    install_hint = "brew install ollama"
+    provider_mode = "local"
+    auth_strategy = "none"
+    session_strategy = "stateless"
+    requires_managed_profile = False
+    supports_model_override = True
+    supported_modes = (AdapterMode.EXEC, AdapterMode.REVIEW)
+
+    def check_installed_command(self) -> list[str]:
+        return ["ollama", "--version"]
+
+    def provider_login_command(self) -> list[str]:
+        return []
+
+    def session_source_dir(self, home: Path) -> Path | None:
+        return None
+
+    def runtime_home_from_profile_dir(self, profile_dir: Path) -> Path:
+        return profile_dir
+
+    def resume_state_paths(self, runtime_home: Path) -> list[Path]:
+        return []
+
+    def copy_session_to_profile(self, source_home: Path, destination: Path) -> None:
+        raise ValueError("ollama uses stateless local execution and does not support session import.")
+
+    def prepare_cli_command(self, prompt: str, *, model: str | None, mode: AdapterMode) -> list[str]:
+        return ["ollama", "run", model or "llama3.2", prompt]
+
+
 _LOCAL_ADAPTERS: tuple[LocalProviderAdapter, ...] = (
     CodexLocalAdapter(),
     ClaudeLocalAdapter(),
     GeminiLocalAdapter(),
+    OllamaLocalAdapter(),
 )
 SUPPORTED_PROVIDER_FAMILIES = tuple(adapter.provider_family for adapter in _LOCAL_ADAPTERS)
 _ADAPTERS_BY_ID: dict[str, LocalProviderAdapter] = {}
@@ -734,7 +802,14 @@ def register_adapter(adapter: LocalProviderAdapter, *, default: bool = True) -> 
             adapter_id=adapter.adapter_id,
             runtime_id=runtime_id,
             display_name=adapter.provider_family,
-            metadata={"cli_name": adapter.cli_name, "install_hint": adapter.install_hint},
+            metadata={
+                "cli_name": adapter.cli_name,
+                "install_hint": adapter.install_hint,
+                "mode": adapter.provider_mode,
+                "transport": adapter.transport,
+                "auth_strategy": adapter.auth_strategy,
+                "capabilities": adapter.capabilities,
+            },
         )
     )
     return adapter

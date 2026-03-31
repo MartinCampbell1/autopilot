@@ -13,6 +13,7 @@ from rich.panel import Panel
 from rich.table import Table
 
 from autopilot.core.account_manager import AccountManager
+from autopilot.core.adapters import list_provider_families
 from autopilot.core.config import AutopilotConfig, load_config
 from autopilot.core.project_store import build_project_summary, load_project_state, load_projects_registry
 
@@ -45,7 +46,7 @@ def _account_table(account_mgr: AccountManager) -> Table:
     table.add_column("Cooldown")
     table.add_column("Requests")
 
-    for provider in ("codex", "claude", "gemini"):
+    for provider in list_provider_families():
         pool = account_mgr.pool_status(provider)
         if not pool:
             continue
@@ -138,7 +139,11 @@ def _events_table(config: AutopilotConfig) -> Table:
 
 
 def render_live_snapshot(config: AutopilotConfig) -> Group:
-    account_mgr = AccountManager(profiles_dir=config.profiles_dir, cooldown_base=config.cooldown_base_sec)
+    account_mgr = AccountManager(
+        profiles_dir=config.profiles_dir,
+        cooldown_base=config.cooldown_base_sec,
+        config=config,
+    )
     account_mgr.discover()
     projects_table, runs_table = _projects_table(config)
     return Group(

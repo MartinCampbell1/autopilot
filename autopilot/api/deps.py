@@ -14,6 +14,6 @@ def get_config() -> AutopilotConfig:
 
 def get_account_manager() -> AccountManager:
     config = get_config()
-    manager = AccountManager(profiles_dir=config.profiles_dir)
+    manager = AccountManager(profiles_dir=config.profiles_dir, config=config)
     manager.discover()
     return manager

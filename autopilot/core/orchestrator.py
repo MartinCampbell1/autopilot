@@ -58,7 +58,11 @@ class Orchestrator:
     ):
         self.project_path = project_path
         self.config = config
-        self.account_mgr = AccountManager(profiles_dir=profiles_dir, cooldown_base=config.cooldown_base_sec)
+        self.account_mgr = AccountManager(
+            profiles_dir=profiles_dir,
+            cooldown_base=config.cooldown_base_sec,
+            config=config,
+        )
         self.account_mgr.discover()
         self.stuck_detector = StuckDetector()
         self.iteration_history: list[IterationRecord] = []

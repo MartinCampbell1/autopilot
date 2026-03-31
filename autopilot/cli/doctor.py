@@ -26,7 +26,7 @@ def _doctor_report(
     refresh: bool,
 ) -> dict[str, Any]:
     config = load_config(config_path)
-    manager = AccountManager(profiles_dir=config.profiles_dir)
+    manager = AccountManager(profiles_dir=config.profiles_dir, config=config)
     manager.discover()
 
     provider_snapshot = build_provider_setup_snapshot(config, manager, refresh=refresh)
@@ -37,7 +37,11 @@ def _doctor_report(
         cli_status = (payload.get("cli_probe") or {}).get("status")
         if cli_status != "ready":
             recommendations.append(f"Install or repair the {provider} CLI.")
-        if not payload.get("source_session_available") and payload.get("managed_profile_count", 0) == 0:
+        if (
+            payload.get("source_session_required")
+            and not payload.get("source_session_available")
+            and payload.get("managed_profile_count", 0) == 0
+        ):
             recommendations.append(f"Log into {provider} and import at least one managed profile.")
 
     if not project_report.prd_present:
@@ -52,6 +56,8 @@ def _doctor_report(
             "autopilot_home": str(config.autopilot_home),
             "profiles_dir": str(config.profiles_dir),
             "projects_yaml_path": str(config.projects_yaml_path),
+            "providers": provider_snapshot["provider_configs"],
+            "runtime_profiles": provider_snapshot["runtime_profiles"],
         },
         "providers": provider_snapshot,
         "project": project_report.to_dict(),
@@ -85,6 +91,8 @@ def doctor(
 
     provider_table = Table(title="Providers")
     provider_table.add_column("Provider")
+    provider_table.add_column("Mode")
+    provider_table.add_column("Auth")
     provider_table.add_column("CLI")
     provider_table.add_column("Imported")
     provider_table.add_column("Source Session")
@@ -94,13 +102,37 @@ def doctor(
         cli_probe = payload.get("cli_probe") or {}
         provider_table.add_row(
             provider,
+            str(payload.get("mode", "")),
+            str(payload.get("auth_strategy", "")),
             str(cli_probe.get("status", "unknown")),
             str(payload.get("managed_profile_count", 0)),
-            "yes" if payload.get("source_session_available") else "no",
+            (
+                "yes"
+                if payload.get("source_session_available")
+                else ("n/a" if not payload.get("source_session_required") else "no")
+            ),
             str(payload.get("ready_profile_count", 0)),
             str(cli_probe.get("summary", "")),
         )
     console.print(provider_table)
+
+    runtime_profiles = report["providers"].get("runtime_profiles") or []
+    if runtime_profiles:
+        runtime_table = Table(title="Runtime Profiles")
+        runtime_table.add_column("Profile")
+        runtime_table.add_column("Sandbox")
+        runtime_table.add_column("Network")
+        runtime_table.add_column("Filesystem")
+        runtime_table.add_column("Tools")
+        for profile in runtime_profiles:
+            runtime_table.add_row(
+                str(profile.get("id", "")),
+                str(profile.get("sandbox_mode", "")),
+                str(profile.get("network_policy", "")),
+                str(profile.get("filesystem_policy", "")),
+                ", ".join(str(tool) for tool in profile.get("default_tools", [])) or "-",
+            )
+        console.print(runtime_table)
 
     project_payload = report["project"]
     project_table = Table(title=f"Project: {project_payload['path']}")
