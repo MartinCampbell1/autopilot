@@ -207,6 +207,7 @@ export function useControlPlanePageController(
     rejectApproval,
     applyApproval,
     resolveIssue,
+    applyPreviewRun,
     runAgentSuggestedCommand,
     applyControlPlan,
   } = useControlPlaneActions({
@@ -218,6 +219,7 @@ export function useControlPlanePageController(
     setNotice,
     setErrorMessage,
     setSelectedRunId,
+    setSelectedRunResultIndex,
     setSelectedPassId,
     setSelectedAgent,
     setEntitySearch,
@@ -888,6 +890,10 @@ export function useControlPlanePageController(
         "Copied selected run link.",
         "No action run is selected."
       );
+    },
+    busyActionKey,
+    onApplySelectedPreviewRun: (run) => {
+      void applyPreviewRun(run);
     },
     formatScopeList,
     describeRunResult,
