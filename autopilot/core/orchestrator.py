@@ -10,6 +10,7 @@ from typing import Callable
 from rich.console import Console
 
 from autopilot.core.account_manager import AccountManager
+from autopilot.core.adapters import get_adapter
 from autopilot.core.config import AutopilotConfig
 from autopilot.core.cost_accounting import merge_usage_records, summarize_invocation_usage
 from autopilot.core.critic import run_review_plan
@@ -17,9 +18,11 @@ from autopilot.core.escalation import CompetingAttempt, AttemptPlan, attempt_str
 from autopilot.core.gates import run_gates
 from autopilot.core.loop_runner import (
     append_guardrail,
+    build_primary_prompt,
     check_git_diff_empty,
     get_last_commit_diff,
     read_quality_ratchet,
+    run_prompt_iteration,
     run_ralph_iteration,
     run_retry_iteration,
     summarize_quality_regressions,
@@ -99,6 +102,7 @@ class Orchestrator:
         else:
             console.print(f"  [blue]Worker[/blue] {profile.provider}/{profile.name} starting story #{story_id}...")
 
+        adapter = get_adapter(profile.resolved_adapter_id)
         if attempt_plan.strategy == "focused_retry":
             success, output, rate_limited = run_retry_iteration(
                 self.project_path,
@@ -108,6 +112,21 @@ class Orchestrator:
                 story_title,
                 story_description,
                 self.config.codex_timeout_sec,
+                on_progress=progress_callback,
+                profile=profile,
+            )
+        elif not adapter.requires_managed_profile:
+            success, output, rate_limited = run_prompt_iteration(
+                self.project_path,
+                env,
+                profile.provider,
+                build_primary_prompt(
+                    story_id,
+                    story_title,
+                    story_description,
+                    prd_path=ralph_prd_path,
+                ),
+                timeout=self.config.codex_timeout_sec,
                 on_progress=progress_callback,
                 profile=profile,
             )

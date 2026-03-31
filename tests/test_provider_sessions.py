@@ -50,7 +50,11 @@ class TestProviderSessions:
         assert provider_login_command("codex") == ["codex", "login"]
         assert provider_login_command("claude") == ["claude", "auth", "login"]
         assert provider_login_command("ollama") == []
+        assert provider_login_command("openai_compatible") == []
+        assert provider_login_command("local_command") == []
 
     def test_import_current_session_rejects_stateless_provider(self, tmp_path: Path) -> None:
         with pytest.raises(ValueError, match="stateless local execution"):
             import_current_session("ollama", profiles_dir=tmp_path / "profiles", home=tmp_path / "home")
+        with pytest.raises(ValueError, match="stateless local execution"):
+            import_current_session("openai_compatible", profiles_dir=tmp_path / "profiles", home=tmp_path / "home")
