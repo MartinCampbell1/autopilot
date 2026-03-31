@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { SessionMetric } from "@/components/control-plane-display";
+import { BreakdownChips, SessionMetric } from "@/components/control-plane-display";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -11,7 +11,9 @@ import {
   recommendationActionLabel,
   sessionStatusClass,
 } from "@/lib/control-plane-ui";
+import { formatTimestamp } from "@/lib/control-plane-data";
 import type {
+  ExecutionAgentActionRunRecord,
   OrchestratorSessionControl,
   OrchestratorSessionControlProfile,
   OrchestratorSessionControlRecommendation,
@@ -36,9 +38,14 @@ type SessionDrilldownControlSectionProps = {
   onClearEntitySearch: () => void;
   sortedProfiles: OrchestratorSessionControlProfile[];
   busyActionKey: string;
+  selectedRunId: string;
   onCopySessionLink: () => void;
   canCopyFocusedLink: boolean;
   onCopyFocusedLink: () => void;
+  latestPreviewRun: ExecutionAgentActionRunRecord | null;
+  latestPreviewAppliedRun: ExecutionAgentActionRunRecord | null;
+  onInspectRun: (runId: string) => void;
+  onApplyPreviewRun: (run: ExecutionAgentActionRunRecord) => void;
   onApplyControlPlan: (profile: OrchestratorSessionControlProfile) => void;
   onApplyRecommendation: (recommendation: OrchestratorSessionControlRecommendation) => void;
 };
@@ -61,12 +68,34 @@ export function SessionDrilldownControlSection({
   onClearEntitySearch,
   sortedProfiles,
   busyActionKey,
+  selectedRunId,
   onCopySessionLink,
   canCopyFocusedLink,
   onCopyFocusedLink,
+  latestPreviewRun,
+  latestPreviewAppliedRun,
+  onInspectRun,
+  onApplyPreviewRun,
   onApplyControlPlan,
   onApplyRecommendation,
 }: SessionDrilldownControlSectionProps) {
+  const latestPreviewCommandCounts = (latestPreviewRun?.diff_summary?.command_counts ||
+    {}) as Record<string, number>;
+  const latestPreviewWhy = Array.isArray(latestPreviewRun?.diff_summary?.why)
+    ? latestPreviewRun?.diff_summary?.why.filter(
+        (item): item is string => typeof item === "string" && item.trim().length > 0
+      )
+    : [];
+  const latestPreviewSelectedCount =
+    Number(latestPreviewRun?.summary?.selected_count) || latestPreviewRun?.results.length || 0;
+  const latestPreviewProcessedCount =
+    Number(latestPreviewRun?.summary?.processed_count) || latestPreviewRun?.results.length || 0;
+  const previewActionKey = latestPreviewRun
+    ? `preview-apply:${latestPreviewRun.preview_id || latestPreviewRun.id}`
+    : "";
+  const selectedPreview =
+    Boolean(latestPreviewRun) &&
+    selectedRunId === (latestPreviewRun?.preview_id || latestPreviewRun?.id || "");
   return (
     <>
       <div className="flex flex-wrap items-start justify-between gap-4">
@@ -286,6 +315,157 @@ export function SessionDrilldownControlSection({
         </div>
       </div>
 
+      <div className="rounded-2xl border border-[#d8e7ef] bg-[#f7fbfd] p-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#6f8a99]">
+              Preview Gate
+            </p>
+            <p className="mt-2 text-[13px] text-[#6b6b6b]">
+              Explicit review path for session actions: create a preview, inspect the proposed
+              diff, then apply or escalate approvals from that preview.
+            </p>
+          </div>
+          {latestPreviewRun ? (
+            <div className="flex flex-wrap gap-2">
+              <Button
+                size="sm"
+                variant={selectedPreview ? "default" : "outline"}
+                className={`h-8 rounded-lg text-[12px] ${
+                  selectedPreview
+                    ? "bg-[#1a1a1a] text-white hover:bg-[#333]"
+                    : "border-[#d8e7ef] bg-white text-[#2a6690] hover:bg-[#eef7fb]"
+                }`}
+                onClick={() => {
+                  onInspectRun(latestPreviewRun.id);
+                }}
+              >
+                {selectedPreview ? "Preview selected" : "Inspect preview"}
+              </Button>
+              {latestPreviewAppliedRun ? (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-8 rounded-lg border-[#d6e9dc] bg-white text-[12px] text-[#2b6e3f] hover:bg-[#eef8f1]"
+                  onClick={() => {
+                    onInspectRun(latestPreviewAppliedRun.id);
+                  }}
+                >
+                  Open applied run
+                </Button>
+              ) : (
+                <Button
+                  size="sm"
+                  className="h-8 rounded-lg bg-[#1a1a1a] text-[12px] text-white hover:bg-[#333]"
+                  disabled={Boolean(busyActionKey)}
+                  onClick={() => {
+                    onApplyPreviewRun(latestPreviewRun);
+                  }}
+                >
+                  {busyActionKey === previewActionKey
+                    ? latestPreviewRun.approval_required
+                      ? "Requesting..."
+                      : "Applying..."
+                    : latestPreviewRun.approval_required
+                      ? "Request approvals"
+                      : "Apply preview"}
+                </Button>
+              )}
+            </div>
+          ) : null}
+        </div>
+
+        {!latestPreviewRun ? (
+          <p className="mt-3 text-[13px] text-[#9b9a97]">
+            No session preview is recorded yet. Use “Create preview” on a session recommendation
+            before applying mutating actions.
+          </p>
+        ) : (
+          <div className="mt-4 space-y-4">
+            <div className="flex flex-wrap items-center gap-2">
+              <p className="font-mono text-[12px] font-semibold text-[#37352f]">
+                {latestPreviewRun.preview_id || latestPreviewRun.id}
+              </p>
+              <Badge
+                variant="outline"
+                className={`rounded-full px-2.5 py-1 text-[11px] font-semibold capitalize ${controlStateClass(
+                  latestPreviewAppliedRun ? "healthy" : latestPreviewRun.approval_required ? "needs_approval" : "actionable"
+                )}`}
+              >
+                {latestPreviewAppliedRun
+                  ? "applied"
+                  : latestPreviewRun.approval_required
+                    ? "approval-gated"
+                    : "ready-to-apply"}
+              </Badge>
+              <Badge
+                variant="outline"
+                className="rounded-full border-[#d3e5ef] bg-white px-2.5 py-1 text-[11px] font-medium capitalize text-[#2a6690]"
+              >
+                {(latestPreviewRun.apply_mode || "manual").replaceAll("_", " ")}
+              </Badge>
+              <Badge
+                variant="outline"
+                className="rounded-full border-[#e5e5e3] bg-white px-2.5 py-1 text-[11px] font-medium text-[#37352f]"
+              >
+                {formatTimestamp(latestPreviewRun.created_at)}
+              </Badge>
+            </div>
+
+            <div className="grid gap-3 sm:grid-cols-2">
+              <SessionMetric
+                label="Selected"
+                value={String(latestPreviewSelectedCount)}
+                detail={`${latestPreviewProcessedCount} processed`}
+              />
+              <SessionMetric
+                label="Projects"
+                value={String(latestPreviewRun.project_ids.length)}
+                detail={`${latestPreviewRun.runtime_agent_ids.length} runtime agents`}
+              />
+              <SessionMetric
+                label="Approval-Gated"
+                value={String(Number(latestPreviewRun.diff_summary?.approval_required_count) || 0)}
+                detail={
+                  latestPreviewRun.approval_required
+                    ? "Apply will create approvals instead of mutating directly."
+                    : "Policy allows direct apply from this preview."
+                }
+              />
+              <SessionMetric
+                label="Applied Result"
+                value={latestPreviewAppliedRun ? latestPreviewAppliedRun.status : "Pending"}
+                detail={
+                  latestPreviewAppliedRun
+                    ? latestPreviewAppliedRun.id
+                    : "No apply run is linked to this preview yet."
+                }
+              />
+            </div>
+
+            <BreakdownChips
+              label="Commands"
+              values={latestPreviewCommandCounts}
+              emptyText="No command breakdown recorded for this preview."
+            />
+
+            {latestPreviewWhy.length > 0 && (
+              <div className="flex flex-wrap gap-2">
+                {latestPreviewWhy.slice(0, 4).map((reason) => (
+                  <Badge
+                    key={`${latestPreviewRun.id}-${reason}`}
+                    variant="outline"
+                    className="rounded-full border-[#d8e7ef] bg-white px-2.5 py-1 text-[11px] font-medium text-[#2a6690]"
+                  >
+                    {reason}
+                  </Badge>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
       <div className="rounded-2xl border border-[#ecebe8] bg-[#fbfbf9] p-4">
         <div className="flex items-center justify-between gap-3">
           <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#9b9a97]">
@@ -342,6 +522,13 @@ export function SessionDrilldownControlSection({
                           </Badge>
                         ))}
                       </div>
+                      {recommendation.operation.type === "session_action_batch" &&
+                      recommendation.operation.mode === "execute" ? (
+                        <p className="mt-3 text-[12px] text-[#9b9a97]">
+                          Direct execution bypasses explicit preview review. Prefer the preview gate
+                          above when you want inspect-first control.
+                        </p>
+                      ) : null}
                     </div>
                     <Button
                       size="sm"

@@ -118,7 +118,8 @@ export function recommendationActionLabel(
 ): string {
   const operationType = stringValue(recommendation.operation.type);
   const operationMode = stringValue(recommendation.operation.mode);
-  if (operationType === "session_action_batch" && operationMode === "preview") return "Preview";
+  if (operationType === "session_action_batch" && operationMode === "preview") return "Create preview";
+  if (operationType === "session_action_batch" && operationMode === "execute") return "Execute directly";
   if (operationType === "inspect_session_approvals") return "Inspect approvals";
   if (operationType === "inspect_session_issues") return "Inspect issues";
   if (operationType === "session_status_update") return "Complete session";
