@@ -70,6 +70,7 @@ import {
   type PersistedLineageQueueState,
   visibleEntriesByOperatorVisibilityState,
 } from "@/lib/control-plane-operator-state";
+import { buildRuntimeAgentSectionProps } from "@/lib/control-plane-runtime-agent-props";
 import {
   AGENT_PRIORITY_QUEUE_KEYS,
   SESSION_LINEAGE_QUEUE_KEYS,
@@ -3232,7 +3233,7 @@ export default function ControlPlanePage() {
       onSnoozeTriageInboxItem: snoozeTriageInboxItem,
       onDismissTriageInboxItem: dismissTriageInboxItem,
     },
-    runtimeAgentSectionProps: {
+    runtimeAgentSectionProps: buildRuntimeAgentSectionProps({
       selectedAgentId,
       agentLoading,
       selectedAgent,
@@ -3240,156 +3241,98 @@ export default function ControlPlanePage() {
       formatTimestamp,
       toNumber,
       toStringValue,
-      onFocusRuntimeAgent: (runtimeAgentId: string) => {
-        focusRuntimeAgent(runtimeAgentId, true);
+      formatJson,
+      toNullableNumber,
+      asRecord,
+      describeRunResult,
+      outcomeProjectId,
+      outcomeStoryId,
+      selectedRunId,
+      setSelectedRunId,
+      selectedRunResultIndex,
+      setSelectedRunResultIndex,
+      focusRuntimeAgent,
+      runAgentSuggestedCommand,
+      agentScopedRuns,
+      agentActivitySearch,
+      setAgentActivitySearch,
+      agentActivityFilter,
+      setAgentActivityFilter,
+      filteredAgentScopedRuns,
+      agentScopedOutcomes,
+      filteredAgentScopedOutcomes,
+      setEntitySearch,
+      activeAgentTimelineEntries,
+      hiddenAgentTimelineEntryCount,
+      agentTimelineSearch,
+      setAgentTimelineSearch,
+      agentTimelineFilter: agentTimelineFilter as
+        | "all"
+        | "approvals"
+        | "issues"
+        | "events"
+        | "attention",
+      setAgentTimelineFilter: (value) => {
+        setAgentTimelineFilter(value);
       },
-      onRunSuggestedCommand: (
-        command: Record<string, unknown>,
-        mode: "execute_now" | "request_approval"
-      ) => {
-        void runAgentSuggestedCommand(command, mode);
+      persistedDismissedAgentTimelineCount,
+      persistedSnoozedAgentTimelineCount,
+      agentTimelinePriorityCounts,
+      nextBestAgentTimelineEntry,
+      hasPersistedAgentTimelinePreferences,
+      inspectAgentTimelineEntry,
+      restoreAgentTimelineHidden,
+      exportAgentTimelinePreferences,
+      resetAgentTimelinePreferences,
+      agentQueueAdvanceFeedback,
+      agentQueueAdvanceFocusSummary,
+      agentQueueFocusDelta,
+      agentQueueAdvanceNoticeActions,
+      nextCriticalAgentTimelineEntry,
+      nextHighAgentTimelineEntry,
+      expandedAgentPriorityQueues,
+      currentAgentPriorityQueue,
+      expandAllAgentPriorityQueues,
+      collapseAllAgentPriorityQueues,
+      openCurrentAgentPriorityQueue,
+      criticalAgentTimelineQueue,
+      criticalAgentTimelineTotal: criticalAgentTimelineEntries.length,
+      criticalAgentTimelinePosition,
+      highAgentTimelineQueue,
+      highAgentTimelineTotal: highAgentTimelineEntries.length,
+      highAgentTimelinePosition,
+      toggleAgentPriorityQueueExpansion,
+      filteredAgentTimelineEntriesCount: filteredAgentTimelineEntries.length,
+      visibleAgentTimelineEntries,
+      selectedAgentTimelineEntry,
+      selectedAgentTimelineRunLink,
+      selectedAgentTimelinePriority,
+      latestAgentIssueEntry,
+      latestAgentApprovalEntry,
+      latestAgentEventEntry,
+      syncLinkedSelection,
+      approveApproval,
+      rejectApproval,
+      applyApproval,
+      resolveIssue,
+      advanceCurrentAgentPriorityQueue: (entry) => {
+        if (currentAgentPriorityQueue) {
+          advanceAgentPriorityQueueFromEntry(currentAgentPriorityQueue, entry);
+        }
       },
-      activitySectionProps: selectedAgent
-        ? {
-            selectedAgent,
-            agentScopedRuns,
-            agentActivitySearch,
-            onAgentActivitySearchChange: setAgentActivitySearch,
-            agentActivityFilter,
-            onAgentActivityFilterChange: setAgentActivityFilter,
-            filteredAgentScopedRuns,
-            selectedRunId,
-            selectedRunResultIndex,
-            onSelectRun: (runId: string, resultIndex: number) => {
-              setSelectedRunId(runId);
-              setSelectedRunResultIndex(resultIndex);
-            },
-            formatTimestamp,
-            toNumber,
-            describeRunResult,
-            agentScopedOutcomes,
-            filteredAgentScopedOutcomes,
-            outcomeProjectId,
-            outcomeStoryId,
-            toStringValue,
-            asRecord,
-            onFindOutcomeInSession: (runId: string, resultIndex: number) => {
-              setEntitySearch(runId);
-              setSelectedRunId(runId);
-              setSelectedRunResultIndex(resultIndex);
-            },
-          }
-        : null,
-      timelineSectionProps: selectedAgent
-        ? {
-            selectedAgent,
-            activeAgentTimelineEntries,
-            hiddenAgentTimelineEntryCount,
-            agentTimelineSearch,
-            onAgentTimelineSearchChange: setAgentTimelineSearch,
-            agentTimelineFilter: agentTimelineFilter as
-              | "all"
-              | "approvals"
-              | "issues"
-              | "events"
-              | "attention",
-            onAgentTimelineFilterChange: (
-              value: "all" | "approvals" | "issues" | "events" | "attention"
-            ) => {
-              setAgentTimelineFilter(value);
-            },
-            persistedDismissedAgentTimelineCount,
-            persistedSnoozedAgentTimelineCount,
-            agentTimelinePriorityCounts,
-            nextBestAgentTimelineEntry,
-            hasPersistedAgentTimelinePreferences,
-            onInspectAgentTimelineEntry: inspectAgentTimelineEntry,
-            onRestoreAgentTimelineHidden: restoreAgentTimelineHidden,
-            onExportAgentTimelinePreferences: exportAgentTimelinePreferences,
-            onResetAgentTimelinePreferences: resetAgentTimelinePreferences,
-            agentQueueAdvanceFeedback,
-            agentQueueAdvanceFocusSummary,
-            agentQueueFocusDelta,
-            agentQueueAdvanceNoticeActions: agentQueueAdvanceNoticeActions,
-            nextCriticalAgentTimelineEntry,
-            nextHighAgentTimelineEntry,
-            expandedAgentPriorityQueues,
-            currentAgentPriorityQueue,
-            onExpandAllAgentPriorityQueues: expandAllAgentPriorityQueues,
-            onCollapseAllAgentPriorityQueues: collapseAllAgentPriorityQueues,
-            onOpenCurrentAgentPriorityQueue: openCurrentAgentPriorityQueue,
-            criticalAgentTimelineQueue,
-            criticalAgentTimelineTotal: criticalAgentTimelineEntries.length,
-            criticalAgentTimelinePosition,
-            highAgentTimelineQueue,
-            highAgentTimelineTotal: highAgentTimelineEntries.length,
-            highAgentTimelinePosition,
-            onToggleAgentPriorityQueueExpansion: toggleAgentPriorityQueueExpansion,
-            filteredAgentTimelineEntriesCount: filteredAgentTimelineEntries.length,
-            visibleAgentTimelineEntries,
-            selectedAgentTimelineEntry,
-            selectedAgentTimelineRunLink,
-            selectedAgentTimelinePriority,
-            latestAgentIssueEntry,
-            latestAgentApprovalEntry,
-            latestAgentEventEntry,
-            busyActionKey,
-            formatTimestamp,
-            formatJson,
-            toStringValue,
-            toNullableNumber,
-            asRecord,
-            describeRunResult,
-            onSelectTimelineEntry: (entry: AgentTimelineEntry) => {
-              setSelectedAgentTimelineKey(agentTimelineEntryKey(entry));
-            },
-            onSyncLinkedSelection: syncLinkedSelection,
-            onFocusRuntimeAgent: (runtimeAgentId: string) => {
-              focusRuntimeAgent(runtimeAgentId, true);
-            },
-            onSelectRun: (runId: string, resultIndex: number) => {
-              setSelectedRunId(runId);
-              setSelectedRunResultIndex(resultIndex);
-            },
-            onApproveApproval: (approval: ExecutionApprovalRecord) => {
-              void approveApproval(approval);
-            },
-            onRejectApproval: (approval: ExecutionApprovalRecord) => {
-              void rejectApproval(approval);
-            },
-            onApplyApproval: (approval: ExecutionApprovalRecord) => {
-              void applyApproval(approval);
-            },
-            onResolveIssue: (issue: ExecutionIssueRecord) => {
-              void resolveIssue(issue);
-            },
-            onAdvanceCurrentPriorityQueue: (entry: AgentTimelineEntry) => {
-              if (currentAgentPriorityQueue) {
-                advanceAgentPriorityQueueFromEntry(currentAgentPriorityQueue, entry);
-              }
-            },
-            onSearchEntity: setEntitySearch,
-            onFocusAgentTimeline: (
-              filter: "issues" | "approvals" | "events" | "attention",
-              entry?: AgentTimelineEntry
-            ) => {
-              focusAgentTimeline(filter, entry ? { entry } : undefined);
-            },
-            onFilterSessionByToken: (value: string) => {
-              setEventFilter("all");
-              setEntitySearch(value);
-            },
-            onSnoozeAgentTimelineEntry: snoozeAgentTimelineEntry,
-            onDismissAgentTimelineEntry: dismissAgentTimelineEntry,
-            onAdvanceAgentPriorityQueueFromEntry: advanceAgentPriorityQueueFromEntry,
-            onFindAgentTimelineEntryInSession: findAgentTimelineEntryInSession,
-            onRevealAgentTimelineEntry: revealAgentTimelineEntry,
-            agentTimelineEntryKey,
-            agentTimelinePriority,
-            agentTimelineRowDomId,
-          }
-        : null,
-    },
+      focusAgentTimeline,
+      setEventFilter: (value) => {
+        setEventFilter(value);
+      },
+      snoozeAgentTimelineEntry,
+      dismissAgentTimelineEntry,
+      advanceAgentPriorityQueueFromEntry,
+      findAgentTimelineEntryInSession,
+      revealAgentTimelineEntry,
+      agentTimelineEntryKey,
+      agentTimelinePriority,
+      agentTimelineRowDomId,
+    }),
     controlPlaneOverviewSectionsProps: {
       controlSummary,
       recentSessions,
