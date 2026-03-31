@@ -24,8 +24,10 @@ import type {
   ConnectorValidationResult,
   ConnectorTypeSchema,
   MCPConnector,
+  ProviderConfig,
   RoleTemplate,
   RoutingPolicy,
+  RuntimeProfile,
   SkillPack,
 } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -146,6 +148,29 @@ const CONNECTOR_PRESETS: Array<{
   },
 ];
 
+const OPENAI_COMPATIBLE_CONFIG_EXAMPLE = `providers:
+  - id: local-openai
+    family: openai_compatible
+    mode: local
+    transport: http
+    endpoint: http://127.0.0.1:11434/v1
+    auth_strategy: none
+    capabilities: [exec, review, critic]`;
+
+const LOCAL_COMMAND_CONFIG_EXAMPLE = `providers:
+  - id: local-command
+    family: local_command
+    mode: local
+    transport: command
+    command:
+      - /usr/local/bin/autopilot-local-runtime
+      - --mode
+      - "{mode}"
+      - --model
+      - "{model}"
+    auth_strategy: none
+    capabilities: [exec, review]`;
+
 function splitList(value: string) {
   return value
     .split(",")
@@ -212,6 +237,16 @@ function skillPackSummary(skillPack: SkillPack) {
 
 function roleSummary(role: RoleTemplate) {
   return `${role.default_skill_packs.join(", ") || "none"} · ${role.default_connectors.join(", ") || "none"}`;
+}
+
+function providerTargetSummary(providerConfig: ProviderConfig) {
+  if (providerConfig.endpoint) return providerConfig.endpoint;
+  if (providerConfig.command?.length) return providerConfig.command.join(" ");
+  return providerConfig.auth_strategy === "managed_session" ? "Managed session runtime" : "No explicit target";
+}
+
+function runtimeProfileSummary(runtimeProfile: RuntimeProfile) {
+  return `${runtimeProfile.sandbox_mode} · ${runtimeProfile.network_policy} · ${runtimeProfile.filesystem_policy}`;
 }
 
 function applyConnectorPreset(preset: (typeof CONNECTOR_PRESETS)[number]): ConnectorDraft {
@@ -1596,6 +1631,97 @@ export function SettingsCapabilitiesManager() {
                             </p>
                           </div>
                         ))}
+                      </div>
+                    </div>
+                    <div>
+                      <p className="text-[11px] uppercase tracking-[0.08em] text-[#9b9a97]">Runtime contracts</p>
+                      <div className="mt-3 grid gap-3 xl:grid-cols-2">
+                        <div className="rounded-[10px] border border-[#ecebe8] bg-white px-3 py-3">
+                          <p className="text-[12px] font-semibold text-[#37352f]">Provider configs</p>
+                          <div className="mt-3 space-y-2">
+                            {catalog.provider_configs.length ? (
+                              catalog.provider_configs.map((providerConfig) => (
+                                <div key={providerConfig.id} className="rounded-[8px] border border-[#ecebe8] bg-[#fbfbf9] px-3 py-2.5">
+                                  <div className="flex flex-wrap items-center justify-between gap-2">
+                                    <p className="text-[12px] font-semibold text-[#37352f]">
+                                      {providerConfig.family}/{providerConfig.id}
+                                    </p>
+                                    <span className="rounded-full bg-white px-2 py-0.5 text-[11px] font-medium text-[#6b6b6b]">
+                                      {providerConfig.mode} · {providerConfig.transport}
+                                    </span>
+                                  </div>
+                                  <p className="mt-1 text-[12px] text-[#787774]">
+                                    Auth: {providerConfig.auth_strategy}
+                                  </p>
+                                  <p className="mt-1 text-[12px] text-[#787774]">
+                                    Target: {providerTargetSummary(providerConfig)}
+                                  </p>
+                                  <p className="mt-1 text-[12px] text-[#787774]">
+                                    Capabilities: {providerConfig.capabilities.join(", ") || "none declared"}
+                                  </p>
+                                </div>
+                              ))
+                            ) : (
+                              <p className="text-[12px] text-[#787774]">
+                                No explicit provider contracts are configured yet.
+                              </p>
+                            )}
+                          </div>
+                        </div>
+                        <div className="rounded-[10px] border border-[#ecebe8] bg-white px-3 py-3">
+                          <p className="text-[12px] font-semibold text-[#37352f]">Runtime profiles</p>
+                          <div className="mt-3 space-y-2">
+                            {catalog.runtime_profiles.length ? (
+                              catalog.runtime_profiles.map((runtimeProfile) => (
+                                <div key={runtimeProfile.id} className="rounded-[8px] border border-[#ecebe8] bg-[#fbfbf9] px-3 py-2.5">
+                                  <div className="flex flex-wrap items-center justify-between gap-2">
+                                    <p className="text-[12px] font-semibold text-[#37352f]">{runtimeProfile.id}</p>
+                                    <span className="rounded-full bg-white px-2 py-0.5 text-[11px] font-medium text-[#6b6b6b]">
+                                      {runtimeProfile.default_tools.length} tools
+                                    </span>
+                                  </div>
+                                  <p className="mt-1 text-[12px] text-[#787774]">
+                                    {runtimeProfileSummary(runtimeProfile)}
+                                  </p>
+                                  <p className="mt-1 text-[12px] text-[#787774]">
+                                    Tools: {runtimeProfile.default_tools.join(", ") || "none declared"}
+                                  </p>
+                                </div>
+                              ))
+                            ) : (
+                              <p className="text-[12px] text-[#787774]">
+                                No runtime profiles were returned by the capability catalog.
+                              </p>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                    <div>
+                      <p className="text-[11px] uppercase tracking-[0.08em] text-[#9b9a97]">Local-first examples</p>
+                      <div className="mt-3 grid gap-3 xl:grid-cols-2">
+                        <div className="rounded-[10px] border border-[#ecebe8] bg-white px-3 py-3">
+                          <p className="text-[12px] font-semibold text-[#37352f]">OpenAI-compatible local endpoint</p>
+                          <p className="mt-1 text-[12px] leading-relaxed text-[#787774]">
+                            Use this for a local or self-hosted `/v1` endpoint. Autopilot probes `/v1/models`
+                            and uses the first returned model unless you override it.
+                          </p>
+                          <pre className="mt-3 overflow-x-auto rounded-[8px] bg-[#111111] px-3 py-3 text-[11px] leading-relaxed text-[#f5f5f4]">
+                            {OPENAI_COMPATIBLE_CONFIG_EXAMPLE}
+                          </pre>
+                        </div>
+                        <div className="rounded-[10px] border border-[#ecebe8] bg-white px-3 py-3">
+                          <p className="text-[12px] font-semibold text-[#37352f]">Local command wrapper</p>
+                          <p className="mt-1 text-[12px] leading-relaxed text-[#787774]">
+                            Use this for a local script or wrapper. <code>{`{prompt}`}</code> is optional; if you
+                            omit it, Autopilot also sends the prompt through <code>stdin</code> and exposes runtime
+                            context through <code>AUTOPILOT_PROMPT</code>, <code>AUTOPILOT_MODE</code>, and{" "}
+                            <code>AUTOPILOT_MODEL</code>.
+                          </p>
+                          <pre className="mt-3 overflow-x-auto rounded-[8px] bg-[#111111] px-3 py-3 text-[11px] leading-relaxed text-[#f5f5f4]">
+                            {LOCAL_COMMAND_CONFIG_EXAMPLE}
+                          </pre>
+                        </div>
                       </div>
                     </div>
                     <div>
