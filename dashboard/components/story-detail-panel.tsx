@@ -52,6 +52,12 @@ function formatTaskSource(event: TimelineEvent) {
   return [taskSource.source_kind, taskSource.external_id, taskSource.repo].filter(Boolean).join(" / ");
 }
 
+function formatArtifactSourceLabel(story: Story) {
+  const taskSource = story.handoff_artifact?.task_source;
+  if (!taskSource) return "No source preserved";
+  return [taskSource.source_kind, taskSource.external_id, taskSource.repo].filter(Boolean).join(" / ");
+}
+
 export function StoryDetailPanel({
   projectId,
   projectStatus,
@@ -202,6 +208,60 @@ export function StoryDetailPanel({
                 <p className="mt-1 text-[#37352f]">{sentenceCase(story.github_pr?.merge_state)}</p>
               </div>
             </div>
+
+            {story.handoff_artifact && (
+              <div className="mt-4 space-y-3 rounded-xl border border-[#ecebe8] bg-[#fbfbf9] p-4 text-[13px] text-[#6b6b6b]">
+                <p className="text-[11px] uppercase tracking-[0.08em] text-[#9b9a97]">Delivery Artifact</p>
+                <div>
+                  <p className="text-[11px] uppercase tracking-[0.08em] text-[#9b9a97]">Artifact Ref</p>
+                  {story.handoff_artifact.handoff.url ? (
+                    <a
+                      href={story.handoff_artifact.handoff.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="mt-1 inline-flex text-[#2a6690] underline-offset-2 hover:underline"
+                    >
+                      {story.handoff_artifact.ref_label}
+                    </a>
+                  ) : (
+                    <p className="mt-1 text-[#37352f]">{story.handoff_artifact.ref_label}</p>
+                  )}
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <p className="text-[11px] uppercase tracking-[0.08em] text-[#9b9a97]">Artifact Type</p>
+                    <p className="mt-1 text-[#37352f]">{sentenceCase(story.handoff_artifact.artifact_type)}</p>
+                  </div>
+                  <div>
+                    <p className="text-[11px] uppercase tracking-[0.08em] text-[#9b9a97]">Status</p>
+                    <p className="mt-1 text-[#37352f]">
+                      {sentenceCase(story.handoff_artifact.handoff.handoff_status)}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-[11px] uppercase tracking-[0.08em] text-[#9b9a97]">Merge State</p>
+                    <p className="mt-1 text-[#37352f]">{sentenceCase(story.handoff_artifact.handoff.merge_state)}</p>
+                  </div>
+                  <div>
+                    <p className="text-[11px] uppercase tracking-[0.08em] text-[#9b9a97]">Source</p>
+                    <p className="mt-1 text-[#37352f]">{formatArtifactSourceLabel(story)}</p>
+                  </div>
+                </div>
+                <div>
+                  <p className="text-[11px] uppercase tracking-[0.08em] text-[#9b9a97]">Artifact File</p>
+                  <p className="mt-1 break-all text-[#37352f]">
+                    {story.handoff_artifact.path}
+                    {story.handoff_artifact.present ? "" : " (pending write)"}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-[11px] uppercase tracking-[0.08em] text-[#9b9a97]">Brief Ref</p>
+                  <p className="mt-1 break-all text-[#37352f]">
+                    {story.handoff_artifact.brief.relpath || "No brief reference"}
+                  </p>
+                </div>
+              </div>
+            )}
 
             <div className="mt-4 space-y-3 rounded-xl border border-[#ecebe8] bg-[#fbfbf9] p-4 text-[13px] text-[#6b6b6b]">
               <div>
