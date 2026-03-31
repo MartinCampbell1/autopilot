@@ -23,6 +23,7 @@ import type {
   ConnectorFieldSchema,
   ConnectorValidationResult,
   ConnectorTypeSchema,
+  ExtensionRegistryItem,
   MCPConnector,
   ProviderConfig,
   RoleTemplate,
@@ -252,6 +253,28 @@ function runtimeProfileSummary(runtimeProfile: RuntimeProfile) {
 
 function toolSummary(tool: ToolContract) {
   return `${tool.kind} · ${tool.scope} · ${tool.approval_policy}`;
+}
+
+function extensionItemSummary(item: ExtensionRegistryItem) {
+  const metadata = item.metadata || {};
+  const target =
+    typeof metadata.target === "string" && metadata.target.trim()
+      ? metadata.target
+      : typeof metadata.endpoint === "string" && metadata.endpoint.trim()
+        ? metadata.endpoint
+        : "";
+  const events = Array.isArray(metadata.events)
+    ? metadata.events.join(", ")
+    : Array.isArray(metadata.event_kinds)
+      ? metadata.event_kinds.join(", ")
+      : "";
+  const parts = [
+    item.transport || "",
+    typeof metadata.source === "string" ? metadata.source : "",
+    target,
+    events ? `events: ${events}` : "",
+  ].filter(Boolean);
+  return parts.join(" · ");
 }
 
 const EXTENSION_GROUPS = [
@@ -1761,6 +1784,9 @@ export function SettingsCapabilitiesManager() {
                           <p className="mt-1 text-[12px] leading-relaxed text-[#787774]">
                             Lifecycle: {catalog.extensions.lifecycle.join(" -> ") || "register -> validate -> expose -> audit"}
                           </p>
+                          <p className="mt-1 text-[12px] leading-relaxed text-[#787774]">
+                            Configured tracker and notifier registrations are loaded from <code>config.yaml</code>; built-in slots stay visible alongside them.
+                          </p>
                           <div className="mt-3 space-y-3">
                             {EXTENSION_GROUPS.map(({ label, itemsKey }) => {
                               const items = catalog.extensions[itemsKey];
@@ -1772,13 +1798,22 @@ export function SettingsCapabilitiesManager() {
                                     {items.length}
                                   </span>
                                 </div>
-                                <p className="mt-2 text-[12px] text-[#787774]">
-                                  {items.length
-                                    ? items
-                                        .map((item) => `${item.display_name} (${item.extension_id})`)
-                                        .join(", ")
-                                    : "No slots registered."}
-                                </p>
+                                <div className="mt-2 space-y-2">
+                                  {items.length ? (
+                                    items.map((item) => (
+                                      <div key={item.extension_id} className="rounded-[8px] border border-[#ecebe8] bg-white px-2.5 py-2">
+                                        <p className="text-[12px] font-medium text-[#37352f]">
+                                          {item.display_name} ({item.extension_id})
+                                        </p>
+                                        <p className="mt-1 text-[12px] text-[#787774]">
+                                          {extensionItemSummary(item) || "No additional metadata."}
+                                        </p>
+                                      </div>
+                                    ))
+                                  ) : (
+                                    <p className="text-[12px] text-[#787774]">No slots registered.</p>
+                                  )}
+                                </div>
                               </div>
                               );
                             })}
