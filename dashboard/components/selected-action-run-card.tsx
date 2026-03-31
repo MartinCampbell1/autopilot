@@ -52,6 +52,16 @@ export function SelectedActionRunCard({
   asRecord,
   children,
 }: SelectedActionRunCardProps) {
+  const diffSummary = asRecord(selectedRun?.diff_summary);
+  const patchBundle = asRecord(selectedRun?.patch_bundle);
+  const commandCounts = (asRecord(diffSummary?.command_counts) as ExecutionPlaneCountMap | null) || {};
+  const plannedModeCounts = (asRecord(diffSummary?.planned_mode_counts) as ExecutionPlaneCountMap | null) || {};
+  const patchOperations = Array.isArray(patchBundle?.operations)
+    ? patchBundle.operations
+        .map((item) => asRecord(item))
+        .filter((item): item is Record<string, unknown> => item !== null)
+    : [];
+
   return (
     <Card className="border border-[#e5e5e3] bg-white shadow-[0_1px_3px_rgba(15,15,15,0.08),0_0_1px_rgba(15,15,15,0.04)]">
       <CardHeader>
@@ -93,6 +103,20 @@ export function SelectedActionRunCard({
                   >
                     {selectedRun.dry_run ? "preview" : "execute"}
                   </Badge>
+                  <Badge
+                    variant="outline"
+                    className="rounded-full border-[#d3e5ef] bg-[#eef7fb] px-2.5 py-1 text-[11px] font-medium capitalize text-[#2a6690]"
+                  >
+                    {(selectedRun.apply_mode || (selectedRun.dry_run ? "manual" : "auto")).replaceAll("_", " ")}
+                  </Badge>
+                  {Boolean(selectedRun.approval_required) && (
+                    <Badge
+                      variant="outline"
+                      className="rounded-full border-[#f4e0c4] bg-[#fff6e8] px-2.5 py-1 text-[11px] font-medium text-[#9a6700]"
+                    >
+                      approval required
+                    </Badge>
+                  )}
                 </div>
                 <p className="mt-2 text-[13px] text-[#6b6b6b]">
                   {selectedRun.actor || "unknown actor"}
@@ -147,6 +171,107 @@ export function SelectedActionRunCard({
               values={(selectedRun.summary.status_counts as ExecutionPlaneCountMap | undefined) || {}}
               emptyText="No result statuses recorded."
             />
+
+            {(selectedRun.preview_id || selectedRun.artifact_ref || diffSummary || patchOperations.length > 0) && (
+              <div className="rounded-2xl border border-[#d8e7ef] bg-[#f7fbfd] p-4">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#6f8a99]">
+                  Preview Contract
+                </p>
+                <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                  <SessionMetric
+                    label="Apply Mode"
+                    value={toStringValue(
+                      selectedRun.apply_mode,
+                      selectedRun.dry_run ? "manual" : "auto"
+                    )}
+                    detail={
+                      Boolean(selectedRun.approval_required)
+                        ? "Policy or approval gate is attached to this run."
+                        : "No approval gate recorded for this run."
+                    }
+                  />
+                  <SessionMetric
+                    label="Preview Link"
+                    value={toStringValue(
+                      selectedRun.preview_id,
+                      selectedRun.dry_run ? selectedRun.id : "No linked preview"
+                    )}
+                    detail={toStringValue(selectedRun.artifact_ref, "No preview artifact reference")}
+                  />
+                  <SessionMetric
+                    label="Projects"
+                    value={String(toNumber(diffSummary?.project_count, selectedRun.project_ids.length))}
+                    detail={`${toNumber(diffSummary?.runtime_agent_count, selectedRun.runtime_agent_ids.length)} runtime agents`}
+                  />
+                  <SessionMetric
+                    label="Approval-Gated"
+                    value={String(toNumber(diffSummary?.approval_required_count))}
+                    detail={`${patchOperations.length} planned operation${patchOperations.length === 1 ? "" : "s"}`}
+                  />
+                </div>
+
+                <div className="mt-4 space-y-3">
+                  <BreakdownChips
+                    label="Commands"
+                    values={commandCounts}
+                    emptyText="No command breakdown recorded."
+                  />
+                  <BreakdownChips
+                    label="Planned Modes"
+                    values={plannedModeCounts}
+                    emptyText="No planned-mode breakdown recorded."
+                  />
+                </div>
+
+                {patchOperations.length > 0 && (
+                  <div className="mt-4 space-y-2">
+                    {patchOperations.slice(0, 4).map((operation, index) => (
+                      <div
+                        key={`${selectedRun.id}-patch-operation-${index}`}
+                        className="rounded-xl border border-[#d8e7ef] bg-white p-3"
+                      >
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <p className="text-[13px] font-semibold text-[#37352f]">
+                            {toStringValue(
+                              operation.title,
+                              toStringValue(operation.command, toStringValue(operation.kind, "operation"))
+                            )}
+                          </p>
+                          <div className="flex flex-wrap gap-2">
+                            <Badge
+                              variant="outline"
+                              className="rounded-full border-[#d3e5ef] bg-[#eef7fb] px-2.5 py-1 text-[11px] font-medium capitalize text-[#2a6690]"
+                            >
+                              {toStringValue(operation.apply_mode, "manual")}
+                            </Badge>
+                            {Boolean(operation.approval_required) && (
+                              <Badge
+                                variant="outline"
+                                className="rounded-full border-[#f4e0c4] bg-[#fff6e8] px-2.5 py-1 text-[11px] font-medium text-[#9a6700]"
+                              >
+                                approval gate
+                              </Badge>
+                            )}
+                          </div>
+                        </div>
+                        <p className="mt-2 text-[12px] text-[#787774]">
+                          {toStringValue(operation.action_key, "No action key")}
+                          {toStringValue(operation.runtime_agent_id)
+                            ? ` · ${toStringValue(operation.runtime_agent_id)}`
+                            : ""}
+                        </p>
+                        <p className="mt-2 text-[12px] text-[#6b6b6b]">
+                          {toStringValue(
+                            operation.reason,
+                            toStringValue(operation.message, "No preview rationale recorded.")
+                          )}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
 
             <div className="rounded-2xl border border-[#ecebe8] bg-[#fbfbf9] p-4">
               <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#9b9a97]">

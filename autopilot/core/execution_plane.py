@@ -50,6 +50,7 @@ from autopilot.core.agent_action_runs import (
     find_agent_action_batch_run_by_idempotency_key,
     get_agent_action_batch_run,
     list_agent_action_batch_runs,
+    save_agent_action_batch_run,
 )
 from autopilot.core.control_plane_issues import create_issue, link_issue_approval, list_issues, resolve_issue
 from autopilot.core.orchestrator_control_passes import (
@@ -957,6 +958,202 @@ def _execution_plane_agent_action_request_fingerprint(payload: dict[str, Any]) -
     return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
 
 
+def _increment_count(bucket: dict[str, int], key: str) -> None:
+    normalized = str(key or "").strip()
+    if not normalized:
+        return
+    bucket[normalized] = bucket.get(normalized, 0) + 1
+
+
+def _listify_strings(values: list[Any] | None) -> list[str]:
+    return [str(item).strip() for item in (values or []) if str(item).strip()]
+
+
+def _execution_plane_agent_action_run_requires_approval(
+    selected_actions: list[dict[str, Any]],
+    results: list[dict[str, Any]],
+) -> bool:
+    if any(bool(action.get("approval_required")) for action in selected_actions):
+        return True
+    for result in results:
+        if str(result.get("status") or "") in {"planned_request_approval", "pending_approval"}:
+            return True
+        approval = result.get("approval") or {}
+        if str(approval.get("id") or "").strip():
+            return True
+    return False
+
+
+def _execution_plane_agent_action_apply_mode(
+    *,
+    dry_run: bool,
+    requested_mode: str,
+    approval_required: bool,
+) -> str:
+    if approval_required or requested_mode == "request_approval":
+        return "policy"
+    if dry_run:
+        return "manual"
+    return "auto"
+
+
+def _build_execution_plane_agent_action_diff_summary(
+    selected_actions: list[dict[str, Any]],
+    results: list[dict[str, Any]],
+    *,
+    status_counts: dict[str, int],
+    approval_required: bool,
+    apply_mode: str,
+) -> dict[str, Any]:
+    command_counts: dict[str, int] = {}
+    recommendation_counts: dict[str, int] = {}
+    attention_state_counts: dict[str, int] = {}
+    policy_reason_counts: dict[str, int] = {}
+    planned_mode_counts: dict[str, int] = {}
+    why: list[str] = []
+    seen_why: set[str] = set()
+
+    project_ids = {
+        str(action.get("project_id") or "").strip()
+        for action in selected_actions
+        if str(action.get("project_id") or "").strip()
+    }
+    runtime_agent_ids = {
+        str(action.get("runtime_agent_id") or "").strip()
+        for action in selected_actions
+        if str(action.get("runtime_agent_id") or "").strip()
+    }
+
+    approval_required_count = 0
+    for action in selected_actions:
+        action_type = str(action.get("action_type") or "")
+        if action_type == "suggested_command":
+            _increment_count(command_counts, str(action.get("command") or "unknown"))
+        elif action_type == "recommendation":
+            _increment_count(recommendation_counts, str(action.get("kind") or "unknown"))
+        _increment_count(attention_state_counts, str((action.get("attention") or {}).get("state") or "unknown"))
+        for policy_reason in _listify_strings(action.get("policy_reasons")):
+            _increment_count(policy_reason_counts, policy_reason)
+        reason = str(action.get("reason") or "").strip()
+        if reason and reason not in seen_why:
+            why.append(reason)
+            seen_why.add(reason)
+        if bool(action.get("approval_required")):
+            approval_required_count += 1
+
+    for result in results:
+        _increment_count(planned_mode_counts, str(result.get("planned_mode") or ""))
+
+    return {
+        "selected_count": len(selected_actions),
+        "processed_count": len(results),
+        "project_count": len(project_ids),
+        "runtime_agent_count": len(runtime_agent_ids),
+        "approval_required": approval_required,
+        "approval_required_count": approval_required_count,
+        "apply_mode": apply_mode,
+        "status_counts": dict(status_counts),
+        "planned_mode_counts": planned_mode_counts,
+        "command_counts": command_counts,
+        "recommendation_counts": recommendation_counts,
+        "attention_state_counts": attention_state_counts,
+        "policy_reason_counts": policy_reason_counts,
+        "why": why[:5],
+    }
+
+
+def _build_execution_plane_agent_action_patch_bundle(
+    selected_actions: list[dict[str, Any]],
+    results: list[dict[str, Any]],
+    *,
+    requested_mode: str,
+    dry_run: bool,
+    default_apply_mode: str,
+) -> dict[str, Any]:
+    result_by_action_key: dict[str, dict[str, Any]] = {}
+    for result in results:
+        action = result.get("action") or {}
+        action_key = str(action.get("action_key") or "").strip()
+        if action_key and action_key not in result_by_action_key:
+            result_by_action_key[action_key] = result
+
+    operations: list[dict[str, Any]] = []
+    for index, action in enumerate(selected_actions):
+        action_key = str(action.get("action_key") or "").strip()
+        result = result_by_action_key.get(action_key)
+        if result is None and index < len(results):
+            result = results[index]
+        result = dict(result or {})
+
+        action_requires_approval = bool(action.get("approval_required"))
+        operation_planned_mode = str(result.get("planned_mode") or requested_mode or "").strip()
+        operation_apply_mode = (
+            "policy"
+            if action_requires_approval or operation_planned_mode == "request_approval"
+            else default_apply_mode
+        )
+        operations.append(
+            {
+                "action_key": action_key,
+                "project_id": str(action.get("project_id") or ""),
+                "project_name": str(action.get("project_name") or ""),
+                "runtime_agent_id": str(action.get("runtime_agent_id") or ""),
+                "action_type": str(action.get("action_type") or ""),
+                "command": str(action.get("command") or ""),
+                "kind": str(action.get("kind") or ""),
+                "title": str(action.get("title") or ""),
+                "reason": str(action.get("reason") or ""),
+                "attention_state": str((action.get("attention") or {}).get("state") or ""),
+                "attention_reasons": _listify_strings((action.get("attention") or {}).get("reasons")),
+                "policy_reasons": _listify_strings(action.get("policy_reasons")),
+                "approval_required": action_requires_approval,
+                "requested_mode": requested_mode,
+                "planned_mode": operation_planned_mode,
+                "apply_mode": operation_apply_mode,
+                "result_status": str(result.get("status") or ""),
+                "message": str(result.get("message") or ""),
+            }
+        )
+
+    return {
+        "kind": "runtime_agent_action_batch",
+        "dry_run": dry_run,
+        "operations": operations,
+    }
+
+
+def _materialize_execution_plane_agent_action_run_record(
+    record: AgentActionBatchRunRecord,
+) -> dict[str, Any]:
+    payload = record.model_dump()
+    approval_required = bool(payload.get("approval_required")) or _execution_plane_agent_action_run_requires_approval(
+        [],
+        list(record.results or []),
+    )
+    preview_id = str(payload.get("preview_id") or "").strip()
+    artifact_ref = str(payload.get("artifact_ref") or "").strip()
+    apply_mode = str(payload.get("apply_mode") or "").strip()
+
+    if record.dry_run and not preview_id:
+        preview_id = record.id
+    if not artifact_ref:
+        artifact_ref = f"/api/execution-plane/agents/action-runs/{record.id}"
+    if not apply_mode:
+        apply_mode = _execution_plane_agent_action_apply_mode(
+            dry_run=record.dry_run,
+            requested_mode=record.mode,
+            approval_required=approval_required,
+        )
+
+    payload["preview_id"] = preview_id
+    payload["artifact_ref"] = artifact_ref
+    payload["approval_required"] = approval_required
+    payload["apply_mode"] = apply_mode
+    payload.setdefault("diff_summary", {})
+    payload.setdefault("patch_bundle", {})
+    return payload
+
+
 def _execution_plane_agent_action_batch_run_response(
     record: AgentActionBatchRunRecord,
     *,
@@ -964,14 +1161,21 @@ def _execution_plane_agent_action_batch_run_response(
 ) -> dict[str, Any]:
     """Project one persisted batch run record back into API response shape."""
 
+    run_payload = _materialize_execution_plane_agent_action_run_record(record)
     return {
         "status": record.status,
         "selection": record.selection,
         "policy": record.policy,
         "summary": record.summary,
+        "diff_summary": run_payload["diff_summary"],
+        "patch_bundle": run_payload["patch_bundle"],
+        "preview_id": run_payload["preview_id"],
+        "artifact_ref": run_payload["artifact_ref"],
+        "approval_required": run_payload["approval_required"],
+        "apply_mode": run_payload["apply_mode"],
         "dry_run": record.dry_run,
         "results": record.results,
-        "run": record.model_dump(),
+        "run": run_payload,
         "idempotent_replay": idempotent_replay,
     }
 
@@ -983,9 +1187,16 @@ def _execution_plane_agent_action_run_response(
 ) -> dict[str, Any]:
     """Project one persisted single-action run record back into API response shape."""
 
+    run_payload = _materialize_execution_plane_agent_action_run_record(record)
     payload = dict((record.results or [{}])[0])
     payload.setdefault("status", record.status)
-    payload["run"] = record.model_dump()
+    payload["preview_id"] = run_payload["preview_id"]
+    payload["diff_summary"] = run_payload["diff_summary"]
+    payload["patch_bundle"] = run_payload["patch_bundle"]
+    payload["artifact_ref"] = run_payload["artifact_ref"]
+    payload["approval_required"] = run_payload["approval_required"]
+    payload["apply_mode"] = run_payload["apply_mode"]
+    payload["run"] = run_payload
     payload["idempotent_replay"] = idempotent_replay
     return payload
 
@@ -1735,7 +1946,7 @@ def list_execution_plane_agent_action_runs(
     """List persisted runtime-agent batch run reports."""
 
     return [
-        record.model_dump()
+        _materialize_execution_plane_agent_action_run_record(record)
         for record in list_agent_action_batch_runs(
             config,
             run_kind=run_kind,
@@ -1830,7 +2041,7 @@ def get_execution_plane_agent_action_run(
     record = get_agent_action_batch_run(config, run_id)
     if record is None:
         raise KeyError(run_id)
-    return record.model_dump()
+    return _materialize_execution_plane_agent_action_run_record(record)
 
 
 def list_execution_plane_orchestrator_sessions(
@@ -2892,6 +3103,7 @@ def execute_execution_plane_orchestrator_session_actions(
     session_id: str,
     *,
     action_keys: list[str] | None = None,
+    preview_id: str = "",
     idempotency_key: str = "",
     actor: str,
     mode: str = "auto",
@@ -2957,6 +3169,7 @@ def execute_execution_plane_orchestrator_session_actions(
         config,
         action_keys=selected_keys,
         orchestrator_session_id=session_id,
+        preview_id=preview_id,
         idempotency_key=idempotency_key,
         actor=actor,
         mode=mode,
@@ -3423,6 +3636,26 @@ def execute_execution_plane_agent_action_with_run(
         reason=reason,
         orchestrator_session_id=normalized_session_id,
     )
+    approval_required = _execution_plane_agent_action_run_requires_approval([action], [result])
+    apply_mode = _execution_plane_agent_action_apply_mode(
+        dry_run=False,
+        requested_mode=mode,
+        approval_required=approval_required,
+    )
+    diff_summary = _build_execution_plane_agent_action_diff_summary(
+        [action],
+        [result],
+        status_counts={str(result.get("status") or "unknown"): 1},
+        approval_required=approval_required,
+        apply_mode=apply_mode,
+    )
+    patch_bundle = _build_execution_plane_agent_action_patch_bundle(
+        [action],
+        [result],
+        requested_mode=mode,
+        dry_run=False,
+        default_apply_mode=apply_mode,
+    )
     run = create_agent_action_batch_run(
         config,
         run_kind="single_action",
@@ -3439,6 +3672,7 @@ def execute_execution_plane_agent_action_with_run(
             "mode": "single_action",
             "requested_action_keys": [action_key],
             "selected_action_keys": [action_key],
+            "preview_id": "",
             "project_id": action.get("project_id"),
             "initiative_id": (action.get("initiative") or {}).get("id"),
             "orchestrator": (action.get("orchestration") or {}).get("orchestrator"),
@@ -3448,7 +3682,15 @@ def execute_execution_plane_agent_action_with_run(
             "selected_count": 1,
             "processed_count": 1,
             "status_counts": {str(result.get("status") or "unknown"): 1},
+            "approval_required_count": 1 if approval_required else 0,
+            "apply_mode": apply_mode,
         },
+        diff_summary=diff_summary,
+        patch_bundle=patch_bundle,
+        preview_id="",
+        artifact_ref="",
+        approval_required=approval_required,
+        apply_mode=apply_mode,
         results=[result],
         status=str(result.get("status") or "ok"),
         project_ids=[str(action.get("project_id") or "")],
@@ -3456,6 +3698,9 @@ def execute_execution_plane_agent_action_with_run(
         orchestrators=[str((action.get("orchestration") or {}).get("orchestrator") or "")],
         runtime_agent_ids=[str(action.get("runtime_agent_id") or "")],
     )
+    if not run.artifact_ref:
+        run.artifact_ref = f"/api/execution-plane/agents/action-runs/{run.id}"
+        run = save_agent_action_batch_run(config, run)
     linked_approval_ids: list[str] = []
     linked_issue_ids: list[str] = []
     if result.get("approval", {}).get("id"):
@@ -3497,6 +3742,7 @@ def execute_execution_plane_agent_actions(
     config: AutopilotConfig,
     *,
     action_keys: list[str] | None = None,
+    preview_id: str = "",
     orchestrator_session_id: str = "",
     idempotency_key: str = "",
     actor: str,
@@ -3544,10 +3790,14 @@ def execute_execution_plane_agent_actions(
     normalized_session_id = orchestrator_session_id.strip()
     if normalized_session_id and get_orchestrator_session(config, normalized_session_id) is None:
         raise KeyError(normalized_session_id)
+    normalized_preview_id = preview_id.strip()
+    if dry_run and normalized_preview_id:
+        raise ValueError("preview_id can only be used when applying a previously generated preview.")
     normalized_idempotency_key = idempotency_key.strip()
     request_fingerprint = _execution_plane_agent_action_batch_request_fingerprint(
         {
             "action_keys": normalized_keys,
+            "preview_id": normalized_preview_id,
             "orchestrator_session_id": normalized_session_id,
             "actor": actor,
             "mode": mode,
@@ -3606,6 +3856,32 @@ def execute_execution_plane_agent_actions(
         if not include_non_executable:
             selected_actions = [item for item in selected_actions if item.get("action_type") == "suggested_command"]
         selected_actions = selected_actions[:limit]
+
+    if normalized_preview_id:
+        preview_record = get_agent_action_batch_run(config, normalized_preview_id)
+        if preview_record is None:
+            raise KeyError(normalized_preview_id)
+        if not preview_record.dry_run:
+            raise ValueError(f"Runtime-agent action run `{normalized_preview_id}` is not a preview run.")
+        if preview_record.mode != mode:
+            raise RuntimeError(
+                f"Preview run `{normalized_preview_id}` was created with mode `{preview_record.mode}`, not `{mode}`."
+            )
+        if dict(preview_record.policy or {}) != dict(resolved_policy or {}):
+            raise RuntimeError(
+                f"Preview run `{normalized_preview_id}` was created under a different batch policy."
+            )
+        preview_session_id = str(preview_record.orchestrator_session_id or "").strip()
+        if preview_session_id != normalized_session_id:
+            raise RuntimeError(
+                f"Preview run `{normalized_preview_id}` belongs to orchestrator session `{preview_session_id or 'none'}`."
+            )
+        preview_selected_keys = _listify_strings((preview_record.selection or {}).get("selected_action_keys"))
+        current_selected_keys = [str(item["action_key"]) for item in selected_actions]
+        if preview_selected_keys != current_selected_keys:
+            raise RuntimeError(
+                f"Preview run `{normalized_preview_id}` no longer matches the current runtime-agent action selection."
+            )
 
     executed_per_project: dict[str, int] = {}
     results: list[dict[str, Any]] = []
@@ -3794,10 +4070,18 @@ def execute_execution_plane_agent_actions(
     elif not results:
         overall_status = "ok"
 
+    approval_required = _execution_plane_agent_action_run_requires_approval(selected_actions, results)
+    apply_mode = _execution_plane_agent_action_apply_mode(
+        dry_run=dry_run,
+        requested_mode=mode,
+        approval_required=approval_required,
+    )
+
     selection = {
         "mode": "action_keys" if normalized_keys else "filters",
         "requested_action_keys": normalized_keys,
         "selected_action_keys": [str(item["action_key"]) for item in selected_actions],
+        "preview_id": normalized_preview_id,
         "include_non_executable": include_non_executable,
         "limit": limit,
         "project_id": project_id,
@@ -3816,7 +4100,23 @@ def execute_execution_plane_agent_actions(
         "selected_count": len(selected_actions),
         "processed_count": len(results),
         "status_counts": status_counts,
+        "approval_required_count": sum(1 for item in selected_actions if bool(item.get("approval_required"))),
+        "apply_mode": apply_mode,
     }
+    diff_summary = _build_execution_plane_agent_action_diff_summary(
+        selected_actions,
+        results,
+        status_counts=status_counts,
+        approval_required=approval_required,
+        apply_mode=apply_mode,
+    )
+    patch_bundle = _build_execution_plane_agent_action_patch_bundle(
+        selected_actions,
+        results,
+        requested_mode=mode,
+        dry_run=dry_run,
+        default_apply_mode=apply_mode,
+    )
     project_ids = {str(item.get("project_id") or "") for item in selected_actions if str(item.get("project_id") or "").strip()}
     initiative_ids = {
         str((item.get("initiative") or {}).get("id") or "")
@@ -3852,6 +4152,12 @@ def execute_execution_plane_agent_actions(
         policy=resolved_policy,
         selection=selection,
         summary=summary,
+        diff_summary=diff_summary,
+        patch_bundle=patch_bundle,
+        preview_id=normalized_preview_id,
+        artifact_ref="",
+        approval_required=approval_required,
+        apply_mode=apply_mode,
         results=results,
         status=overall_status,
         project_ids=sorted(project_ids),
@@ -3859,6 +4165,15 @@ def execute_execution_plane_agent_actions(
         orchestrators=sorted(orchestrators),
         runtime_agent_ids=sorted(runtime_agent_ids),
     )
+    run_updated = False
+    if dry_run and not run.preview_id:
+        run.preview_id = run.id
+        run_updated = True
+    if not run.artifact_ref:
+        run.artifact_ref = f"/api/execution-plane/agents/action-runs/{run.id}"
+        run_updated = True
+    if run_updated:
+        run = save_agent_action_batch_run(config, run)
     if normalized_session_id:
         linked_approval_ids = [
             str(result.get("approval", {}).get("id") or "")
