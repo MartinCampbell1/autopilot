@@ -36,8 +36,11 @@ type BuildSessionDrilldownSectionPropsArgs = {
   setEntitySearch: (value: string) => void;
   sortedProfiles: OrchestratorSessionControlProfile[];
   busyActionKey: string;
+  latestPreviewRun: ExecutionAgentActionRunRecord | null;
+  latestPreviewAppliedRun: ExecutionAgentActionRunRecord | null;
   applyControlPlan: (profile: OrchestratorSessionControlProfile) => Promise<void>;
   applyRecommendation: (recommendation: OrchestratorSessionControlRecommendation) => Promise<void>;
+  applyPreviewRun: (run: ExecutionAgentActionRunRecord) => Promise<void>;
   runFilter: RunFilter;
   setRunFilter: (value: RunFilter) => void;
   matchesRunFilter: (run: ExecutionAgentActionRunRecord, filter: Exclude<RunFilter, "all">) => boolean;
@@ -116,8 +119,11 @@ export function buildSessionDrilldownSectionProps({
   setEntitySearch,
   sortedProfiles,
   busyActionKey,
+  latestPreviewRun,
+  latestPreviewAppliedRun,
   applyControlPlan,
   applyRecommendation,
+  applyPreviewRun,
   runFilter,
   setRunFilter,
   matchesRunFilter,
@@ -188,9 +194,16 @@ export function buildSessionDrilldownSectionProps({
           },
           sortedProfiles,
           busyActionKey,
+          selectedRunId,
           onCopySessionLink,
           canCopyFocusedLink,
           onCopyFocusedLink,
+          latestPreviewRun,
+          latestPreviewAppliedRun,
+          onInspectRun: setSelectedRunId,
+          onApplyPreviewRun: (run) => {
+            void applyPreviewRun(run);
+          },
           onApplyControlPlan: (profile) => {
             void applyControlPlan(profile);
           },
