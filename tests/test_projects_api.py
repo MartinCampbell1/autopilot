@@ -67,6 +67,8 @@ def test_create_list_detail_and_pause_project(tmp_path: Path, monkeypatch) -> No
     assert detail["runtime_profile"]["id"] == "cloud"
     assert detail["task_source"]["source_kind"] == "local_brief"
     assert detail["task_source"]["branch_policy"] == "isolated_worktree"
+    assert detail["delivery_loop"]["brief"]["relpath"] == ".agents/tasks/prd.json"
+    assert detail["delivery_loop"]["brief"]["present"] is True
 
     pause_response = client.post(f"/api/projects/{project_id}/pause")
     assert pause_response.status_code == 200
