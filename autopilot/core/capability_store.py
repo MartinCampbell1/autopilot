@@ -20,7 +20,7 @@ class MCPConnector(BaseModel):
     description: str = ""
     transport: str = "builtin"
     tags: list[str] = Field(default_factory=list)
-    providers: list[str] = Field(default_factory=lambda: ["codex", "claude", "gemini"])
+    providers: list[str] = Field(default_factory=lambda: ["codex", "claude", "gemini", "ollama"])
     risk_level: str = "medium"
     scopes: list[str] = Field(default_factory=list)
     enabled: bool = True
@@ -106,6 +106,9 @@ class LaunchProfile(BaseModel):
     """Runtime launch profile chosen by the user for a project run."""
 
     preset: str = "fast"
+    provider: str = "codex"
+    provider_config_id: str | None = None
+    runtime_profile_id: str = "cloud"
     story_execution_mode: str = "solo"
     project_concurrency_mode: str = "sequential"
     max_parallel_stories: int = 1
@@ -640,6 +643,8 @@ DEFAULT_LAUNCH_PRESETS: list[LaunchPreset] = [
         description="One primary worker per story, sequential project execution.",
         launch_profile=LaunchProfile(
             preset="fast",
+            provider="codex",
+            runtime_profile_id="cloud",
             story_execution_mode="solo",
             project_concurrency_mode="sequential",
             max_parallel_stories=1,
@@ -653,6 +658,8 @@ DEFAULT_LAUNCH_PRESETS: list[LaunchPreset] = [
         description="Primary worker plus critic and optional specialist, sequential stories.",
         launch_profile=LaunchProfile(
             preset="team",
+            provider="codex",
+            runtime_profile_id="cloud",
             story_execution_mode="team",
             project_concurrency_mode="sequential",
             max_parallel_stories=1,
@@ -666,6 +673,8 @@ DEFAULT_LAUNCH_PRESETS: list[LaunchPreset] = [
         description="Story teams with multiple stories active in parallel worktrees.",
         launch_profile=LaunchProfile(
             preset="parallel",
+            provider="codex",
+            runtime_profile_id="cloud",
             story_execution_mode="team",
             project_concurrency_mode="parallel",
             max_parallel_stories=3,
@@ -830,6 +839,8 @@ def get_connector_type_schema(connector_type: str) -> ConnectorTypeSchema | None
 
 
 def normalize_launch_profile(profile: dict | LaunchProfile | None = None) -> LaunchProfile:
+    from autopilot.core.adapters import get_adapter
+
     if isinstance(profile, LaunchProfile):
         raw = profile.model_dump()
     else:
@@ -838,6 +849,23 @@ def normalize_launch_profile(profile: dict | LaunchProfile | None = None) -> Lau
     preset = str(raw.get("preset") or "fast").strip().lower() or "fast"
     preset_match = next((item for item in DEFAULT_LAUNCH_PRESETS if item.id == preset), DEFAULT_LAUNCH_PRESETS[0])
     resolved = preset_match.launch_profile.model_copy(deep=True)
+
+    provider = str(raw.get("provider") or resolved.provider or "codex").strip().lower() or "codex"
+    try:
+        adapter = get_adapter(provider)
+        resolved.provider = adapter.provider_family
+    except ValueError:
+        adapter = get_adapter("codex")
+        resolved.provider = "codex"
+
+    provider_config_id = str(raw.get("provider_config_id") or "").strip()
+    resolved.provider_config_id = provider_config_id or None
+
+    runtime_profile_id = str(raw.get("runtime_profile_id") or "").strip()
+    if runtime_profile_id:
+        resolved.runtime_profile_id = runtime_profile_id
+    else:
+        resolved.runtime_profile_id = "local" if adapter.provider_mode == "local" else "cloud"
 
     if "story_execution_mode" in raw and raw["story_execution_mode"]:
         resolved.story_execution_mode = str(raw["story_execution_mode"]).strip().lower()
@@ -1304,7 +1332,7 @@ def resolve_story_runtime_plan(
     story: dict,
     *,
     launch_profile: dict | LaunchProfile | None = None,
-    provider: str = "codex",
+    provider: str | None = None,
     connectors: list[MCPConnector] | None = None,
     skill_packs: list[SkillPack] | None = None,
     routing_policies: list[RoutingPolicy] | None = None,
@@ -1319,6 +1347,7 @@ def resolve_story_runtime_plan(
         routing_policies=policies,
     )
     profile = normalize_launch_profile(launch_profile)
+    selected_provider = str(provider or profile.provider or "codex")
     story_pipeline = normalize_story_pipeline(
         story.get("pipeline") or story.get("story_pipeline"),
         default=profile.story_pipeline,
@@ -1357,7 +1386,7 @@ def resolve_story_runtime_plan(
 
     primary_activations, activation_errors = activate_connector_set(
         planned_connectors,
-        provider=provider,
+        provider=selected_provider,
         available_connectors=available_connectors,
         required_connectors=required_connectors,
     )
@@ -1367,20 +1396,20 @@ def resolve_story_runtime_plan(
             label="Primary Worker",
             execution_role="primary_worker",
             role_id=role_id,
-            provider=provider,
+            provider=selected_provider,
             skill_packs=selected_skill_packs,
             planned_connectors=planned_connectors,
             active_connectors=primary_activations,
             pipeline_stage="implement",
             pipeline_order=PIPELINE_STAGE_ORDER.index("implement") + 1,
         ),
-        TeamMemberAssignment(
-            member_id="critic",
-            label="Critic",
-            execution_role="critic",
-            role_id="qa_reviewer",
-            provider=provider,
-            skill_packs=_collect_skill_packs("qa_reviewer", normalized_story.get("tags", []), available_skill_packs, routing_policies=policies),
+            TeamMemberAssignment(
+                member_id="critic",
+                label="Critic",
+                execution_role="critic",
+                role_id="qa_reviewer",
+                provider=selected_provider,
+                skill_packs=_collect_skill_packs("qa_reviewer", normalized_story.get("tags", []), available_skill_packs, routing_policies=policies),
             planned_connectors=_collect_connectors(
                 "qa_reviewer",
                 normalized_story.get("tags", []),
@@ -1398,7 +1427,7 @@ def resolve_story_runtime_plan(
                     available_skill_packs,
                     routing_policies=policies,
                 ),
-                provider=provider,
+                provider=selected_provider,
                 available_connectors=available_connectors,
             )[0],
             pipeline_stage="review",
@@ -1415,12 +1444,12 @@ def resolve_story_runtime_plan(
                 label=str(specialist["label"]),
                 execution_role="specialist",
                 role_id=str(specialist["role_id"]),
-                provider=provider,
+                provider=selected_provider,
                 skill_packs=list(specialist["skill_packs"]),  # type: ignore[arg-type]
                 planned_connectors=specialist_connectors,
                 active_connectors=activate_connector_set(
                     specialist_connectors,
-                    provider=provider,
+                    provider=selected_provider,
                     available_connectors=available_connectors,
                 )[0],
                 specialist=True,

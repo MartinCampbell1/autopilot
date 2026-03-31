@@ -92,10 +92,23 @@ class AccountManager:
             )
         return profiles
 
-    def get_next(self, provider: str) -> Profile | None:
+    def get_next(self, provider: str, preferred_name: str | None = None) -> Profile | None:
         """Get the next available profile using round-robin."""
         profiles = self.pools.get(provider, [])
         if not profiles:
+            return None
+
+        if preferred_name:
+            for idx, profile in enumerate(profiles):
+                if profile.name != preferred_name:
+                    continue
+                profile.check_available()
+                if not profile.is_available:
+                    return None
+                self._indexes[provider] = (idx + 1) % len(profiles)
+                profile.last_used = time.time()
+                profile.requests_made += 1
+                return profile
             return None
 
         start_idx = self._indexes.get(provider, 0)

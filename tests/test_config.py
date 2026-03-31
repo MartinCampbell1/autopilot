@@ -129,3 +129,34 @@ class TestConfig:
         assert "codex" in ids
         assert "ollama-local" in ids
         assert {"codex", "ollama"}.issubset(families)
+
+    def test_resolve_provider_and_runtime_profile_contracts(self) -> None:
+        cfg = AutopilotConfig(
+            providers_order=["codex"],
+            providers=[
+                ProviderConfig(
+                    id="ollama-local",
+                    family="ollama",
+                    mode="local",
+                    transport="command",
+                    command=["ollama"],
+                    auth_strategy="none",
+                    capabilities=["exec", "review"],
+                )
+            ],
+            runtime_profiles=[
+                RuntimeProfileConfig(
+                    id="local",
+                    sandbox_mode="host",
+                    network_policy="local-only",
+                    filesystem_policy="workspace-write",
+                    default_tools=["shell", "git"],
+                )
+            ],
+        )
+
+        provider = cfg.resolve_provider_config("ollama", "ollama-local")
+        runtime_profile = cfg.resolve_runtime_profile("local")
+
+        assert provider.id == "ollama-local"
+        assert runtime_profile.network_policy == "local-only"

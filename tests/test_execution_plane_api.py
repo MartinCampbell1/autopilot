@@ -655,6 +655,8 @@ def test_execution_plane_routes_create_list_and_detail_projects(
     detail = detail_response.json()
     assert detail["brief"]["provenance"]["source_system"] == "quorum"
     assert detail["command_policy"]["parallel_launch_requires_approval"] is True
+    assert detail["provider_config"]["family"] == "codex"
+    assert detail["runtime_profile"]["id"] == "cloud"
     assert detail["runtime"]["status"] == "idle"
     assert detail["progress"]["stories_total"] == 2
     assert detail["runtime_agent_count"] >= 2
@@ -934,6 +936,9 @@ def test_execution_plane_approval_flow_for_launch_command(
             "reason": "Launch after operator approval.",
             "launch_profile": {
                 "preset": "parallel",
+                "provider": "ollama",
+                "provider_config_id": "ollama-local",
+                "runtime_profile_id": "local",
                 "story_execution_mode": "team",
                 "project_concurrency_mode": "parallel",
                 "max_parallel_stories": 2,
@@ -974,6 +979,8 @@ def test_execution_plane_approval_flow_for_launch_command(
     assert applied["command_result"]["command"] == "launch"
     assert applied["command_result"]["log_path"].endswith("founderos.log")
     assert mock_launch_project_run.call_args.kwargs["launch_profile"]["preset"] == "parallel"
+    assert mock_launch_project_run.call_args.kwargs["launch_profile"]["provider"] == "ollama"
+    assert mock_launch_project_run.call_args.kwargs["launch_profile"]["runtime_profile_id"] == "local"
 
     issue_response = client.get(f"/api/execution-plane/issues/{issue_id}")
     assert issue_response.status_code == 200

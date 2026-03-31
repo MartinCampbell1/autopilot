@@ -63,6 +63,8 @@ def test_create_list_detail_and_pause_project(tmp_path: Path, monkeypatch) -> No
     detail = detail_response.json()
     assert detail["stories"][0]["status"] == "open"
     assert detail["stories"][1]["status"] == "open"
+    assert detail["provider_config"]["family"] == "codex"
+    assert detail["runtime_profile"]["id"] == "cloud"
 
     pause_response = client.post(f"/api/projects/{project_id}/pause")
     assert pause_response.status_code == 200
@@ -272,6 +274,9 @@ def test_launch_route_accepts_launch_profile(mock_launch_project_run, tmp_path: 
         json={
             "launch_profile": {
                 "preset": "parallel",
+                "provider": "ollama",
+                "provider_config_id": "ollama-local",
+                "runtime_profile_id": "local",
                 "story_execution_mode": "team",
                 "project_concurrency_mode": "parallel",
                 "max_parallel_stories": 2,
@@ -282,6 +287,8 @@ def test_launch_route_accepts_launch_profile(mock_launch_project_run, tmp_path: 
     assert response.status_code == 200
     assert response.json()["launch_profile"]["preset"] == "team"
     assert mock_launch_project_run.call_args.kwargs["launch_profile"]["preset"] == "parallel"
+    assert mock_launch_project_run.call_args.kwargs["launch_profile"]["provider"] == "ollama"
+    assert mock_launch_project_run.call_args.kwargs["launch_profile"]["runtime_profile_id"] == "local"
 
 
 @patch("autopilot.api.routes.projects.resume_project_run")
