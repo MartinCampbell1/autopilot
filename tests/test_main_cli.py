@@ -228,3 +228,184 @@ def test_apply_preview_command_passes_options(monkeypatch) -> None:
         "reason": "Apply reviewed preview",
         "json_output": True,
     }
+
+
+def test_approvals_command_passes_filters(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_list_execution_approvals(
+        *,
+        project_id: str | None = None,
+        initiative_id: str | None = None,
+        orchestrator: str | None = None,
+        status: str | None = "pending",
+        action: str | None = None,
+        issue_id: str | None = None,
+        runtime_agent_id: str | None = None,
+        json_output: bool = False,
+    ) -> None:
+        captured.update(
+            {
+                "project_id": project_id,
+                "initiative_id": initiative_id,
+                "orchestrator": orchestrator,
+                "status": status,
+                "action": action,
+                "issue_id": issue_id,
+                "runtime_agent_id": runtime_agent_id,
+                "json_output": json_output,
+            }
+        )
+
+    monkeypatch.setattr("autopilot.cli.execution_approval.list_execution_approvals", fake_list_execution_approvals)
+
+    result = runner.invoke(
+        app,
+        [
+            "approvals",
+            "--project-id",
+            "proj_123",
+            "--initiative-id",
+            "init_123",
+            "--orchestrator",
+            "founderos",
+            "--status",
+            "approved",
+            "--action",
+            "update_budget_policy",
+            "--issue-id",
+            "iss_123",
+            "--runtime-agent-id",
+            "agent_123",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert captured == {
+        "project_id": "proj_123",
+        "initiative_id": "init_123",
+        "orchestrator": "founderos",
+        "status": "approved",
+        "action": "update_budget_policy",
+        "issue_id": "iss_123",
+        "runtime_agent_id": "agent_123",
+        "json_output": True,
+    }
+
+
+def test_show_approval_command_passes_options(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_show_approval(
+        approval_id: str,
+        *,
+        json_output: bool = False,
+    ) -> None:
+        captured.update({"approval_id": approval_id, "json_output": json_output})
+
+    monkeypatch.setattr("autopilot.cli.execution_approval.show_approval", fake_show_approval)
+
+    result = runner.invoke(app, ["show-approval", "apr_123", "--json"])
+
+    assert result.exit_code == 0
+    assert captured == {"approval_id": "apr_123", "json_output": True}
+
+
+def test_approve_approval_command_passes_options(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_approve_approval(
+        approval_id: str,
+        *,
+        actor: str = "cli-control-plane",
+        note: str = "",
+        json_output: bool = False,
+    ) -> None:
+        captured.update(
+            {
+                "approval_id": approval_id,
+                "actor": actor,
+                "note": note,
+                "json_output": json_output,
+            }
+        )
+
+    monkeypatch.setattr("autopilot.cli.execution_approval.approve_approval", fake_approve_approval)
+
+    result = runner.invoke(
+        app,
+        ["approve-approval", "apr_123", "--actor", "founderos", "--note", "approved", "--json"],
+    )
+
+    assert result.exit_code == 0
+    assert captured == {
+        "approval_id": "apr_123",
+        "actor": "founderos",
+        "note": "approved",
+        "json_output": True,
+    }
+
+
+def test_reject_approval_command_passes_options(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_reject_approval(
+        approval_id: str,
+        *,
+        actor: str = "cli-control-plane",
+        note: str = "",
+        json_output: bool = False,
+    ) -> None:
+        captured.update(
+            {
+                "approval_id": approval_id,
+                "actor": actor,
+                "note": note,
+                "json_output": json_output,
+            }
+        )
+
+    monkeypatch.setattr("autopilot.cli.execution_approval.reject_approval", fake_reject_approval)
+
+    result = runner.invoke(
+        app,
+        ["reject-approval", "apr_123", "--actor", "founderos", "--note", "rejected", "--json"],
+    )
+
+    assert result.exit_code == 0
+    assert captured == {
+        "approval_id": "apr_123",
+        "actor": "founderos",
+        "note": "rejected",
+        "json_output": True,
+    }
+
+
+def test_apply_approval_command_passes_options(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_apply_approval(
+        approval_id: str,
+        *,
+        actor: str = "cli-control-plane",
+        json_output: bool = False,
+    ) -> None:
+        captured.update(
+            {
+                "approval_id": approval_id,
+                "actor": actor,
+                "json_output": json_output,
+            }
+        )
+
+    monkeypatch.setattr("autopilot.cli.execution_approval.apply_approval", fake_apply_approval)
+
+    result = runner.invoke(app, ["apply-approval", "apr_123", "--actor", "founderos", "--json"])
+
+    assert result.exit_code == 0
+    assert captured == {
+        "approval_id": "apr_123",
+        "actor": "founderos",
+        "json_output": True,
+    }

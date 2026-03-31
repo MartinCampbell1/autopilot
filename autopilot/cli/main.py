@@ -162,6 +162,81 @@ def apply_preview(
     _apply_preview(preview_id, actor=actor, reason=reason, json_output=json_output)
 
 
+@app.command(name="approvals")
+def approvals(
+    project_id: str | None = typer.Option(None, "--project-id", help="Filter approvals by project id."),
+    initiative_id: str | None = typer.Option(None, "--initiative-id", help="Filter approvals by initiative id."),
+    orchestrator: str | None = typer.Option(None, "--orchestrator", help="Filter approvals by orchestrator."),
+    status: str = typer.Option("pending", "--status", help="Filter approvals by status. Use 'all' for every status."),
+    action: str | None = typer.Option(None, "--action", help="Filter approvals by action name."),
+    issue_id: str | None = typer.Option(None, "--issue-id", help="Filter approvals by linked issue id."),
+    runtime_agent_id: str | None = typer.Option(None, "--runtime-agent-id", help="Filter approvals by runtime agent id."),
+    json_output: bool = typer.Option(False, "--json", help="Emit the approvals payload as JSON."),
+) -> None:
+    """List execution-plane approvals for operator review."""
+    from autopilot.cli.execution_approval import list_execution_approvals as _list_execution_approvals
+
+    _list_execution_approvals(
+        project_id=project_id,
+        initiative_id=initiative_id,
+        orchestrator=orchestrator,
+        status=status,
+        action=action,
+        issue_id=issue_id,
+        runtime_agent_id=runtime_agent_id,
+        json_output=json_output,
+    )
+
+
+@app.command(name="show-approval")
+def show_approval(
+    approval_id: str = typer.Argument(help="Approval id to inspect."),
+    json_output: bool = typer.Option(False, "--json", help="Emit the approval payload as JSON."),
+) -> None:
+    """Show one execution-plane approval and its linked issue context."""
+    from autopilot.cli.execution_approval import show_approval as _show_approval
+
+    _show_approval(approval_id, json_output=json_output)
+
+
+@app.command(name="approve-approval")
+def approve_approval(
+    approval_id: str = typer.Argument(help="Approval id to approve."),
+    actor: str = typer.Option("cli-control-plane", "--actor", help="Actor label recorded on the approval decision."),
+    note: str = typer.Option("", "--note", help="Optional operator note stored with the approval decision."),
+    json_output: bool = typer.Option(False, "--json", help="Emit the decision payload as JSON."),
+) -> None:
+    """Approve one pending execution-plane approval."""
+    from autopilot.cli.execution_approval import approve_approval as _approve_approval
+
+    _approve_approval(approval_id, actor=actor, note=note, json_output=json_output)
+
+
+@app.command(name="reject-approval")
+def reject_approval(
+    approval_id: str = typer.Argument(help="Approval id to reject."),
+    actor: str = typer.Option("cli-control-plane", "--actor", help="Actor label recorded on the approval decision."),
+    note: str = typer.Option("", "--note", help="Optional operator note stored with the approval decision."),
+    json_output: bool = typer.Option(False, "--json", help="Emit the decision payload as JSON."),
+) -> None:
+    """Reject one pending execution-plane approval."""
+    from autopilot.cli.execution_approval import reject_approval as _reject_approval
+
+    _reject_approval(approval_id, actor=actor, note=note, json_output=json_output)
+
+
+@app.command(name="apply-approval")
+def apply_approval(
+    approval_id: str = typer.Argument(help="Approval id to apply."),
+    actor: str = typer.Option("cli-control-plane", "--actor", help="Actor label recorded on the apply."),
+    json_output: bool = typer.Option(False, "--json", help="Emit the apply payload as JSON."),
+) -> None:
+    """Apply one approved execution-plane approval."""
+    from autopilot.cli.execution_approval import apply_approval as _apply_approval
+
+    _apply_approval(approval_id, actor=actor, json_output=json_output)
+
+
 @app.command(name="init")
 def init_project(
     project_path: str = typer.Argument(help="Path to the project directory"),
