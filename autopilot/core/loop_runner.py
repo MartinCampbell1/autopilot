@@ -286,6 +286,40 @@ def build_retry_prompt(
     )
 
 
+def build_primary_prompt(
+    story_id: int,
+    story_title: str,
+    story_description: str,
+    *,
+    prd_path: str | None = None,
+) -> str:
+    """Build a provider-agnostic primary implementation prompt for one story."""
+    resolved_prd_path = prd_path or ".agents/tasks/prd.json"
+    return (
+        "You are an autonomous coding agent. Complete exactly one story in the current repository.\n\n"
+        f"Selected story #{story_id}: {story_title}\n"
+        f"Story description: {story_description}\n"
+        f"PRD snapshot: {resolved_prd_path}\n\n"
+        "Before changing code:\n"
+        "- Read AGENTS.md if present.\n"
+        "- Read .ralph/guardrails.md and .ralph/errors.log.\n"
+        "- Read .ralph/critic-feedback.md if it contains prior review feedback.\n"
+        "- Read .ralph/team-context.json and .ralph/specialist-notes.md if present.\n"
+        "- Read the PRD snapshot for global context and acceptance criteria.\n\n"
+        "Rules:\n"
+        "- Implement only the selected story.\n"
+        "- Do not edit the PRD.\n"
+        "- No placeholders or stubs.\n"
+        "- For non-documentation stories, docs-only changes are incomplete.\n"
+        "- If required app files, APIs, or systems are missing, record the blocker in .ralph/errors.log and .ralph/guardrails.md.\n"
+        "- Run the lightest meaningful verification plus any relevant build/test commands you discover.\n"
+        "- Update .ralph/progress.md with what changed and what you verified.\n"
+        "- If repo policy allows commits, commit the completed story work.\n\n"
+        "When the story is fully complete and verified, output <promise>COMPLETE</promise>.\n"
+        "Otherwise explain the concrete blocker or remaining work."
+    )
+
+
 def run_retry_iteration(
     project_path: Path,
     env: dict[str, str],

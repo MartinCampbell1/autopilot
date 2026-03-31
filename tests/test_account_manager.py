@@ -1,6 +1,7 @@
 """Tests for account manager."""
 
 import json
+import sys
 from pathlib import Path
 
 from autopilot.core.account_manager import AccountManager
@@ -186,3 +187,44 @@ class TestAccountManager:
 
         assert profile is not None
         assert profile.name == "ollama-local-b"
+
+    def test_build_env_includes_stateless_provider_contract(self, tmp_path: Path) -> None:
+        profiles_dir = tmp_path / "profiles"
+        config = AutopilotConfig(
+            autopilot_home_override=str(tmp_path / ".autopilot"),
+            providers=[
+                ProviderConfig(
+                    id="local-openai",
+                    family="openai_compatible",
+                    mode="local",
+                    transport="http",
+                    endpoint="http://127.0.0.1:11434/v1",
+                    auth_strategy="none",
+                    capabilities=["exec", "review", "critic"],
+                ),
+                ProviderConfig(
+                    id="local-command",
+                    family="local_command",
+                    mode="local",
+                    transport="command",
+                    command=[sys.executable, "-c", "print('ok')"],
+                    auth_strategy="none",
+                    capabilities=["exec", "review"],
+                ),
+            ],
+        )
+
+        manager = AccountManager(profiles_dir=profiles_dir, config=config)
+        manager.discover()
+
+        endpoint_profile = manager.get_next("openai_compatible")
+        command_profile = manager.get_next("local_command")
+
+        assert endpoint_profile is not None
+        assert command_profile is not None
+
+        endpoint_env = manager.build_env(endpoint_profile)
+        command_env = manager.build_env(command_profile)
+
+        assert json.loads(endpoint_env["AUTOPILOT_PROVIDER_CONFIG_JSON"])["endpoint"] == "http://127.0.0.1:11434/v1"
+        assert json.loads(command_env["AUTOPILOT_PROVIDER_CONFIG_JSON"])["command"][0] == sys.executable

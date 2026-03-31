@@ -1,9 +1,13 @@
 """Tests for provider-specific environment building and CLI commands."""
 
+import json
+import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from autopilot.core.adapters import (
+    AdapterExecutionRequest,
+    AdapterMode,
     LocalProviderAdapter,
     ProbeStatus,
     get_adapter,
@@ -36,11 +40,21 @@ class TestProviders:
         cmd = build_cli_command("ollama", "do the thing", model="llama3.2")
         assert cmd[:3] == ["ollama", "run", "llama3.2"]
 
+    def test_openai_compatible_command(self) -> None:
+        cmd = build_cli_command("openai_compatible", "do the thing", model="local-model")
+        assert cmd[:4] == ["openai-compatible-http", "configured-endpoint", "local-model", "exec"]
+
+    def test_local_command_command(self) -> None:
+        cmd = build_cli_command("local_command", "do the thing", model="local-model")
+        assert cmd[:3] == ["configured-local-command", "exec", "local-model"]
+
     def test_provider_registry(self) -> None:
         assert "codex" in PROVIDER_COMMANDS
         assert "claude" in PROVIDER_COMMANDS
         assert "gemini" in PROVIDER_COMMANDS
         assert "ollama" in PROVIDER_COMMANDS
+        assert "openai_compatible" in PROVIDER_COMMANDS
+        assert "local_command" in PROVIDER_COMMANDS
 
     def test_provider_alias_resolves_local_adapter(self) -> None:
         assert get_adapter("codex").adapter_id == "codex_local"
@@ -52,9 +66,11 @@ class TestProviders:
         tracker_ids = {plugin.tracker_id for plugin in list_trackers()}
         notifier_ids = {plugin.notifier_id for plugin in list_notifiers()}
 
-        assert {"codex", "claude", "gemini", "ollama"}.issubset(provider_families)
+        assert {"codex", "claude", "gemini", "ollama", "openai_compatible", "local_command"}.issubset(provider_families)
         assert "codex_local:runtime" in runtime_ids
         assert "ollama_local:runtime" in runtime_ids
+        assert "openai_compatible_local:runtime" in runtime_ids
+        assert "local_command_local:runtime" in runtime_ids
         assert "project_state" in tracker_ids
         assert {"telegram", "slack_webhook", "webhook", "email", "script"}.issubset(notifier_ids)
 
@@ -81,6 +97,122 @@ class TestProviders:
         assert metadata.provider_mode == "local"
         assert metadata.auth_strategy == "none"
         assert metadata.capabilities == ["exec", "review"]
+
+    def test_runtime_metadata_exposes_http_local_contract(self, tmp_path: Path) -> None:
+        profile = Profile(
+            name="local-openai",
+            provider="openai_compatible",
+            adapter_id="openai_compatible_local",
+            path=str(tmp_path / "providers" / "local-openai"),
+        )
+        metadata = get_adapter("openai_compatible").runtime_metadata(profile)
+        assert metadata.provider_mode == "local"
+        assert metadata.transport == "http"
+        assert metadata.capabilities == ["exec", "review", "critic"]
+
+    def test_local_command_adapter_executes_configured_command(self, tmp_path: Path) -> None:
+        profile = Profile(
+            name="local-command",
+            provider="local_command",
+            adapter_id="local_command_local",
+            path=str(tmp_path / "providers" / "local-command"),
+        )
+        adapter = get_adapter("local_command")
+        env = {
+            "AUTOPILOT_PROVIDER_CONFIG_JSON": json.dumps(
+                {
+                    "id": "local-command",
+                    "family": "local_command",
+                    "mode": "local",
+                    "transport": "command",
+                    "command": [
+                        sys.executable,
+                        "-c",
+                        "import os,sys; prompt=os.environ.get('AUTOPILOT_PROMPT') or sys.stdin.read(); print(prompt.strip().upper())",
+                    ],
+                    "auth_strategy": "none",
+                    "capabilities": ["exec", "review"],
+                }
+            )
+        }
+
+        result = adapter.execute(
+            AdapterExecutionRequest(
+                profile=profile,
+                prompt="ship it",
+                workdir=tmp_path,
+                env=env,
+                timeout=15,
+                mode=AdapterMode.EXEC,
+            )
+        )
+
+        assert result.success is True
+        assert result.output.strip() == "SHIP IT"
+
+    @patch("autopilot.core.adapters.urllib.request.urlopen")
+    def test_openai_compatible_adapter_executes_against_local_endpoint(
+        self,
+        mock_urlopen: MagicMock,
+        tmp_path: Path,
+    ) -> None:
+        class _FakeHTTPResponse:
+            def __init__(self, payload: dict[str, object], status: int = 200) -> None:
+                self.status = status
+                self._payload = payload
+
+            def read(self) -> bytes:
+                return json.dumps(self._payload).encode("utf-8")
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb) -> bool:
+                return False
+
+        mock_urlopen.side_effect = [
+            _FakeHTTPResponse({"data": [{"id": "qwen2.5-coder"}]}),
+            _FakeHTTPResponse({"choices": [{"message": {"content": "done"}}]}),
+        ]
+
+        profile = Profile(
+            name="local-openai",
+            provider="openai_compatible",
+            adapter_id="openai_compatible_local",
+            path=str(tmp_path / "providers" / "local-openai"),
+        )
+        adapter = get_adapter("openai_compatible")
+        env = {
+            "AUTOPILOT_PROVIDER_CONFIG_JSON": json.dumps(
+                {
+                    "id": "local-openai",
+                    "family": "openai_compatible",
+                    "mode": "local",
+                    "transport": "http",
+                    "endpoint": "http://127.0.0.1:11434/v1",
+                    "auth_strategy": "none",
+                    "capabilities": ["exec", "review", "critic"],
+                }
+            )
+        }
+
+        result = adapter.execute(
+            AdapterExecutionRequest(
+                profile=profile,
+                prompt="Review the patch",
+                workdir=tmp_path,
+                env=env,
+                timeout=15,
+                mode=AdapterMode.CRITIC,
+            )
+        )
+
+        assert result.success is True
+        assert result.output == "done"
+        first_request = mock_urlopen.call_args_list[0].args[0]
+        second_request = mock_urlopen.call_args_list[1].args[0]
+        assert first_request.full_url == "http://127.0.0.1:11434/v1/models"
+        assert second_request.full_url == "http://127.0.0.1:11434/v1/chat/completions"
 
     @patch("autopilot.core.adapters.subprocess.run")
     @patch("autopilot.core.adapters.shutil.which")
