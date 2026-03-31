@@ -43,6 +43,18 @@ class NotificationChannelConfig:
 
 
 @dataclass
+class TrackerConfig:
+    id: str
+    display_name: str
+    kind: str
+    transport: str
+    endpoint: str | None = None
+    auth_strategy: str = "none"
+    event_kinds: list[str] = field(default_factory=list)
+    metadata: dict[str, object] = field(default_factory=dict)
+
+
+@dataclass
 class ProviderConfig:
     id: str
     family: str
@@ -99,6 +111,7 @@ class AutopilotConfig:
     autopilot_home_override: str | None = None
     profiles_dir_override: str | None = None
     notifications: list[NotificationChannelConfig] = field(default_factory=list)
+    trackers: list[TrackerConfig] = field(default_factory=list)
     providers: list[ProviderConfig] = field(default_factory=list)
     runtime_profiles: list[RuntimeProfileConfig] = field(default_factory=_default_runtime_profiles)
 
@@ -240,6 +253,19 @@ def _serialize_notification_channel(channel: NotificationChannelConfig) -> dict[
     }
 
 
+def _serialize_tracker_config(tracker: TrackerConfig) -> dict[str, object]:
+    return {
+        "id": tracker.id,
+        "display_name": tracker.display_name,
+        "kind": tracker.kind,
+        "transport": tracker.transport,
+        "endpoint": tracker.endpoint,
+        "auth_strategy": tracker.auth_strategy,
+        "event_kinds": list(tracker.event_kinds),
+        "metadata": dict(tracker.metadata),
+    }
+
+
 def _serialize_provider_config(provider: ProviderConfig) -> dict[str, object]:
     return {
         "id": provider.id,
@@ -350,6 +376,36 @@ def _load_provider_config(raw: object) -> ProviderConfig | None:
     )
 
 
+def _load_tracker_config(raw: object) -> TrackerConfig | None:
+    if not isinstance(raw, dict):
+        return None
+    tracker_id = str(raw.get("id") or "").strip()
+    display_name = str(raw.get("display_name") or raw.get("name") or tracker_id).strip()
+    kind = str(raw.get("kind") or "").strip()
+    transport = str(raw.get("transport") or "").strip()
+    if not tracker_id or not display_name or not kind or not transport:
+        return None
+    event_kinds_value = raw.get("event_kinds") or []
+    if isinstance(event_kinds_value, str):
+        event_kinds = [item.strip() for item in event_kinds_value.split(",") if item.strip()]
+    elif isinstance(event_kinds_value, list):
+        event_kinds = [str(item).strip() for item in event_kinds_value if str(item).strip()]
+    else:
+        event_kinds = []
+    metadata_value = raw.get("metadata")
+    metadata = dict(metadata_value) if isinstance(metadata_value, dict) else {}
+    return TrackerConfig(
+        id=tracker_id,
+        display_name=display_name,
+        kind=kind,
+        transport=transport,
+        endpoint=raw.get("endpoint"),
+        auth_strategy=str(raw.get("auth_strategy") or "none"),
+        event_kinds=event_kinds,
+        metadata=metadata,
+    )
+
+
 def _load_runtime_profile(raw: object) -> RuntimeProfileConfig | None:
     if not isinstance(raw, dict):
         return None
@@ -392,6 +448,7 @@ def save_config(config: AutopilotConfig, path: Path) -> None:
         "autopilot_home": config.autopilot_home_override,
         "profiles_dir": config.profiles_dir_override,
         "notifications": [_serialize_notification_channel(channel) for channel in config.notifications],
+        "trackers": [_serialize_tracker_config(tracker) for tracker in config.trackers],
         "providers": [_serialize_provider_config(provider) for provider in config.providers],
         "runtime_profiles": [_serialize_runtime_profile(profile) for profile in config.runtime_profiles],
     }
@@ -406,9 +463,11 @@ def load_config(path: Path) -> AutopilotConfig:
     data = yaml.safe_load(path.read_text()) or {}
     accounts_data = data.get("accounts", {})
     notifications_data = data.get("notifications", [])
+    trackers_data = data.get("trackers", [])
     providers_data = data.get("providers", [])
     runtime_profiles_data = data.get("runtime_profiles", [])
     notifications: list[NotificationChannelConfig] = []
+    trackers: list[TrackerConfig] = []
     providers: list[ProviderConfig] = []
     runtime_profiles: list[RuntimeProfileConfig] = []
     if isinstance(notifications_data, list):
@@ -421,6 +480,11 @@ def load_config(path: Path) -> AutopilotConfig:
             provider = _load_provider_config(raw_provider)
             if provider is not None:
                 providers.append(provider)
+    if isinstance(trackers_data, list):
+        for raw_tracker in trackers_data:
+            tracker = _load_tracker_config(raw_tracker)
+            if tracker is not None:
+                trackers.append(tracker)
     if isinstance(runtime_profiles_data, list):
         for raw_profile in runtime_profiles_data:
             runtime_profile = _load_runtime_profile(raw_profile)
@@ -441,6 +505,7 @@ def load_config(path: Path) -> AutopilotConfig:
         autopilot_home_override=data.get("autopilot_home"),
         profiles_dir_override=data.get("profiles_dir"),
         notifications=notifications,
+        trackers=trackers,
         providers=providers,
         runtime_profiles=runtime_profiles or _default_runtime_profiles(),
     )
