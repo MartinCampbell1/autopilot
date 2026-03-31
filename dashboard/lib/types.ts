@@ -54,6 +54,30 @@ export interface ProjectHandoffSummary {
   updated_at?: string | null;
 }
 
+export interface ProjectDeliveryLoop {
+  source: TaskSource;
+  brief: {
+    title: string;
+    relpath: string;
+    path: string;
+    present: boolean;
+  };
+  run: {
+    status: string;
+    started_at?: string | null;
+    finished_at?: string | null;
+    current_story_id?: number | null;
+    current_story_title?: string | null;
+    last_event?: {
+      event?: string | null;
+      status?: string | null;
+      message?: string | null;
+      timestamp?: string | null;
+    } | null;
+  };
+  handoff?: ProjectHandoffSummary | null;
+}
+
 export interface LaunchPreset {
   id: string;
   label: string;
@@ -223,6 +247,8 @@ export interface TimelineEvent {
   iteration?: number;
   worker?: string;
   critic?: string;
+  task_source?: TaskSource;
+  handoff?: ProjectHandoffSummary | null;
 }
 
 export interface ProjectSummary {
@@ -245,6 +271,7 @@ export interface ProjectSummary {
   runtime_profile?: RuntimeProfile;
   task_source?: TaskSource;
   latest_handoff?: ProjectHandoffSummary | null;
+  delivery_loop?: ProjectDeliveryLoop;
   budget_policy?: RuntimeBudgetPolicy;
   budget_usage?: RuntimeBudgetUsage;
 }
