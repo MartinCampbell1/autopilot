@@ -323,12 +323,19 @@ def test_execution_plane_orchestrator_session_actions_feed_preview_and_execute(
     preview = preview_response.json()
     assert preview["session_id"] == session_id
     assert preview["dry_run"] is True
+    assert preview["preview_id"] == preview["run"]["id"]
+    assert preview["artifact_ref"].endswith(preview["run"]["id"])
+    assert preview["approval_required"] is False
+    assert preview["apply_mode"] == "manual"
+    assert preview["diff_summary"]["command_counts"]["update_budget_policy"] >= 2
+    assert len(preview["patch_bundle"]["operations"]) >= 2
     assert preview["run"]["orchestrator_session_id"] == session_id
     assert set(preview["run"]["project_ids"]) == set(project_ids)
 
     execute_response = client.post(
         f"/api/execution-plane/orchestrator-sessions/{session_id}/actions/execute",
         json={
+            "preview_id": preview["preview_id"],
             "idempotency_key": "session-execute-1",
             "policy_profile": "safe_budget_maintenance",
             "actor": "founderos",
@@ -342,6 +349,11 @@ def test_execution_plane_orchestrator_session_actions_feed_preview_and_execute(
     execute_payload = execute_response.json()
     assert execute_payload["session_id"] == session_id
     assert execute_payload["status"] == "ok"
+    assert execute_payload["preview_id"] == preview["preview_id"]
+    assert execute_payload["run"]["preview_id"] == preview["preview_id"]
+    assert execute_payload["artifact_ref"].endswith(execute_payload["run"]["id"])
+    assert execute_payload["approval_required"] is False
+    assert execute_payload["apply_mode"] == "auto"
     assert execute_payload["run"]["orchestrator_session_id"] == session_id
     assert set(execute_payload["run"]["project_ids"]) == set(project_ids)
     assert execute_payload["summary"]["status_counts"]["ok"] >= 2
@@ -2237,7 +2249,13 @@ def test_execution_plane_agent_action_batch_preview_is_non_mutating(
     preview = preview_response.json()
     assert preview["dry_run"] is True
     assert preview["idempotent_replay"] is False
+    assert preview["preview_id"] == preview["run"]["id"]
+    assert preview["artifact_ref"].endswith(preview["run"]["id"])
+    assert preview["approval_required"] is False
+    assert preview["apply_mode"] == "manual"
     assert preview["summary"]["status_counts"]["planned_execute"] >= 1
+    assert preview["diff_summary"]["command_counts"]["update_budget_policy"] >= 1
+    assert len(preview["patch_bundle"]["operations"]) >= 1
     assert preview["run"]["idempotency_key"] == "preview-batch-1"
     assert preview["run"]["orchestrator_session_id"] == session["id"]
     preview_runs = client.get("/api/execution-plane/agents/action-runs", params={"project_id": project_id, "dry_run": True})
@@ -2312,6 +2330,93 @@ def test_execution_plane_agent_action_batch_idempotency_key_conflict(
     )
     assert conflict.status_code == 409
     assert "already used for a different batch action request" in conflict.json()["detail"]
+
+
+@patch("autopilot.core.execution_plane.generate_prd_from_spec")
+def test_execution_plane_agent_action_batch_execute_rejects_mismatched_preview_mode(
+    mock_generate_prd_from_spec,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    client = _build_client(config, monkeypatch)
+    mock_generate_prd_from_spec.return_value = {
+        "title": "FounderOS Copilot",
+        "description": "Execution-ready FounderOS project.",
+        "stories": [{"id": 1, "title": "Bootstrap", "description": "Create the app shell"}],
+    }
+
+    created = _create_execution_project(client, tmp_path / "mismatched-preview-project")
+    project_id = created["project"]["project_id"]
+    session = _create_orchestrator_session(
+        client,
+        project_ids=[project_id],
+        actor="founderos",
+        title="Preview apply mismatch session",
+    )
+
+    update_story_runtime(
+        config,
+        project_id,
+        1,
+        status="in_progress",
+        iteration=2,
+        agent="codex/worker-a",
+        critic="codex/critic-a",
+    )
+    update_project_runtime(
+        config,
+        project_id,
+        status="running",
+        paused=False,
+        current_story_id=1,
+        current_iteration=2,
+        active_worker="codex/worker-a",
+        active_critic="codex/critic-a",
+        budget_policy={
+            "project_max_worker_iterations": 200,
+            "project_max_critic_reviews": 200,
+            "agent_max_worker_iterations": 3,
+            "agent_max_critic_reviews": 60,
+            "auto_pause_on_exhaustion": True,
+        },
+        budget_usage={
+            "project": {"worker_iterations": 2, "critic_reviews": 2},
+            "agents": {
+                "codex/worker-a": {"worker_iterations": 2, "critic_reviews": 0},
+                "codex/critic-a": {"worker_iterations": 0, "critic_reviews": 2},
+            },
+            "last_exhaustion_reason": None,
+            "auto_paused_at": None,
+        },
+    )
+
+    preview_response = client.post(
+        "/api/execution-plane/agents/actions/preview-batch",
+        json={
+            "orchestrator_session_id": session["id"],
+            "project_id": project_id,
+            "policy_profile": "safe_budget_maintenance",
+            "actor": "founderos",
+            "mode": "auto",
+        },
+    )
+    assert preview_response.status_code == 200
+    preview = preview_response.json()
+
+    execute_response = client.post(
+        "/api/execution-plane/agents/actions/execute-batch",
+        json={
+            "preview_id": preview["preview_id"],
+            "orchestrator_session_id": session["id"],
+            "project_id": project_id,
+            "policy_profile": "safe_budget_maintenance",
+            "actor": "founderos",
+            "mode": "execute_now",
+        },
+    )
+    assert execute_response.status_code == 409
+    assert "was created with mode `auto`, not `execute_now`" in execute_response.json()["detail"]
 
 
 @patch("autopilot.core.execution_plane.generate_prd_from_spec")

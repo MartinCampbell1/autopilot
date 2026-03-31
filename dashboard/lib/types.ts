@@ -467,6 +467,12 @@ export interface ExecutionAgentActionRunRecord {
   policy: Record<string, unknown>;
   selection: Record<string, unknown>;
   summary: ExecutionAgentActionRunSummary;
+  diff_summary?: Record<string, unknown>;
+  patch_bundle?: Record<string, unknown>;
+  preview_id?: string;
+  artifact_ref?: string;
+  approval_required?: boolean;
+  apply_mode?: string;
   results: Array<Record<string, unknown>>;
   status: string;
   project_ids: string[];
