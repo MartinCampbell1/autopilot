@@ -28,16 +28,74 @@ class TestOrchestrator:
     @patch("autopilot.core.orchestrator.get_last_commit_diff")
     @patch("autopilot.core.orchestrator.run_review_plan")
     @patch("autopilot.core.orchestrator.run_gates")
+    @patch("autopilot.core.orchestrator.run_prompt_iteration")
+    @patch("autopilot.core.orchestrator.get_adapter")
     @patch("autopilot.core.orchestrator.run_ralph_iteration")
-    def test_successful_iteration(
+    def test_stateless_provider_primary_iteration_uses_prompt_runtime(
         self,
         mock_ralph,
+        mock_get_adapter,
+        mock_prompt_iteration,
         mock_gates,
         mock_review_plan,
         mock_get_diff,
         mock_diff_empty,
         tmp_path: Path,
     ) -> None:
+        mock_get_adapter.return_value = type("Adapter", (), {"requires_managed_profile": False})()
+        mock_prompt_iteration.return_value = (True, "Story 1 done", False)
+        mock_gates.return_value = (
+            True,
+            [GateResult(name="build", cmd="x", passed=True, output="ok")],
+        )
+        mock_get_diff.return_value = "+new code"
+        mock_diff_empty.return_value = False
+        mock_review_plan.return_value = CriticResult(approved=True, feedback="", raw_output="APPROVED")
+
+        orchestrator = self._make_orchestrator(tmp_path)
+        profile = Profile(
+            name="local-openai",
+            provider="openai_compatible",
+            adapter_id="openai_compatible_local",
+            path=str(tmp_path),
+        )
+        env = {"PATH": "/usr/bin"}
+
+        outcome = orchestrator.run_single_iteration(
+            profile=profile,
+            env=env,
+            story_id=1,
+            story_title="Setup",
+            story_description="Project setup",
+            gates_config=[{"name": "build", "cmd": "npm run build"}],
+            critic_profile=profile,
+            critic_env=env,
+            progress_callback=lambda *_: None,
+        )
+
+        assert outcome == StoryOutcome.APPROVED
+        mock_prompt_iteration.assert_called_once()
+        mock_ralph.assert_not_called()
+        assert "Selected story #1: Setup" in mock_prompt_iteration.call_args.args[3]
+        assert callable(mock_prompt_iteration.call_args.kwargs["on_progress"])
+
+    @patch("autopilot.core.orchestrator.check_git_diff_empty")
+    @patch("autopilot.core.orchestrator.get_last_commit_diff")
+    @patch("autopilot.core.orchestrator.run_review_plan")
+    @patch("autopilot.core.orchestrator.run_gates")
+    @patch("autopilot.core.orchestrator.get_adapter")
+    @patch("autopilot.core.orchestrator.run_ralph_iteration")
+    def test_successful_iteration(
+        self,
+        mock_ralph,
+        mock_get_adapter,
+        mock_gates,
+        mock_review_plan,
+        mock_get_diff,
+        mock_diff_empty,
+        tmp_path: Path,
+    ) -> None:
+        mock_get_adapter.return_value = type("Adapter", (), {"requires_managed_profile": True})()
         mock_ralph.return_value = (True, "Story 1 done", False)
         mock_gates.return_value = (
             True,

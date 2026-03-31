@@ -131,7 +131,15 @@ def build_provider_setup_snapshot(
     configured_families = config.configured_provider_families() or list_provider_families()
     for provider in configured_families:
         adapter = get_adapter(provider)
-        cli_probe = adapter.test_environment(timeout=timeout)
+        representative_profile = next(iter(manager.pools.get(provider, [])), None)
+        if representative_profile is not None:
+            cli_probe = adapter.test_environment(
+                representative_profile,
+                env=manager.build_env(representative_profile),
+                timeout=timeout,
+            )
+        else:
+            cli_probe = adapter.test_environment(timeout=timeout)
         profile_entries = diagnostics.get("providers", {}).get(provider, [])
         provider_contracts = [asdict(provider_config) for provider_config in config.provider_configs_for_family(provider)]
         if not provider_contracts:

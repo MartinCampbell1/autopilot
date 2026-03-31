@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
 import tempfile
 import time
+import urllib.error
+import urllib.request
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -32,6 +35,10 @@ DEFAULT_PATH_PREFIXES = (
 )
 USER_BIN_DIRS = (".npm-global/bin", ".local/bin", ".cargo/bin", ".bun/bin")
 SUPPORTED_PROVIDER_FAMILIES = ("codex", "claude", "gemini")
+AUTOPILOT_PROVIDER_CONFIG_ENV = "AUTOPILOT_PROVIDER_CONFIG_JSON"
+AUTOPILOT_PROMPT_ENV = "AUTOPILOT_PROMPT"
+AUTOPILOT_MODEL_ENV = "AUTOPILOT_MODEL"
+AUTOPILOT_MODE_ENV = "AUTOPILOT_MODE"
 
 
 class AdapterMode(StrEnum):
@@ -149,6 +156,66 @@ class _PreparedInvocation:
     input_text: str | None = None
     output_file: Path | None = None
     cleanup_paths: list[Path] = field(default_factory=list)
+
+
+def _provider_config_from_env(env: Mapping[str, str] | None = None) -> dict[str, object]:
+    raw = str((env or os.environ).get(AUTOPILOT_PROVIDER_CONFIG_ENV, "") or "").strip()
+    if not raw:
+        return {}
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _string_list(value: object) -> list[str]:
+    if isinstance(value, str):
+        return [value] if value.strip() else []
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    return []
+
+
+def _coerce_text(value: object) -> str:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        return "\n".join(part for part in (_coerce_text(item) for item in value) if part).strip()
+    if isinstance(value, dict):
+        for key in ("output_text", "text", "content"):
+            part = _coerce_text(value.get(key))
+            if part:
+                return part
+    return ""
+
+
+def _extract_openai_output(payload: object) -> str:
+    if not isinstance(payload, dict):
+        return ""
+
+    top_level_text = _coerce_text(payload.get("output_text"))
+    if top_level_text:
+        return top_level_text
+
+    for choice in payload.get("choices") or []:
+        if not isinstance(choice, dict):
+            continue
+        message = choice.get("message")
+        if isinstance(message, dict):
+            message_text = _coerce_text(message.get("content"))
+            if message_text:
+                return message_text
+        choice_text = _coerce_text(choice.get("text"))
+        if choice_text:
+            return choice_text
+
+    for item in payload.get("output") or []:
+        item_text = _coerce_text(item)
+        if item_text:
+            return item_text
+
+    return ""
 
 
 class LocalProviderAdapter(ABC):
@@ -765,11 +832,429 @@ class OllamaLocalAdapter(LocalProviderAdapter):
         return ["ollama", "run", model or "llama3.2", prompt]
 
 
+class OpenAICompatibleLocalAdapter(LocalProviderAdapter):
+    adapter_id = "openai_compatible_local"
+    provider_family = "openai_compatible"
+    cli_name = "openai-compatible-http"
+    install_hint = "Configure providers[].endpoint to a local OpenAI-compatible /v1 endpoint."
+    provider_mode = "local"
+    transport = "http"
+    auth_strategy = "none"
+    session_strategy = "stateless"
+    requires_managed_profile = False
+    supports_model_override = True
+    supported_modes = (AdapterMode.EXEC, AdapterMode.REVIEW, AdapterMode.CRITIC)
+
+    def default_command(self) -> list[str]:
+        return []
+
+    def check_installed_command(self) -> list[str]:
+        return []
+
+    def provider_login_command(self) -> list[str]:
+        return []
+
+    def session_source_dir(self, home: Path) -> Path | None:
+        return None
+
+    def runtime_home_from_profile_dir(self, profile_dir: Path) -> Path:
+        return profile_dir
+
+    def resume_state_paths(self, runtime_home: Path) -> list[Path]:
+        return []
+
+    def copy_session_to_profile(self, source_home: Path, destination: Path) -> None:
+        raise ValueError("openai_compatible uses stateless local execution and does not support session import.")
+
+    def prepare_cli_command(self, prompt: str, *, model: str | None, mode: AdapterMode) -> list[str]:
+        return ["openai-compatible-http", "configured-endpoint", model or "auto", mode.value, prompt]
+
+    def diagnostics(
+        self,
+        profile: Profile | None = None,
+        *,
+        command: list[str] | None = None,
+        elapsed_sec: float = 0.0,
+        notes: list[str] | None = None,
+        env: Mapping[str, str] | None = None,
+    ) -> AdapterDiagnostics:
+        diagnostics = AdapterDiagnostics(
+            metadata=self.runtime_metadata(profile),
+            command=list(command or []),
+            cli_path=None,
+            elapsed_sec=round(elapsed_sec, 2),
+            notes=list(notes or []),
+        )
+        return diagnostics
+
+    def _endpoint(self, env: Mapping[str, str] | None = None) -> str:
+        payload = _provider_config_from_env(env)
+        endpoint = str(payload.get("endpoint") or "").strip()
+        return endpoint.rstrip("/")
+
+    def _api_base(self, env: Mapping[str, str] | None = None) -> str:
+        endpoint = self._endpoint(env)
+        if endpoint.endswith("/v1"):
+            return endpoint
+        return f"{endpoint}/v1" if endpoint else ""
+
+    def _headers(self, env: Mapping[str, str] | None = None) -> dict[str, str]:
+        payload = _provider_config_from_env(env)
+        auth_strategy = str(payload.get("auth_strategy") or self.auth_strategy)
+        headers = {"Content-Type": "application/json"}
+        if auth_strategy != "none":
+            api_key = str((env or os.environ).get("AUTOPILOT_PROVIDER_API_KEY") or (env or os.environ).get("OPENAI_API_KEY") or "").strip()
+            if api_key:
+                headers["Authorization"] = f"Bearer {api_key}"
+        return headers
+
+    def _request_json(
+        self,
+        url: str,
+        *,
+        headers: Mapping[str, str],
+        payload: dict[str, object] | None = None,
+        timeout: int,
+    ) -> tuple[int, dict[str, object], str]:
+        request = urllib.request.Request(
+            url,
+            data=(json.dumps(payload).encode("utf-8") if payload is not None else None),
+            headers=dict(headers),
+            method="POST" if payload is not None else "GET",
+        )
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            body = response.read().decode("utf-8", errors="replace")
+            parsed = json.loads(body) if body.strip() else {}
+            return response.status, parsed if isinstance(parsed, dict) else {}, body
+
+    def _discover_model(self, env: Mapping[str, str] | None = None, *, timeout: int = 15) -> str:
+        api_base = self._api_base(env)
+        if not api_base:
+            raise ValueError("Configured endpoint missing for openai_compatible provider.")
+        _, payload, _ = self._request_json(
+            f"{api_base}/models",
+            headers=self._headers(env),
+            timeout=timeout,
+        )
+        for entry in payload.get("data") or []:
+            if isinstance(entry, dict) and str(entry.get("id") or "").strip():
+                return str(entry["id"]).strip()
+        raise ValueError("No models were returned by the configured OpenAI-compatible endpoint.")
+
+    def test_environment(
+        self,
+        profile: Profile | None = None,
+        *,
+        env: Mapping[str, str] | None = None,
+        timeout: int = 15,
+    ) -> AdapterProbeResult:
+        started_at = time.monotonic()
+        resolved_env = self.build_env(profile, env) if profile is not None else dict(env or os.environ.copy())
+        endpoint = self._endpoint(resolved_env)
+        notes = [f"endpoint={endpoint}"] if endpoint else []
+        diagnostics = self.diagnostics(profile, elapsed_sec=0.0, notes=notes, env=resolved_env)
+
+        if not endpoint:
+            diagnostics.elapsed_sec = round(time.monotonic() - started_at, 2)
+            diagnostics.notes.append("No endpoint configured.")
+            return AdapterProbeResult(
+                status=ProbeStatus.DEGRADED,
+                summary="Configured endpoint is required for the OpenAI-compatible local provider.",
+                diagnostics=diagnostics,
+            )
+
+        try:
+            model_id = self._discover_model(resolved_env, timeout=timeout)
+        except urllib.error.HTTPError as exc:
+            body = exc.read().decode("utf-8", errors="replace")
+            diagnostics.elapsed_sec = round(time.monotonic() - started_at, 2)
+            diagnostics.notes.append(f"HTTP {exc.code} from endpoint.")
+            status = ProbeStatus.RATE_LIMITED if exc.code == 429 else ProbeStatus.UNAVAILABLE
+            summary = "Endpoint returned a rate-limit response." if exc.code == 429 else "Endpoint probe failed."
+            return AdapterProbeResult(
+                status=status,
+                summary=summary,
+                output=body,
+                diagnostics=diagnostics,
+            )
+        except urllib.error.URLError as exc:
+            diagnostics.elapsed_sec = round(time.monotonic() - started_at, 2)
+            diagnostics.notes.append(f"URL error: {exc.reason}")
+            return AdapterProbeResult(
+                status=ProbeStatus.UNAVAILABLE,
+                summary="Could not reach the configured OpenAI-compatible endpoint.",
+                output=str(exc.reason),
+                diagnostics=diagnostics,
+            )
+        except Exception as exc:
+            diagnostics.elapsed_sec = round(time.monotonic() - started_at, 2)
+            diagnostics.notes.append(f"Probe failed: {exc}")
+            return AdapterProbeResult(
+                status=ProbeStatus.UNAVAILABLE,
+                summary="OpenAI-compatible endpoint probe failed.",
+                output=str(exc),
+                diagnostics=diagnostics,
+            )
+
+        diagnostics.elapsed_sec = round(time.monotonic() - started_at, 2)
+        diagnostics.notes.append(f"model={model_id}")
+        return AdapterProbeResult(
+            status=ProbeStatus.READY,
+            summary="Endpoint reachable and returned at least one compatible model.",
+            output=model_id,
+            diagnostics=diagnostics,
+        )
+
+    def execute(self, request: AdapterExecutionRequest) -> AdapterExecutionResult:
+        started_at = time.monotonic()
+        resolved_env = self.build_env(request.profile, request.env)
+        endpoint = self._endpoint(resolved_env)
+        api_base = self._api_base(resolved_env)
+        notes = [f"endpoint={endpoint}"] if endpoint else []
+        model = request.model
+
+        if not api_base:
+            diagnostics = self.diagnostics(request.profile, elapsed_sec=time.monotonic() - started_at, notes=["No endpoint configured."], env=resolved_env)
+            return AdapterExecutionResult(
+                success=False,
+                returncode=1,
+                stdout="",
+                stderr="Configured endpoint missing for openai_compatible provider.",
+                output="Configured endpoint missing for openai_compatible provider.",
+                timed_out=False,
+                rate_limited=False,
+                diagnostics=diagnostics,
+            )
+
+        try:
+            selected_model = model or self._discover_model(resolved_env, timeout=min(request.timeout, 15))
+            notes.append(f"model={selected_model}")
+            _, payload, body = self._request_json(
+                f"{api_base}/chat/completions",
+                headers=self._headers(resolved_env),
+                payload={
+                    "model": selected_model,
+                    "messages": [{"role": "user", "content": request.prompt}],
+                    "stream": False,
+                },
+                timeout=request.timeout,
+            )
+            output = _extract_openai_output(payload) or body.strip()
+            diagnostics = self.diagnostics(
+                request.profile,
+                command=self.prepare_cli_command(request.prompt, model=selected_model, mode=request.mode),
+                elapsed_sec=time.monotonic() - started_at,
+                notes=notes,
+                env=resolved_env,
+            )
+            return AdapterExecutionResult(
+                success=True,
+                returncode=0,
+                stdout=output,
+                stderr="",
+                output=output,
+                timed_out=False,
+                rate_limited=is_rate_limited(output),
+                diagnostics=diagnostics,
+            )
+        except urllib.error.HTTPError as exc:
+            body = exc.read().decode("utf-8", errors="replace")
+            diagnostics = self.diagnostics(
+                request.profile,
+                elapsed_sec=time.monotonic() - started_at,
+                notes=[*notes, f"HTTP {exc.code} from endpoint."],
+                env=resolved_env,
+            )
+            output = body.strip() or f"HTTP {exc.code}"
+            return AdapterExecutionResult(
+                success=False,
+                returncode=exc.code,
+                stdout="",
+                stderr=output,
+                output=output,
+                timed_out=False,
+                rate_limited=exc.code == 429 or is_rate_limited(output),
+                diagnostics=diagnostics,
+            )
+        except TimeoutError:
+            diagnostics = self.diagnostics(
+                request.profile,
+                elapsed_sec=time.monotonic() - started_at,
+                notes=[*notes, f"Timeout after {request.timeout}s."],
+                env=resolved_env,
+            )
+            return AdapterExecutionResult(
+                success=False,
+                returncode=None,
+                stdout="",
+                stderr=f"Timeout after {request.timeout}s",
+                output=f"Timeout after {request.timeout}s",
+                timed_out=True,
+                rate_limited=False,
+                diagnostics=diagnostics,
+            )
+        except Exception as exc:
+            diagnostics = self.diagnostics(
+                request.profile,
+                elapsed_sec=time.monotonic() - started_at,
+                notes=[*notes, f"Execution failed: {exc}"],
+                env=resolved_env,
+            )
+            return AdapterExecutionResult(
+                success=False,
+                returncode=1,
+                stdout="",
+                stderr=str(exc),
+                output=str(exc),
+                timed_out=False,
+                rate_limited=is_rate_limited(str(exc)),
+                diagnostics=diagnostics,
+            )
+
+
+class LocalCommandAdapter(LocalProviderAdapter):
+    adapter_id = "local_command_local"
+    provider_family = "local_command"
+    cli_name = "configured-local-command"
+    install_hint = "Configure providers[].command with a local executable or wrapper script."
+    provider_mode = "local"
+    auth_strategy = "none"
+    session_strategy = "stateless"
+    requires_managed_profile = False
+    supports_model_override = True
+    supported_modes = (AdapterMode.EXEC, AdapterMode.REVIEW, AdapterMode.CRITIC)
+
+    def default_command(self) -> list[str]:
+        return []
+
+    def check_installed_command(self) -> list[str]:
+        return []
+
+    def provider_login_command(self) -> list[str]:
+        return []
+
+    def session_source_dir(self, home: Path) -> Path | None:
+        return None
+
+    def runtime_home_from_profile_dir(self, profile_dir: Path) -> Path:
+        return profile_dir
+
+    def resume_state_paths(self, runtime_home: Path) -> list[Path]:
+        return []
+
+    def copy_session_to_profile(self, source_home: Path, destination: Path) -> None:
+        raise ValueError("local_command uses stateless local execution and does not support session import.")
+
+    def _configured_command(self, env: Mapping[str, str] | None = None) -> list[str]:
+        payload = _provider_config_from_env(env)
+        return _string_list(payload.get("command"))
+
+    def _resolved_cli_path(self, command: list[str], env: Mapping[str, str] | None = None) -> str | None:
+        if not command:
+            return None
+        executable = command[0]
+        if Path(executable).expanduser().exists():
+            return str(Path(executable).expanduser().resolve())
+        return shutil.which(executable, path=(env or os.environ).get("PATH"))
+
+    def diagnostics(
+        self,
+        profile: Profile | None = None,
+        *,
+        command: list[str] | None = None,
+        elapsed_sec: float = 0.0,
+        notes: list[str] | None = None,
+        env: Mapping[str, str] | None = None,
+    ) -> AdapterDiagnostics:
+        resolved_command = list(command or self._configured_command(env))
+        return AdapterDiagnostics(
+            metadata=self.runtime_metadata(profile),
+            command=resolved_command,
+            cli_path=self._resolved_cli_path(resolved_command, env),
+            elapsed_sec=round(elapsed_sec, 2),
+            notes=list(notes or []),
+        )
+
+    def test_environment(
+        self,
+        profile: Profile | None = None,
+        *,
+        env: Mapping[str, str] | None = None,
+        timeout: int = 15,
+    ) -> AdapterProbeResult:
+        del timeout
+        started_at = time.monotonic()
+        resolved_env = self.build_env(profile, env) if profile is not None else dict(env or os.environ.copy())
+        command = self._configured_command(resolved_env)
+        diagnostics = self.diagnostics(profile, command=command, elapsed_sec=0.0, env=resolved_env)
+
+        if not command:
+            diagnostics.elapsed_sec = round(time.monotonic() - started_at, 2)
+            diagnostics.notes.append("No command configured.")
+            return AdapterProbeResult(
+                status=ProbeStatus.DEGRADED,
+                summary="Configured command is required for the local command provider.",
+                diagnostics=diagnostics,
+            )
+
+        if diagnostics.cli_path is None:
+            diagnostics.elapsed_sec = round(time.monotonic() - started_at, 2)
+            diagnostics.notes.append("Configured command executable was not found on PATH.")
+            return AdapterProbeResult(
+                status=ProbeStatus.UNAVAILABLE,
+                summary="Configured command executable is not available.",
+                diagnostics=diagnostics,
+            )
+
+        diagnostics.elapsed_sec = round(time.monotonic() - started_at, 2)
+        diagnostics.notes.append("Configured command executable resolved successfully.")
+        return AdapterProbeResult(
+            status=ProbeStatus.READY,
+            summary="Configured command runtime is ready.",
+            output=diagnostics.cli_path,
+            diagnostics=diagnostics,
+        )
+
+    def prepare_cli_command(self, prompt: str, *, model: str | None, mode: AdapterMode) -> list[str]:
+        return ["configured-local-command", mode.value, model or "auto", prompt]
+
+    def prepare_invocation(self, request: AdapterExecutionRequest) -> _PreparedInvocation:
+        env = self.build_env(request.profile, request.env)
+        command = self._configured_command(env)
+        if not command:
+            raise ValueError("Configured command missing for local_command provider.")
+
+        rendered: list[str] = []
+        prompt_substituted = False
+        for part in command:
+            updated = part
+            if "{prompt}" in updated:
+                updated = updated.replace("{prompt}", request.prompt)
+                prompt_substituted = True
+            if request.model is not None:
+                updated = updated.replace("{model}", request.model)
+            updated = updated.replace("{mode}", request.mode.value)
+            rendered.append(updated)
+
+        env[AUTOPILOT_PROMPT_ENV] = request.prompt
+        env[AUTOPILOT_MODE_ENV] = request.mode.value
+        if request.model is not None:
+            env[AUTOPILOT_MODEL_ENV] = request.model
+
+        return _PreparedInvocation(
+            command=rendered,
+            env=env,
+            input_text=None if prompt_substituted else request.prompt,
+        )
+
+
 _LOCAL_ADAPTERS: tuple[LocalProviderAdapter, ...] = (
     CodexLocalAdapter(),
     ClaudeLocalAdapter(),
     GeminiLocalAdapter(),
     OllamaLocalAdapter(),
+    OpenAICompatibleLocalAdapter(),
+    LocalCommandAdapter(),
 )
 SUPPORTED_PROVIDER_FAMILIES = tuple(adapter.provider_family for adapter in _LOCAL_ADAPTERS)
 _ADAPTERS_BY_ID: dict[str, LocalProviderAdapter] = {}
