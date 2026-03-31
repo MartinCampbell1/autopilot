@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import shutil
 import subprocess
 import time
@@ -9,8 +10,8 @@ import uuid
 from pathlib import Path
 from typing import Callable
 
-from autopilot.core.models import is_rate_limited
-from autopilot.core.providers import build_cli_command
+from autopilot.core.adapters import AdapterExecutionRequest, AdapterMode, get_adapter
+from autopilot.core.models import GateResult, Profile, is_rate_limited
 
 IGNORED_PREFIXES = (".agents/", ".ralph/")
 TEMPLATE_DIR = Path(__file__).parent.parent / "templates"
@@ -27,6 +28,7 @@ This repository was bootstrapped by Autopilot from a PRD.
 - If the story depends on an existing app, gateway, or file that is not present here, record the exact blocker in `.ralph/errors.log` and `.ralph/guardrails.md`, then stop without claiming success.
 - Treat transient verification artifacts such as `__pycache__/`, `.pytest_cache/`, and `*.egg-info/` as disposable. Prefer `.gitignore` over manual recursive cleanup.
 - Prefer the lightest verification that still proves the story works.
+- If `.ralph/team-context.json` or `.ralph/specialist-notes.md` exists, read them before coding.
 - If you discover repeatable build/test commands, keep this file updated with concise operational notes.
 
 ## Verification Guidance
@@ -50,6 +52,7 @@ AGENTS_PATH="AGENTS.md"
 PROMPT_BUILD=".agents/ralph/PROMPT_build.md"
 """
 DEFAULT_PROGRESS_INTERVAL_SEC = 15
+QUALITY_RATCHET_PATH = ".ralph/quality-ratchet.json"
 
 
 def check_ralph_installed() -> bool:
@@ -200,6 +203,25 @@ def _run_command_with_progress(
     return success, output, rate_limited
 
 
+def _infer_runtime_profile(provider: str, env: dict[str, str], profile: Profile | None = None) -> Profile:
+    if profile is not None:
+        return profile
+
+    adapter = get_adapter(provider)
+    if adapter.provider_family == "codex":
+        runtime_path = env.get("CODEX_HOME", "")
+    else:
+        runtime_home = env.get("HOME", "")
+        runtime_path = str(Path(runtime_home).parent) if runtime_home else ""
+
+    return Profile(
+        name="runtime",
+        provider=adapter.provider_family,
+        adapter_id=adapter.adapter_id,
+        path=runtime_path or ".",
+    )
+
+
 def run_ralph_iteration(
     project_path: Path,
     env: dict[str, str],
@@ -253,7 +275,8 @@ def build_retry_prompt(
     template = resolved_template.read_text() if resolved_template.exists() else (
         "Continue story #{story_id}: {story_title}\n\n"
         "Story details:\n{story_description}\n\n"
-        "Read .ralph/critic-feedback.md, .ralph/progress.md, and .ralph/guardrails.md.\n"
+        "Read .ralph/critic-feedback.md, .ralph/progress.md, .ralph/guardrails.md, "
+        ".ralph/team-context.json, and .ralph/specialist-notes.md if they exist.\n"
         "Fix only the outstanding issues from the previous attempt.\n"
     )
     return template.format(
@@ -273,38 +296,27 @@ def run_retry_iteration(
     timeout: int = 1800,
     on_progress: Callable[[int, str], None] | None = None,
     progress_interval: int = DEFAULT_PROGRESS_INTERVAL_SEC,
+    profile: Profile | None = None,
 ) -> tuple[bool, str, bool]:
     """Run a focused retry prompt after a failed or rejected iteration."""
     prompt = build_retry_prompt(story_id, story_title, story_description)
-    cmd = build_cli_command(provider, prompt, mode="exec")
-
-    if on_progress is not None:
-        return _run_command_with_progress(
-            cmd,
-            project_path=project_path,
+    runtime_profile = _infer_runtime_profile(provider, env, profile)
+    adapter = get_adapter(runtime_profile.resolved_adapter_id)
+    result = adapter.execute(
+        AdapterExecutionRequest(
+            profile=runtime_profile,
+            prompt=prompt,
+            workdir=project_path,
             env=env,
             timeout=timeout,
+            mode=AdapterMode.EXEC,
             on_progress=on_progress,
             progress_interval=progress_interval,
+            progress_message=lambda: _latest_worker_activity(project_path),
         )
-
-    try:
-        result = subprocess.run(
-            cmd,
-            cwd=str(project_path),
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            env=env,
-        )
-        output = f"{result.stdout}\n{result.stderr}".strip()
-        success = result.returncode == 0
-        rate_limited = is_rate_limited(output)
-        return success, output, rate_limited
-    except subprocess.TimeoutExpired:
-        return False, f"Timeout after {timeout}s", False
-    except Exception as exc:
-        return False, str(exc), False
+    )
+    parsed = adapter.parse_output(result)
+    return result.success, parsed.text, parsed.rate_limited
 
 
 def run_prompt_iteration(
@@ -315,37 +327,26 @@ def run_prompt_iteration(
     timeout: int = 1800,
     on_progress: Callable[[int, str], None] | None = None,
     progress_interval: int = DEFAULT_PROGRESS_INTERVAL_SEC,
+    profile: Profile | None = None,
 ) -> tuple[bool, str, bool]:
     """Run one generic provider prompt without invoking Ralph build mode."""
-    cmd = build_cli_command(provider, prompt, mode="exec")
-
-    if on_progress is not None:
-        return _run_command_with_progress(
-            cmd,
-            project_path=project_path,
+    runtime_profile = _infer_runtime_profile(provider, env, profile)
+    adapter = get_adapter(runtime_profile.resolved_adapter_id)
+    result = adapter.execute(
+        AdapterExecutionRequest(
+            profile=runtime_profile,
+            prompt=prompt,
+            workdir=project_path,
             env=env,
             timeout=timeout,
+            mode=AdapterMode.EXEC,
             on_progress=on_progress,
             progress_interval=progress_interval,
+            progress_message=lambda: _latest_worker_activity(project_path),
         )
-
-    try:
-        result = subprocess.run(
-            cmd,
-            cwd=str(project_path),
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            env=env,
-        )
-        output = f"{result.stdout}\n{result.stderr}".strip()
-        success = result.returncode == 0
-        rate_limited = is_rate_limited(output)
-        return success, output, rate_limited
-    except subprocess.TimeoutExpired:
-        return False, f"Timeout after {timeout}s", False
-    except Exception as exc:
-        return False, str(exc), False
+    )
+    parsed = adapter.parse_output(result)
+    return result.success, parsed.text, parsed.rate_limited
 
 
 def read_progress(project_path: Path) -> str:
@@ -362,6 +363,51 @@ def write_critic_feedback(project_path: Path, feedback: str) -> None:
     ralph_dir.mkdir(exist_ok=True)
     feedback_file = ralph_dir / "critic-feedback.md"
     feedback_file.write_text(feedback)
+
+
+def read_quality_ratchet(project_path: Path) -> dict[str, bool]:
+    """Return the persisted required-gate quality baseline."""
+
+    ratchet_path = project_path / QUALITY_RATCHET_PATH
+    if not ratchet_path.exists():
+        return {}
+    try:
+        payload = json.loads(ratchet_path.read_text())
+    except Exception:
+        return {}
+    return {
+        str(name): bool(value)
+        for name, value in (payload.get("required_gate_passed") or {}).items()
+        if str(name).strip()
+    }
+
+
+def update_quality_ratchet(project_path: Path, gate_results: list[GateResult]) -> dict[str, bool]:
+    """Persist the best-known required-gate quality baseline for future regression checks."""
+
+    ratchet = read_quality_ratchet(project_path)
+    for gate_result in gate_results:
+        if gate_result.required and gate_result.passed:
+            ratchet[gate_result.name] = True
+
+    ralph_dir = project_path / ".ralph"
+    ralph_dir.mkdir(exist_ok=True)
+    (project_path / QUALITY_RATCHET_PATH).write_text(
+        json.dumps({"required_gate_passed": ratchet}, indent=2, ensure_ascii=False)
+    )
+    return ratchet
+
+
+def summarize_quality_regressions(gate_results: list[GateResult]) -> str:
+    """Render a concise regression summary from the current gate results."""
+
+    regressions = [gate for gate in gate_results if gate.regression]
+    if not regressions:
+        return ""
+    return "\n".join(
+        f"- {gate.name} regressed after previously passing: {gate.output[:200]}"
+        for gate in regressions
+    )
 
 
 def append_guardrail(project_path: Path, guardrail: str) -> None:

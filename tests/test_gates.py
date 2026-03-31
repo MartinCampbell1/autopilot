@@ -75,3 +75,31 @@ class TestRunGates:
         all_passed, results = run_gates(gates_config, Path("/tmp"))
         assert all_passed is True
         assert len(results) == 2
+
+    @patch("autopilot.core.gates.run_single_gate")
+    def test_required_gate_regression_is_flagged(self, mock_gate: MagicMock) -> None:
+        mock_gate.return_value = GateResult(name="build", cmd="npm run build", passed=False, output="fail", required=True)
+
+        all_passed, results = run_gates(
+            [{"name": "build", "cmd": "npm run build", "required": True}],
+            Path("/tmp"),
+            quality_baseline={"build": True},
+        )
+
+        assert all_passed is False
+        assert results[0].baseline_passed is True
+        assert results[0].regression is True
+
+    @patch("autopilot.core.gates.run_single_gate")
+    def test_first_time_required_failure_is_not_regression(self, mock_gate: MagicMock) -> None:
+        mock_gate.return_value = GateResult(name="build", cmd="npm run build", passed=False, output="fail", required=True)
+
+        all_passed, results = run_gates(
+            [{"name": "build", "cmd": "npm run build", "required": True}],
+            Path("/tmp"),
+            quality_baseline={},
+        )
+
+        assert all_passed is False
+        assert results[0].baseline_passed is None
+        assert results[0].regression is False

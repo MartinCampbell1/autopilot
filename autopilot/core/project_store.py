@@ -26,22 +26,51 @@ from autopilot.core.capability_store import (
     load_skill_packs_registry,
     normalize_launch_profile,
     normalize_phase_plan,
+    normalize_review_phases,
+    normalize_story_pipeline,
     resolve_story_runtime_plan,
 )
 from autopilot.core.config import AutopilotConfig
+from autopilot.core.cost_accounting import default_cost_usage, ensure_cost_state
+from autopilot.core.github_prs import normalize_story_github_pr
 from autopilot.core.loop_runner import apply_autopilot_ralph_overrides, check_ralph_installed, init_ralph_project
+from autopilot.core.models import normalize_story_blocked_by, resolve_story_blocked_on, validate_story_dependencies
+from autopilot.core.runtime_agents import build_story_pipeline_state
+from autopilot.core.runtime_budgets import default_budget_policy, default_budget_usage, ensure_budget_state, update_budget_policy
 
 TIMELINE_LIMIT = 300
+DISCOVERY_BOARD_LIMIT = 200
 TERMINAL_STORY_STATUSES = {"done", "skipped", "stuck", "merge_blocked"}
 PLACEHOLDER_ISSUE_PATTERN = re.compile(
     r"^-\s*(?:Issue\s+\d+:\s*specific description|<[^>]+>|concrete issue\b.*|second concrete issue\b.*)\s*$",
     re.IGNORECASE,
 )
+DISCOVERY_SECTION_PATTERN = re.compile(r"^#{1,3}\s*(warnings?|constraints?|intents?|notes?)\s*:?\s*$", re.IGNORECASE)
+DISCOVERY_PREFIX_PATTERN = re.compile(r"^(warning|constraint|intent|note)s?\s*:\s*(.+)$", re.IGNORECASE)
+DISCOVERY_KIND_ALIASES = {
+    "warning": "warning",
+    "warnings": "warning",
+    "constraint": "constraint",
+    "constraints": "constraint",
+    "intent": "intent",
+    "intents": "intent",
+    "note": "note",
+    "notes": "note",
+}
 
 
 def utcnow_iso() -> str:
     """Return the current UTC timestamp in ISO format."""
     return datetime.now(timezone.utc).isoformat()
+
+
+def default_quality_policy() -> dict[str, Any]:
+    """Return the default quality-ratcheting policy for one project."""
+
+    return {
+        "regression_mode": "retry",
+        "auto_revert": False,
+    }
 
 
 def slugify_project_name(name: str) -> str:
@@ -149,6 +178,173 @@ def _normalize_story_id(value: Any, fallback: int, seen_ids: set[int]) -> int:
     return candidate
 
 
+def normalize_discovery_kind(value: Any) -> str:
+    normalized = str(value or "").strip().lower()
+    return DISCOVERY_KIND_ALIASES.get(normalized, "note")
+
+
+def build_discovery_marker(
+    *,
+    story_id: int | None,
+    source: str,
+    kind: str,
+    detail: str,
+    title: str | None = None,
+    created_at: str | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    cleaned_detail = str(detail or "").strip()
+    if not cleaned_detail:
+        return None
+    cleaned_title = str(title or "").strip() or cleaned_detail.splitlines()[0]
+    return {
+        "id": f"discovery-{uuid.uuid4().hex[:10]}",
+        "story_id": story_id,
+        "source": str(source or "runtime").strip() or "runtime",
+        "kind": normalize_discovery_kind(kind),
+        "title": cleaned_title[:120],
+        "detail": cleaned_detail[:2000],
+        "status": "active",
+        "created_at": created_at or utcnow_iso(),
+        "updated_at": created_at or utcnow_iso(),
+        "metadata": dict(metadata or {}),
+    }
+
+
+def extract_structured_discoveries(
+    text: str,
+    *,
+    story_id: int | None,
+    source: str,
+    created_at: str | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    """Extract structured discovery markers from markdown-like notes."""
+
+    markers: list[dict[str, Any]] = []
+    seen: set[tuple[int | None, str, str, str]] = set()
+    current_kind: str | None = None
+    timestamp = created_at or utcnow_iso()
+
+    def append_marker(kind: str, detail: str) -> None:
+        marker = build_discovery_marker(
+            story_id=story_id,
+            source=source,
+            kind=kind,
+            detail=detail,
+            created_at=timestamp,
+            metadata=metadata,
+        )
+        if marker is None:
+            return
+        fingerprint = (
+            marker.get("story_id"),
+            str(marker.get("source") or ""),
+            str(marker.get("kind") or ""),
+            str(marker.get("detail") or "").lower(),
+        )
+        if fingerprint in seen:
+            return
+        seen.add(fingerprint)
+        markers.append(marker)
+
+    for raw_line in str(text or "").splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        section_match = DISCOVERY_SECTION_PATTERN.match(line)
+        if section_match:
+            current_kind = normalize_discovery_kind(section_match.group(1))
+            continue
+        prefixed_match = DISCOVERY_PREFIX_PATTERN.match(line)
+        if prefixed_match:
+            current_kind = normalize_discovery_kind(prefixed_match.group(1))
+            append_marker(current_kind, prefixed_match.group(2).strip())
+            continue
+        if line.startswith(("-", "*")) and current_kind:
+            append_marker(current_kind, line[1:].strip())
+
+    return markers
+
+
+def _discovery_fingerprint(marker: dict[str, Any]) -> tuple[int | None, str, str, str]:
+    return (
+        marker.get("story_id"),
+        str(marker.get("source") or ""),
+        str(marker.get("kind") or ""),
+        str(marker.get("detail") or "").strip().lower(),
+    )
+
+
+def record_discovery_markers(
+    config: AutopilotConfig,
+    project_id: str,
+    markers: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Persist structured discovery markers and deduplicate stable repeats."""
+
+    if not markers:
+        return []
+
+    state = load_project_state(config, project_id)
+    if not state:
+        return []
+
+    discoveries = list(state.setdefault("discoveries", []))
+    existing_index = {_discovery_fingerprint(marker): index for index, marker in enumerate(discoveries)}
+    recorded: list[dict[str, Any]] = []
+
+    for marker in markers:
+        fingerprint = _discovery_fingerprint(marker)
+        existing_index_for_marker = existing_index.get(fingerprint)
+        if existing_index_for_marker is not None:
+            current = dict(discoveries[existing_index_for_marker])
+            current["updated_at"] = marker.get("updated_at") or marker.get("created_at") or utcnow_iso()
+            current["metadata"] = {
+                **dict(current.get("metadata") or {}),
+                **dict(marker.get("metadata") or {}),
+            }
+            discoveries[existing_index_for_marker] = current
+            recorded.append(current)
+            continue
+
+        discoveries.append(marker)
+        existing_index[fingerprint] = len(discoveries) - 1
+        recorded.append(marker)
+
+    state["discoveries"] = discoveries[-DISCOVERY_BOARD_LIMIT:]
+    state["updated_at"] = utcnow_iso()
+    save_project_state(config, project_id, state)
+    return recorded
+
+
+def build_story_discovery_context(
+    state: dict[str, Any],
+    *,
+    story_id: int | None = None,
+    limit: int = 24,
+) -> list[dict[str, Any]]:
+    """Return active discoveries relevant to one story."""
+
+    discoveries = [
+        dict(marker)
+        for marker in state.get("discoveries", [])
+        if str(marker.get("status") or "active") == "active"
+    ]
+    discoveries.sort(
+        key=lambda marker: (
+            str(marker.get("story_id") or ""),
+            str(marker.get("updated_at") or marker.get("created_at") or ""),
+            str(marker.get("kind") or ""),
+        )
+    )
+    if story_id is not None:
+        same_story = [marker for marker in discoveries if marker.get("story_id") == story_id]
+        shared = [marker for marker in discoveries if marker.get("story_id") != story_id]
+        discoveries = shared + same_story
+    return discoveries[-limit:]
+
+
 def normalize_prd(prd: dict[str, Any], *, seed_mode: str = "new") -> dict[str, Any]:
     """Normalize PRD stories while keeping runtime state out of the document."""
     title = str(prd.get("title") or "Untitled Project").strip()
@@ -168,6 +364,18 @@ def normalize_prd(prd: dict[str, Any], *, seed_mode: str = "new") -> dict[str, A
         phase_id = str(story.get("phase_id") or "").strip() or None
         phase_title = str(story.get("phase_title") or "").strip() or None
         phase_goal = str(story.get("phase_goal") or "").strip() or ""
+        raw_pipeline = story.get("pipeline") if "pipeline" in story else story.get("story_pipeline") if "story_pipeline" in story else None
+        normalized_pipeline = (
+            []
+            if raw_pipeline in (None, "") or (isinstance(raw_pipeline, list) and len(raw_pipeline) == 0)
+            else normalize_story_pipeline(raw_pipeline)
+        )
+        raw_review_phases = story.get("review_phases")
+        normalized_review_phases = (
+            []
+            if raw_review_phases in (None, "") or (isinstance(raw_review_phases, list) and len(raw_review_phases) == 0)
+            else normalize_review_phases(raw_review_phases)
+        )
         normalized_story = enrich_story_plan(
             {
                 "id": story_id,
@@ -179,6 +387,9 @@ def normalize_prd(prd: dict[str, Any], *, seed_mode: str = "new") -> dict[str, A
                 "phase_title": phase_title,
                 "phase_goal": phase_goal,
                 "acceptance_criteria": story.get("acceptance_criteria") or [],
+                "blocked_by": normalize_story_blocked_by(story.get("blocked_by"), story_id=story_id),
+                "pipeline": normalized_pipeline,
+                "review_phases": normalized_review_phases,
                 "tags": story.get("tags") or [],
                 "role": story.get("role"),
                 "skill_packs": story.get("skill_packs") or [],
@@ -199,6 +410,10 @@ def normalize_prd(prd: dict[str, Any], *, seed_mode: str = "new") -> dict[str, A
             story["phase_id"] = phase["id"]
             story["phase_title"] = phase["title"]
             story["phase_goal"] = story.get("phase_goal") or phase.get("goal") or ""
+
+    dependency_graph = validate_story_dependencies(normalized_stories)
+    for story in normalized_stories:
+        story["blocked_by"] = dependency_graph[story["id"]]
 
     return {
         "title": title,
@@ -239,6 +454,9 @@ def migrate_projects_registry(config: AutopilotConfig) -> list[dict[str, Any]]:
             changed = True
         if "archived" not in project:
             project["archived"] = _is_temp_project_path(str(project.get("path") or ""))
+            changed = True
+        if "tracker_refs" not in project:
+            project["tracker_refs"] = []
             changed = True
         if "created_at" not in project:
             project["created_at"] = now
@@ -294,6 +512,81 @@ def update_project_entry(config: AutopilotConfig, updated_project: dict[str, Any
     raise KeyError(updated_project["id"])
 
 
+def normalize_tracker_reference(
+    *,
+    provider: str,
+    kind: str,
+    external_id: str,
+    title: str = "",
+    url: str = "",
+    event: str = "",
+    repository: dict[str, Any] | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    repo = dict(repository or {})
+    repo_name = str(repo.get("full_name") or repo.get("name") or "").strip()
+    return {
+        "provider": str(provider or "").strip().lower(),
+        "kind": str(kind or "").strip().lower(),
+        "external_id": str(external_id or "").strip(),
+        "title": str(title or "").strip(),
+        "url": str(url or "").strip(),
+        "event": str(event or "").strip().lower(),
+        "repository": {
+            "id": repo.get("id"),
+            "name": repo.get("name"),
+            "full_name": repo_name,
+            "url": repo.get("html_url") or repo.get("url") or "",
+        },
+        "metadata": dict(metadata or {}),
+        "linked_at": utcnow_iso(),
+    }
+
+
+def _tracker_reference_key(reference: dict[str, Any]) -> tuple[str, str, str, str]:
+    repository = reference.get("repository") or {}
+    return (
+        str(reference.get("provider") or "").strip().lower(),
+        str(reference.get("kind") or "").strip().lower(),
+        str(repository.get("full_name") or "").strip().lower(),
+        str(reference.get("external_id") or "").strip(),
+    )
+
+
+def find_project_by_tracker_reference(config: AutopilotConfig, reference: dict[str, Any]) -> dict[str, Any] | None:
+    for project in load_projects_registry(config, include_archived=True):
+        for tracker_ref in project.get("tracker_refs", []):
+            if _tracker_reference_key(tracker_ref) == _tracker_reference_key(reference):
+                return project
+    return None
+
+
+def attach_tracker_reference(config: AutopilotConfig, project_id: str, reference: dict[str, Any]) -> dict[str, Any]:
+    project = get_project_entry(config, project_id=project_id, include_archived=True)
+    if project is None:
+        raise KeyError(project_id)
+
+    tracker_refs = list(project.get("tracker_refs") or [])
+    reference_key = _tracker_reference_key(reference)
+    updated = False
+    for index, tracker_ref in enumerate(tracker_refs):
+        if _tracker_reference_key(tracker_ref) != reference_key:
+            continue
+        tracker_refs[index] = {
+            **dict(tracker_ref),
+            **dict(reference),
+            "linked_at": tracker_ref.get("linked_at") or reference.get("linked_at") or utcnow_iso(),
+        }
+        updated = True
+        break
+    if not updated:
+        tracker_refs.append(reference)
+
+    project["tracker_refs"] = tracker_refs
+    update_project_entry(config, project)
+    return project
+
+
 def register_project(
     config: AutopilotConfig,
     *,
@@ -336,6 +629,7 @@ def register_project(
         "priority": priority,
         "prd": prd_relpath,
         "archived": False,
+        "tracker_refs": [],
         "created_at": created_at,
         "last_opened_at": None,
     }
@@ -353,6 +647,8 @@ def _story_state_from_definition(story: dict[str, Any]) -> dict[str, Any]:
         "story_id": story["id"],
         "position": story["position"],
         "status": story["status"],
+        "blocked_by": list(story.get("blocked_by") or []),
+        "blocked_on": [],
         "started_at": None,
         "completed_at": None,
         "updated_at": utcnow_iso(),
@@ -363,10 +659,16 @@ def _story_state_from_definition(story: dict[str, Any]) -> dict[str, Any]:
         "requeue_count": 0,
         "team_mode": "solo",
         "team_members": [],
+        "story_pipeline": list(story.get("pipeline") or []),
+        "review_phases": list(story.get("review_phases") or []),
+        "pipeline_state": [],
         "connector_activation": [],
         "activation_errors": [],
         "worktree_path": None,
         "branch_name": None,
+        "ownership": None,
+        "checkout": None,
+        "github_pr": {},
     }
 
 
@@ -384,10 +686,13 @@ def _requeue_interrupted_stories(state: dict[str, Any], fallback_error: str) -> 
         story_state["last_error"] = _sanitize_message(story_state.get("last_error") or fallback_error)
         story_state["team_mode"] = state.get("launch_profile", {}).get("story_execution_mode", "solo")
         story_state["team_members"] = []
+        story_state["pipeline_state"] = []
         story_state["connector_activation"] = []
         story_state["activation_errors"] = []
         story_state["worktree_path"] = None
         story_state["branch_name"] = None
+        story_state["ownership"] = None
+        story_state["checkout"] = None
         changed = True
 
     if changed:
@@ -418,11 +723,33 @@ def _default_runtime_state(project_id: str, prd: dict[str, Any]) -> dict[str, An
         "launch_profile": normalize_launch_profile().model_dump(),
         "activation_errors": [],
         "parallel_story_ids": [],
+        "budget_policy": default_budget_policy(),
+        "budget_usage": default_budget_usage(),
+        "cost_usage": default_cost_usage(),
+        "discoveries": [],
         "story_state": {
             str(story["id"]): _story_state_from_definition(story) for story in prd.get("stories", [])
         },
         "timeline": timeline,
     }
+
+
+def _sync_story_dependencies(prd: dict[str, Any], state: dict[str, Any]) -> bool:
+    changed = False
+    story_state = state.get("story_state", {})
+    for story in prd.get("stories", []):
+        runtime = story_state.get(str(story["id"]))
+        if runtime is None:
+            continue
+        blocked_by = list(story.get("blocked_by") or [])
+        if runtime.get("blocked_by") != blocked_by:
+            runtime["blocked_by"] = blocked_by
+            changed = True
+        blocked_on = [] if runtime.get("status") in {"done", "skipped"} else resolve_story_blocked_on(blocked_by, story_state)
+        if runtime.get("blocked_on") != blocked_on:
+            runtime["blocked_on"] = blocked_on
+            changed = True
+    return changed
 
 
 def load_project_prd(project: dict[str, Any], *, seed_mode: str = "migrate") -> dict[str, Any]:
@@ -475,8 +802,15 @@ def ensure_project_state(
     state.setdefault("launch_profile", normalize_launch_profile().model_dump())
     state.setdefault("activation_errors", [])
     state.setdefault("parallel_story_ids", [])
+    state.setdefault("budget_policy", default_budget_policy())
+    state.setdefault("budget_usage", default_budget_usage())
+    state.setdefault("quality_policy", default_quality_policy())
+    state.setdefault("cost_usage", default_cost_usage())
+    state.setdefault("discoveries", [])
     state.setdefault("timeline", [])
     state.setdefault("story_state", {})
+    ensure_budget_state(state)
+    ensure_cost_state(state)
 
     synchronized_story_state: dict[str, Any] = {}
     for story in prd.get("stories", []):
@@ -488,6 +822,8 @@ def ensure_project_state(
         current.setdefault("story_id", story["id"])
         current["position"] = story["position"]
         current.setdefault("status", story["status"])
+        current.setdefault("blocked_by", list(story.get("blocked_by") or []))
+        current.setdefault("blocked_on", [])
         current.setdefault("started_at", None)
         current.setdefault("completed_at", None)
         current.setdefault("updated_at", utcnow_iso())
@@ -498,13 +834,34 @@ def ensure_project_state(
         current.setdefault("requeue_count", 0)
         current.setdefault("team_mode", "solo")
         current.setdefault("team_members", [])
+        current.setdefault("story_pipeline", list(story.get("pipeline") or []))
+        current.setdefault("review_phases", list(story.get("review_phases") or []))
+        current.setdefault("pipeline_state", [])
         current.setdefault("connector_activation", [])
         current.setdefault("activation_errors", [])
         current.setdefault("worktree_path", None)
         current.setdefault("branch_name", None)
+        current.setdefault("ownership", None)
+        current.setdefault("checkout", None)
+        if not current.get("story_pipeline"):
+            current["story_pipeline"] = list(story.get("pipeline") or [])
+        if not current.get("review_phases"):
+            current["review_phases"] = list(story.get("review_phases") or [])
+        if not current.get("pipeline_state") and current.get("story_pipeline"):
+            current["pipeline_state"] = build_story_pipeline_state(
+                current.get("story_pipeline"),
+                current.get("team_members") or [],
+            )
+        current["github_pr"] = normalize_story_github_pr(
+            project["name"],
+            story,
+            existing=current.get("github_pr") or {},
+        )
         synchronized_story_state[key] = current
     if synchronized_story_state != state["story_state"]:
         state["story_state"] = synchronized_story_state
+        changed = True
+    if _sync_story_dependencies(prd, state):
         changed = True
 
     if state.get("pid") and not _is_pid_running(state["pid"]):
@@ -591,16 +948,62 @@ def emit_project_event(
     timeline.append(event_record)
     state["timeline"] = timeline[-TIMELINE_LIMIT:]
     state["updated_at"] = event_record["timestamp"]
-    if event in {"worker_failed", "critic_rejected", "story_stuck", "run_failed"}:
+    if event in {"worker_failed", "story_gate_failed", "critic_rejected", "story_stuck", "run_failed"}:
         state["last_error"] = message
     if story_id is not None:
         story_state = state.setdefault("story_state", {}).get(str(story_id))
         if story_state is not None:
             story_state["updated_at"] = event_record["timestamp"]
-            if event in {"worker_failed", "critic_rejected", "story_stuck"}:
+            if event in {"worker_failed", "story_gate_failed", "critic_rejected", "story_stuck"}:
                 story_state["last_error"] = message
     save_project_state(config, project_id, state)
     _append_event_log(config, event_record)
+    try:
+        from autopilot.core.run_trace import append_trace_entry
+
+        append_trace_entry(
+            config,
+            project_id,
+            {
+                "kind": "project_event",
+                **event_record,
+            },
+        )
+    except Exception:
+        pass
+    # Runtime issue synchronization is best-effort: execution must not fail because control-plane issue
+    # bookkeeping could not be updated.
+    try:
+        from autopilot.core.control_plane_issues import sync_runtime_issue_from_event
+
+        sync_runtime_issue_from_event(config, event_record)
+    except Exception:
+        pass
+    try:
+        from autopilot.core.notifiers import dispatch_project_event_notification
+
+        project_entry = get_project_entry(config, project_id=project_id, include_archived=True)
+        if project_entry is not None:
+            prd = load_project_prd(project_entry, seed_mode="migrate")
+            story_title = None
+            if story_id is not None:
+                story_title = next(
+                    (
+                        str(story.get("title") or f"Story {story_id}")
+                        for story in prd.get("stories", [])
+                        if story.get("id") == story_id
+                    ),
+                    f"Story {story_id}",
+                )
+            dispatch_project_event_notification(
+                config,
+                project_entry=project_entry,
+                state=state,
+                event_record=event_record,
+                story_title=story_title,
+            )
+    except Exception:
+        pass
     return event_record
 
 
@@ -679,6 +1082,8 @@ def requeue_recoverable_stuck_stories(config: AutopilotConfig, project_id: str) 
         entry["activation_errors"] = []
         entry["worktree_path"] = None
         entry["branch_name"] = None
+        entry["ownership"] = None
+        entry["checkout"] = None
         reopened.append(int(entry["story_id"]))
 
     if not reopened:
@@ -703,6 +1108,9 @@ def _resolve_story_runtime_metadata(
 ) -> dict[str, Any]:
     team_mode = runtime.get("team_mode")
     team_members = runtime.get("team_members") or []
+    story_pipeline = runtime.get("story_pipeline") or []
+    review_phases = runtime.get("review_phases") or []
+    pipeline_state = runtime.get("pipeline_state") or []
     connector_activation = runtime.get("connector_activation") or []
     activation_errors = runtime.get("activation_errors") or []
     has_runtime_plan = bool(
@@ -717,6 +1125,9 @@ def _resolve_story_runtime_metadata(
         return {
             "team_mode": team_mode or state.get("launch_profile", {}).get("story_execution_mode", "solo"),
             "team_members": team_members,
+            "story_pipeline": story_pipeline,
+            "review_phases": review_phases or list(story.get("review_phases") or []),
+            "pipeline_state": pipeline_state,
             "connector_activation": connector_activation,
             "activation_errors": activation_errors,
         }
@@ -732,6 +1143,13 @@ def _resolve_story_runtime_metadata(
     return {
         "team_mode": resolved["team_mode"],
         "team_members": runtime.get("team_members") or resolved["team_members"],
+        "story_pipeline": resolved["story_pipeline"],
+        "review_phases": runtime.get("review_phases") or resolved.get("review_phases") or [],
+        "pipeline_state": runtime.get("pipeline_state")
+        or build_story_pipeline_state(
+            resolved["story_pipeline"],
+            runtime.get("team_members") or resolved["team_members"],
+        ),
         "connector_activation": runtime.get("connector_activation") or resolved["active_connectors"],
         "activation_errors": runtime.get("activation_errors") or resolved["activation_errors"],
     }
@@ -764,6 +1182,8 @@ def merge_project_stories(
                 "preferred_connectors": story.get("preferred_connectors", []),
                 "forbidden_connectors": story.get("forbidden_connectors", []),
                 "acceptance_criteria": story.get("acceptance_criteria", []),
+                "blocked_by": runtime.get("blocked_by", story.get("blocked_by", [])),
+                "blocked_on": runtime.get("blocked_on", []),
                 "status": runtime.get("status", "open"),
                 "started_at": runtime.get("started_at"),
                 "completed_at": runtime.get("completed_at"),
@@ -774,10 +1194,23 @@ def merge_project_stories(
                 "last_error": _sanitize_message(runtime.get("last_error") or ""),
                 "team_mode": runtime_metadata["team_mode"],
                 "team_members": runtime_metadata["team_members"],
+                "story_pipeline": runtime_metadata["story_pipeline"],
+                "review_phases": runtime_metadata["review_phases"] or story.get("review_phases", []),
+                "discoveries": build_story_discovery_context(state, story_id=int(story["id"])),
+                "pipeline_state": runtime_metadata["pipeline_state"],
                 "connector_activation": runtime_metadata["connector_activation"],
                 "activation_errors": runtime_metadata["activation_errors"],
                 "worktree_path": runtime.get("worktree_path"),
                 "branch_name": runtime.get("branch_name"),
+                "ownership": runtime.get("ownership"),
+                "checkout": runtime.get("checkout"),
+                "github_pr": runtime.get("github_pr") or normalize_story_github_pr(project["name"], story),
+                "cost": dict(
+                    (state.get("cost_usage", {}).get("stories") or {}).get(
+                        str(story["id"]),
+                        default_cost_usage()["project"],
+                    )
+                ),
             }
         )
     return merged
@@ -828,6 +1261,10 @@ def build_project_summary(config: AutopilotConfig, project: dict[str, Any]) -> d
         "last_message": _sanitize_message(last_event["message"]) if last_event else "",
         "pid": state.get("pid"),
         "launch_profile": state.get("launch_profile", normalize_launch_profile().model_dump()),
+        "budget_policy": state.get("budget_policy", default_budget_policy()),
+        "budget_usage": state.get("budget_usage", default_budget_usage()),
+        "quality_policy": state.get("quality_policy", default_quality_policy()),
+        "cost_usage": state.get("cost_usage", default_cost_usage()),
     }
 
 
@@ -867,6 +1304,15 @@ def build_project_detail(config: AutopilotConfig, project_id: str) -> dict[str, 
         for story in stories
         if story.get("activation_errors")
     }
+    trace_summary: dict[str, Any] = {}
+    trace_file = ""
+    try:
+        from autopilot.core.run_trace import build_trace_summary, read_trace_entries, trace_path
+
+        trace_summary = build_trace_summary(read_trace_entries(config, project_id, limit=400))
+        trace_file = str(trace_path(config, project_id))
+    except Exception:
+        pass
 
     return {
         **summary,
@@ -884,10 +1330,31 @@ def build_project_detail(config: AutopilotConfig, project_id: str) -> dict[str, 
         "active_critic": state.get("active_critic"),
         "current_iteration": state.get("current_iteration", 0),
         "launch_profile": state.get("launch_profile", normalize_launch_profile().model_dump()),
+        "budget_policy": state.get("budget_policy", default_budget_policy()),
+        "budget_usage": state.get("budget_usage", default_budget_usage()),
+        "quality_policy": state.get("quality_policy", default_quality_policy()),
+        "cost_usage": state.get("cost_usage", default_cost_usage()),
+        "discoveries": build_story_discovery_context(state, story_id=None),
         "team_assignments": team_assignments,
         "active_connectors": active_connectors,
         "activation_errors": activation_errors,
+        "trace_summary": trace_summary,
+        "trace_path": trace_file,
     }
+
+
+def update_project_budget_policy(
+    config: AutopilotConfig,
+    project_id: str,
+    **fields: Any,
+) -> dict[str, Any]:
+    """Update a project's runtime budget policy."""
+    state = load_project_state(config, project_id)
+    if not state:
+        raise KeyError(project_id)
+    policy = update_budget_policy(state, updates=fields)
+    save_project_state(config, project_id, state)
+    return policy
 
 
 def append_guidance(config: AutopilotConfig, project_id: str, payload: str, story_id: int | None = None) -> None:
@@ -1028,7 +1495,8 @@ def launch_project_run(
             f"{shlex.quote(sys.executable)} -m autopilot run "
             f"{shlex.quote(str(project['path']))} "
             f"--project-id {shlex.quote(project_id)} "
-            f"--prd {shlex.quote(project.get('prd', '.agents/tasks/prd.json'))}"
+            f"--prd {shlex.quote(project.get('prd', '.agents/tasks/prd.json'))} "
+            "--headless"
         )
         process = subprocess.Popen(
             ["/bin/sh", "-lc", run_cmd],
@@ -1120,6 +1588,43 @@ def pause_project_run(config: AutopilotConfig, project_id: str) -> str:
         story_id=state.get("current_story_id"),
     )
     return "Project paused."
+
+
+def auto_pause_project_run(
+    config: AutopilotConfig,
+    project_id: str,
+    *,
+    message: str,
+    story_id: int | None = None,
+    extra: dict[str, Any] | None = None,
+) -> str:
+    """Pause a project from inside the runtime without sending signals to the current process."""
+    state = load_project_state(config, project_id)
+    if not state:
+        raise KeyError(project_id)
+
+    state.update(
+        {
+            "pid": None,
+            "status": "paused",
+            "paused": True,
+            "active_worker": None,
+            "active_critic": None,
+            "parallel_story_ids": [],
+            "last_error": message,
+        }
+    )
+    save_project_state(config, project_id, state)
+    emit_project_event(
+        config,
+        project_id,
+        event="budget_paused",
+        status="paused",
+        message=message,
+        story_id=story_id,
+        extra=extra,
+    )
+    return message
 
 
 def resume_project_run(config: AutopilotConfig, project_id: str) -> tuple[bool, Path | None, str]:

@@ -2,9 +2,9 @@
 
 import { useState, useRef, useEffect } from "react";
 import { Button } from "@/components/ui/button";
-import { API_BASE, sendIntakeMessage } from "@/lib/api";
+import { API_BASE, generatePrdFromIntakeSession, sendIntakeMessage } from "@/lib/api";
 import { cn } from "@/lib/utils";
-import type { IntakeMessage, PRD } from "@/lib/types";
+import type { IntakeMessage, PRD, SpecBootstrap } from "@/lib/types";
 
 interface IntakeChatProps {
   onPRDReady?: (prd: PRD) => void;
@@ -15,6 +15,8 @@ export function IntakeChat({ onPRDReady }: IntakeChatProps) {
   const [input, setInput] = useState("");
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [bootstrap, setBootstrap] = useState<SpecBootstrap | null>(null);
+  const [canGeneratePrd, setCanGeneratePrd] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -39,6 +41,8 @@ export function IntakeChat({ onPRDReady }: IntakeChatProps) {
     try {
       const data = await sendIntakeMessage(text, sessionId);
       setSessionId(data.session_id);
+      setBootstrap(data.spec_bootstrap);
+      setCanGeneratePrd(data.can_generate_prd);
       if (data.response?.trim()) {
         setMessages((prev) => [...prev, { role: "assistant", content: data.response }]);
       }
@@ -63,6 +67,31 @@ export function IntakeChat({ onPRDReady }: IntakeChatProps) {
     }
   };
 
+  const generatePrd = async () => {
+    if (!sessionId || loading) return;
+
+    setLoading(true);
+    try {
+      const data = await generatePrdFromIntakeSession(sessionId);
+      onPRDReady?.(data.prd);
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: "assistant",
+          content: "Generated a PRD from the current interview bootstrap.",
+        },
+      ]);
+    } catch (error) {
+      const message =
+        error instanceof Error && error.message.trim()
+          ? error.message
+          : "Failed to generate a PRD from the current interview.";
+      setMessages((prev) => [...prev, { role: "assistant", content: message }]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
@@ -71,7 +100,48 @@ export function IntakeChat({ onPRDReady }: IntakeChatProps) {
   };
 
   return (
-    <div className="flex flex-col h-[560px] rounded-[8px] bg-white overflow-hidden shadow-[0_1px_3px_rgba(15,15,15,0.08),0_0_1px_rgba(15,15,15,0.04)]">
+    <div className="space-y-4">
+      {bootstrap && (
+        <div className="rounded-[8px] bg-white overflow-hidden shadow-[0_1px_3px_rgba(15,15,15,0.08),0_0_1px_rgba(15,15,15,0.04)]">
+          <div className="border-b border-[#e3e2e0] px-5 py-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <p className="text-[12px] font-semibold uppercase tracking-[0.08em] text-[#9b9a97]">
+                  Interview Bootstrap
+                </p>
+                <p className="mt-1 text-[15px] font-semibold text-[#37352f]">{bootstrap.title}</p>
+              </div>
+              <Button
+                size="sm"
+                onClick={generatePrd}
+                disabled={!sessionId || !canGeneratePrd || loading}
+                className="rounded-[8px] bg-[#37352f] text-white hover:bg-[#4a4a45]"
+              >
+                Generate PRD
+              </Button>
+            </div>
+            <p className="mt-2 text-[13px] leading-relaxed text-[#6b6b6b]">{bootstrap.summary}</p>
+          </div>
+          <div className="grid gap-4 px-5 py-4 md:grid-cols-2">
+            <div className="rounded-[8px] border border-[#e3e2e0] bg-[#fbfbf9] p-3">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#9b9a97]">Open Questions</p>
+              <div className="mt-2 space-y-1.5 text-[13px] text-[#37352f]">
+                {(bootstrap.open_questions.length ? bootstrap.open_questions : ["Interview has enough detail to generate a first PRD."]).map((question) => (
+                  <p key={question}>• {question}</p>
+                ))}
+              </div>
+            </div>
+            <div className="rounded-[8px] border border-[#e3e2e0] bg-[#fbfbf9] p-3">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#9b9a97]">Spec Preview</p>
+              <pre className="mt-2 whitespace-pre-wrap text-[12px] leading-[1.55] text-[#37352f]">
+                {bootstrap.rendered_spec}
+              </pre>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div className="flex flex-col h-[560px] rounded-[8px] bg-white overflow-hidden shadow-[0_1px_3px_rgba(15,15,15,0.08),0_0_1px_rgba(15,15,15,0.04)]">
       <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto">
         <div className="px-6 py-6 space-y-4">
           {messages.length === 0 && (
@@ -163,6 +233,7 @@ export function IntakeChat({ onPRDReady }: IntakeChatProps) {
           </Button>
         </div>
       </div>
+    </div>
     </div>
   );
 }

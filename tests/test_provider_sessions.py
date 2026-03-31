@@ -32,6 +32,18 @@ class TestProviderSessions:
         assert name == "acc1"
         assert (profiles_dir / "claude" / "acc1" / "home" / ".claude" / "settings.json").exists()
 
+    def test_import_current_gemini_session(self, tmp_path: Path) -> None:
+        home = tmp_path / "home"
+        source = home / ".config" / "gemini"
+        source.mkdir(parents=True)
+        (source / "config.json").write_text("{}")
+
+        profiles_dir = tmp_path / "profiles"
+        name = import_current_session("gemini", profiles_dir=profiles_dir, home=home)
+
+        assert name == "acc1"
+        assert (profiles_dir / "gemini" / "acc1" / "home" / ".config" / "gemini" / "config.json").exists()
+
     def test_provider_login_command(self) -> None:
         assert provider_login_command("codex") == ["codex", "login"]
         assert provider_login_command("claude") == ["claude", "auth", "login"]

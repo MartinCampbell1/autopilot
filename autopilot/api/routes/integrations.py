@@ -1,0 +1,160 @@
+"""Integration-trigger routes for inbound tracker events."""
+
+from __future__ import annotations
+
+import re
+from typing import Any
+
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel, Field
+
+from autopilot.api.deps import get_config
+from autopilot.core.project_bootstrap import create_project_from_prd
+from autopilot.core.project_store import (
+    attach_tracker_reference,
+    build_project_detail,
+    emit_project_event,
+    find_project_by_tracker_reference,
+    get_project_entry,
+    normalize_tracker_reference,
+)
+
+router = APIRouter()
+
+
+class GitHubRepositoryRequest(BaseModel):
+    id: int | None = None
+    name: str = ""
+    full_name: str = ""
+    html_url: str = ""
+    url: str = ""
+
+
+class GitHubLabelRequest(BaseModel):
+    name: str = ""
+
+
+class GitHubIssueRequest(BaseModel):
+    id: int | None = None
+    number: int
+    title: str
+    body: str = ""
+    html_url: str = ""
+    state: str = "open"
+    labels: list[GitHubLabelRequest] = Field(default_factory=list)
+
+
+class GitHubIssueTriggerRequest(BaseModel):
+    action: str = "opened"
+    repository: GitHubRepositoryRequest
+    issue: GitHubIssueRequest
+    project_id: str | None = None
+    project_name: str | None = None
+    project_path: str | None = None
+    priority: str = "normal"
+    launch: bool = False
+
+
+def _github_issue_acceptance_criteria(body: str) -> list[str]:
+    criteria: list[str] = []
+    for line in str(body or "").splitlines():
+        match = re.match(r"^\s*[-*]\s*\[[ xX]\]\s*(.+?)\s*$", line)
+        if match:
+            criteria.append(match.group(1).strip())
+    return criteria
+
+
+def _github_issue_prd(request: GitHubIssueTriggerRequest) -> dict[str, Any]:
+    repo_name = request.repository.full_name or request.repository.name or "GitHub Issue"
+    labels = [label.name for label in request.issue.labels if label.name]
+    body = request.issue.body.strip()
+    return {
+        "title": request.project_name or f"{repo_name} #{request.issue.number}",
+        "description": body or request.issue.title,
+        "stories": [
+            {
+                "id": 1,
+                "title": request.issue.title,
+                "description": body or request.issue.title,
+                "acceptance_criteria": _github_issue_acceptance_criteria(body),
+                "tags": labels,
+            }
+        ],
+    }
+
+
+@router.post("/github/issues")
+async def ingest_github_issue_trigger(request: GitHubIssueTriggerRequest) -> dict[str, Any]:
+    config = get_config()
+    tracker_ref = normalize_tracker_reference(
+        provider="github",
+        kind="issue",
+        external_id=str(request.issue.id or request.issue.number),
+        title=request.issue.title,
+        url=request.issue.html_url,
+        event=request.action,
+        repository=request.repository.model_dump(),
+        metadata={
+            "number": request.issue.number,
+            "state": request.issue.state,
+            "labels": [label.name for label in request.issue.labels if label.name],
+        },
+    )
+
+    project = (
+        get_project_entry(config, project_id=request.project_id, include_archived=True)
+        if request.project_id
+        else find_project_by_tracker_reference(config, tracker_ref)
+    )
+    created = False
+    launched = False
+    message = ""
+    log_path = ""
+
+    if request.project_id and project is None:
+        raise HTTPException(404, f"Project {request.project_id} not found")
+
+    if project is None:
+        created_project = create_project_from_prd(
+            config,
+            _github_issue_prd(request),
+            project_name=request.project_name,
+            project_path=request.project_path,
+            priority=request.priority,
+            launch=request.launch,
+        )
+        project = get_project_entry(config, project_id=created_project.project_id, include_archived=True)
+        created = True
+        launched = created_project.launched
+        message = created_project.message
+        log_path = str(created_project.log_path) if created_project.log_path else ""
+        if project is None:
+            raise HTTPException(500, "Project was created but could not be loaded")
+    else:
+        message = "Tracker trigger linked to existing project."
+
+    attach_tracker_reference(config, project["id"], tracker_ref)
+    emit_project_event(
+        config,
+        project["id"],
+        event="tracker_trigger_ingested",
+        status="running" if launched else "idle",
+        story_id=1 if created else None,
+        message=f"Linked GitHub issue #{request.issue.number}: {request.issue.title}",
+        extra={
+            "tracker_ref": tracker_ref,
+            "tracker_provider": "github",
+            "tracker_kind": "issue",
+            "tracker_event": request.action,
+        },
+    )
+
+    return {
+        "status": "ok",
+        "created": created,
+        "launched": launched,
+        "message": message,
+        "log_path": log_path,
+        "tracker_ref": tracker_ref,
+        "project": build_project_detail(config, project["id"]),
+    }

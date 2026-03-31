@@ -11,10 +11,10 @@ def worktree_path(project_path: Path, story_id: int) -> Path:
     return project_path.parent / f"{project_path.name}-story-{story_id}"
 
 
-def create_worktree(project_path: Path, story_id: int) -> Path:
+def create_worktree(project_path: Path, story_id: int, *, branch_name: str | None = None) -> Path:
     """Create a git worktree for the given story and return its path."""
     wt_path = worktree_path(project_path, story_id)
-    branch = f"story-{story_id}"
+    branch = str(branch_name or f"story-{story_id}").strip() or f"story-{story_id}"
 
     if wt_path.exists():
         remove_worktree(project_path, wt_path)

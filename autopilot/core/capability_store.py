@@ -109,6 +109,8 @@ class LaunchProfile(BaseModel):
     story_execution_mode: str = "solo"
     project_concurrency_mode: str = "sequential"
     max_parallel_stories: int = 1
+    story_pipeline: list[str] = Field(default_factory=list)
+    review_phases: list[str] = Field(default_factory=list)
 
 
 class LaunchPreset(BaseModel):
@@ -145,6 +147,46 @@ class TeamMemberAssignment(BaseModel):
     planned_connectors: list[str] = Field(default_factory=list)
     active_connectors: list[ConnectorActivation] = Field(default_factory=list)
     specialist: bool = False
+    pipeline_stage: str = "implement"
+    pipeline_order: int = 2
+
+
+PIPELINE_STAGE_ORDER: tuple[str, ...] = ("research", "implement", "review")
+PIPELINE_STAGE_ALIASES: dict[str, str] = {
+    "research": "research",
+    "discovery": "research",
+    "discover": "research",
+    "plan": "research",
+    "planning": "research",
+    "implement": "implement",
+    "implementation": "implement",
+    "build": "implement",
+    "execute": "implement",
+    "review": "review",
+    "critic": "review",
+    "qa": "review",
+    "test": "review",
+}
+DEFAULT_STORY_PIPELINES: dict[str, list[str]] = {
+    "solo": ["implement", "review"],
+    "team": ["research", "implement", "review"],
+}
+REVIEW_PHASE_ORDER: tuple[str, ...] = ("security", "architecture", "tests")
+REVIEW_PHASE_ALIASES: dict[str, str] = {
+    "security": "security",
+    "sec": "security",
+    "architecture": "architecture",
+    "arch": "architecture",
+    "design": "architecture",
+    "tests": "tests",
+    "test": "tests",
+    "qa": "tests",
+    "verification": "tests",
+}
+DEFAULT_REVIEW_PHASES: dict[str, list[str]] = {
+    "solo": [],
+    "team": ["security", "architecture", "tests"],
+}
 
 
 DEFAULT_CONNECTOR_TYPES: list[ConnectorTypeSchema] = [
@@ -601,6 +643,8 @@ DEFAULT_LAUNCH_PRESETS: list[LaunchPreset] = [
             story_execution_mode="solo",
             project_concurrency_mode="sequential",
             max_parallel_stories=1,
+            story_pipeline=["implement", "review"],
+            review_phases=[],
         ),
     ),
     LaunchPreset(
@@ -612,6 +656,8 @@ DEFAULT_LAUNCH_PRESETS: list[LaunchPreset] = [
             story_execution_mode="team",
             project_concurrency_mode="sequential",
             max_parallel_stories=1,
+            story_pipeline=["research", "implement", "review"],
+            review_phases=["security", "architecture", "tests"],
         ),
     ),
     LaunchPreset(
@@ -623,6 +669,8 @@ DEFAULT_LAUNCH_PRESETS: list[LaunchPreset] = [
             story_execution_mode="team",
             project_concurrency_mode="parallel",
             max_parallel_stories=3,
+            story_pipeline=["research", "implement", "review"],
+            review_phases=["security", "architecture", "tests"],
         ),
     ),
 ]
@@ -800,11 +848,88 @@ def normalize_launch_profile(profile: dict | LaunchProfile | None = None) -> Lau
             resolved.max_parallel_stories = max(1, int(raw["max_parallel_stories"]))
         except (TypeError, ValueError):
             resolved.max_parallel_stories = preset_match.launch_profile.max_parallel_stories
+    resolved.story_pipeline = normalize_story_pipeline(
+        raw.get("story_pipeline"),
+        default=resolved.story_pipeline,
+        story_execution_mode=resolved.story_execution_mode,
+    )
+    resolved.review_phases = normalize_review_phases(
+        raw.get("review_phases"),
+        default=resolved.review_phases,
+        story_execution_mode=resolved.story_execution_mode,
+    )
 
     resolved.preset = preset_match.id
     if resolved.project_concurrency_mode != "parallel":
         resolved.max_parallel_stories = 1
     return resolved
+
+
+def normalize_story_pipeline(
+    pipeline: object,
+    *,
+    default: list[str] | None = None,
+    story_execution_mode: str = "solo",
+) -> list[str]:
+    if isinstance(pipeline, str):
+        raw_items = [item.strip() for item in pipeline.split(",") if item.strip()]
+    elif isinstance(pipeline, list):
+        raw_items = [str(item).strip() for item in pipeline if str(item).strip()]
+    else:
+        raw_items = []
+
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for raw_item in raw_items:
+        stage = PIPELINE_STAGE_ALIASES.get(raw_item.lower())
+        if not stage or stage in seen:
+            continue
+        normalized.append(stage)
+        seen.add(stage)
+
+    if not normalized:
+        for stage in default or DEFAULT_STORY_PIPELINES.get(story_execution_mode, DEFAULT_STORY_PIPELINES["solo"]):
+            if stage not in seen:
+                normalized.append(stage)
+                seen.add(stage)
+
+    for required_stage in ("implement", "review"):
+        if required_stage not in seen:
+            normalized.append(required_stage)
+            seen.add(required_stage)
+
+    return [stage for stage in PIPELINE_STAGE_ORDER if stage in seen]
+
+
+def normalize_review_phases(
+    phases: object,
+    *,
+    default: list[str] | None = None,
+    story_execution_mode: str = "solo",
+) -> list[str]:
+    if isinstance(phases, str):
+        raw_items = [item.strip() for item in phases.split(",") if item.strip()]
+    elif isinstance(phases, list):
+        raw_items = [str(item).strip() for item in phases if str(item).strip()]
+    else:
+        raw_items = []
+
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for raw_item in raw_items:
+        phase = REVIEW_PHASE_ALIASES.get(raw_item.lower())
+        if not phase or phase in seen:
+            continue
+        normalized.append(phase)
+        seen.add(phase)
+
+    if not normalized:
+        for phase in default or DEFAULT_REVIEW_PHASES.get(story_execution_mode, DEFAULT_REVIEW_PHASES["solo"]):
+            if phase not in seen:
+                normalized.append(phase)
+                seen.add(phase)
+
+    return [phase for phase in REVIEW_PHASE_ORDER if phase in seen]
 
 
 def validate_connector_config(connector: MCPConnector) -> ConnectorValidationResult:
@@ -1194,6 +1319,16 @@ def resolve_story_runtime_plan(
         routing_policies=policies,
     )
     profile = normalize_launch_profile(launch_profile)
+    story_pipeline = normalize_story_pipeline(
+        story.get("pipeline") or story.get("story_pipeline"),
+        default=profile.story_pipeline,
+        story_execution_mode=profile.story_execution_mode,
+    )
+    review_phases = normalize_review_phases(
+        story.get("review_phases"),
+        default=profile.review_phases,
+        story_execution_mode=profile.story_execution_mode,
+    )
     role_id = str(normalized_story.get("role") or "backend_worker")
     policy = _policy_for_role(role_id, policies)
     explicit_connector_override = bool(story.get("connectors"))
@@ -1236,6 +1371,8 @@ def resolve_story_runtime_plan(
             skill_packs=selected_skill_packs,
             planned_connectors=planned_connectors,
             active_connectors=primary_activations,
+            pipeline_stage="implement",
+            pipeline_order=PIPELINE_STAGE_ORDER.index("implement") + 1,
         ),
         TeamMemberAssignment(
             member_id="critic",
@@ -1264,11 +1401,13 @@ def resolve_story_runtime_plan(
                 provider=provider,
                 available_connectors=available_connectors,
             )[0],
+            pipeline_stage="review",
+            pipeline_order=PIPELINE_STAGE_ORDER.index("review") + 1,
         ),
     ]
 
     specialist = _specialist_blueprint(normalized_story.get("tags", []))
-    if profile.story_execution_mode == "team" and specialist:
+    if "research" in story_pipeline and specialist:
         specialist_connectors = list(dict.fromkeys(specialist["connectors"]))  # type: ignore[index]
         team_members.append(
             TeamMemberAssignment(
@@ -1285,14 +1424,21 @@ def resolve_story_runtime_plan(
                     available_connectors=available_connectors,
                 )[0],
                 specialist=True,
+                pipeline_stage="research",
+                pipeline_order=PIPELINE_STAGE_ORDER.index("research") + 1,
             )
         )
+
+    team_members.sort(key=lambda member: (member.pipeline_order, member.label.lower()))
+    resolved_team_mode = "team" if any(member.pipeline_stage == "research" for member in team_members) else profile.story_execution_mode
 
     return {
         "story": normalized_story,
         "launch_profile": profile.model_dump(),
-        "team_mode": profile.story_execution_mode,
+        "team_mode": resolved_team_mode,
         "team_members": [member.model_dump() for member in team_members],
+        "story_pipeline": story_pipeline,
+        "review_phases": review_phases,
         "planned_connectors": planned_connectors,
         "active_connectors": [activation.model_dump() for activation in primary_activations],
         "activation_errors": activation_errors,

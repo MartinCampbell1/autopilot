@@ -1,6 +1,7 @@
 """Tests for loop runner."""
 
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from autopilot.core.loop_runner import (
@@ -10,11 +11,15 @@ from autopilot.core.loop_runner import (
     check_ralph_installed,
     get_last_commit_diff,
     init_ralph_project,
+    read_quality_ratchet,
     read_progress,
     run_ralph_iteration,
     run_retry_iteration,
+    summarize_quality_regressions,
+    update_quality_ratchet,
     write_critic_feedback,
 )
+from autopilot.core.models import GateResult
 
 
 class TestLoopRunner:
@@ -69,6 +74,36 @@ class TestLoopRunner:
         write_critic_feedback(tmp_path, "- callback URL hardcoded\n- no tests")
         content = (ralph_dir / "critic-feedback.md").read_text()
         assert "callback URL" in content
+
+    def test_quality_ratchet_persists_previous_green_gates(self, tmp_path: Path) -> None:
+        update_quality_ratchet(
+            tmp_path,
+            [GateResult(name="pytest", cmd="pytest", passed=True, output="ok", required=True)],
+        )
+        update_quality_ratchet(
+            tmp_path,
+            [GateResult(name="pytest", cmd="pytest", passed=False, output="1 failed", required=True)],
+        )
+
+        ratchet = read_quality_ratchet(tmp_path)
+        assert ratchet["pytest"] is True
+
+    def test_summarize_quality_regressions(self) -> None:
+        summary = summarize_quality_regressions(
+            [
+                GateResult(
+                    name="pytest",
+                    cmd="pytest",
+                    passed=False,
+                    output="1 failed",
+                    required=True,
+                    baseline_passed=True,
+                    regression=True,
+                )
+            ]
+        )
+
+        assert "pytest regressed" in summary
 
     def test_read_progress_missing(self, tmp_path: Path) -> None:
         result = read_progress(tmp_path)
@@ -149,9 +184,15 @@ class TestLoopRunner:
         assert "OAuth callback validation" in prompt
         assert ".ralph/critic-feedback.md" in prompt
 
-    @patch("autopilot.core.loop_runner.subprocess.run")
-    def test_run_retry_iteration_success(self, mock_run: MagicMock, tmp_path: Path) -> None:
-        mock_run.return_value = MagicMock(returncode=0, stdout="fixed", stderr="")
+    @patch("autopilot.core.loop_runner.get_adapter")
+    def test_run_retry_iteration_success(self, mock_get_adapter: MagicMock, tmp_path: Path) -> None:
+        mock_adapter = MagicMock()
+        mock_adapter.provider_family = "codex"
+        mock_adapter.adapter_id = "codex_local"
+        mock_adapter.execute.return_value = SimpleNamespace(success=True, output="fixed", rate_limited=False)
+        mock_adapter.parse_output.return_value = SimpleNamespace(text="fixed", rate_limited=False)
+        mock_get_adapter.return_value = mock_adapter
+
         success, output, rate_limited = run_retry_iteration(
             tmp_path,
             {"PATH": "/usr/bin"},
@@ -163,5 +204,7 @@ class TestLoopRunner:
         assert success is True
         assert output == "fixed"
         assert rate_limited is False
-        called_cmd = mock_run.call_args.args[0]
-        assert called_cmd[:3] == ["codex", "exec", "--full-auto"]
+        request = mock_adapter.execute.call_args.args[0]
+        assert request.profile.provider == "codex"
+        assert "story #1" in request.prompt
+        assert "Create README and notes" in request.prompt

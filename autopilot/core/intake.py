@@ -16,6 +16,7 @@ class IntakeSession:
     session_id: str
     messages: list[dict] = field(default_factory=list)
     prd: dict | None = None
+    spec_bootstrap: dict | None = None
     project_name: str = ""
 
     def add_user_message(self, text: str) -> None:
@@ -53,6 +54,7 @@ After you have enough information, generate a PRD in this JSON format:
       "title": "Small concrete task",
       "description": "What exactly to build",
       "acceptance_criteria": ["Concrete verification item"],
+      "blocked_by": [],
       "tags": ["backend", "api"],
       "role": "backend_worker",
       "skill_packs": ["fastapi-backend"],
@@ -84,6 +86,7 @@ Rules:
 - Prefer more smaller stories over fewer broad stories.
 - Each story must be narrow enough for one focused worker iteration and one clear review.
 - Group stories into phases with explicit goals.
+- Use `blocked_by` only for real prerequisites. Keep dependencies acyclic and reference earlier story ids.
 - Add execution metadata for each story:
   - tags
   - role
@@ -105,6 +108,7 @@ Rules:
       "title": "Concrete implementation task",
       "description": "Exactly what to build",
       "acceptance_criteria": ["Concrete verification item"],
+      "blocked_by": [],
       "tags": ["backend", "api"],
       "role": "backend_worker",
       "skill_packs": ["fastapi-backend"],
@@ -126,11 +130,13 @@ Rules:
 - Expand broad stories into smaller, concrete stories.
 - Each story must be scoped for one focused worker implementation + one critic review.
 - Maintain explicit phases with goals.
+- Preserve or introduce `blocked_by` only where stories have strict prerequisites. Keep the graph acyclic.
 - Use the target complexity and story range below as hard guidance.
 - Include execution metadata for every story:
   - phase_id
   - phase_title
   - acceptance_criteria
+  - blocked_by
   - tags
   - role
   - skill_packs
@@ -144,6 +150,31 @@ COMPLEXITY_RANGES: dict[str, tuple[int, int]] = {
     "high": (18, 35),
     "very_high": (30, 60),
 }
+STACK_KEYWORDS: dict[str, tuple[str, ...]] = {
+    "Python": ("python", "fastapi", "django", "flask", "uvicorn"),
+    "TypeScript": ("typescript", "ts ", "tsx", "next.js", "nextjs"),
+    "React": ("react", "next.js", "nextjs"),
+    "Postgres": ("postgres", "postgresql"),
+    "Redis": ("redis",),
+    "Docker": ("docker", "container"),
+    "GitHub": ("github", "pull request", "pr "),
+    "Slack": ("slack",),
+}
+INTEGRATION_KEYWORDS: tuple[str, ...] = (
+    "github",
+    "slack",
+    "telegram",
+    "discord",
+    "stripe",
+    "postgres",
+    "redis",
+    "linear",
+    "jira",
+    "s3",
+    "oauth",
+    "webhook",
+    "api",
+)
 
 COMPLEXITY_SIGNALS: dict[str, tuple[str, ...]] = {
     "medium": ("dashboard", "auth", "payment", "integration", "postgres", "queue", "telegram", "worker"),
@@ -537,6 +568,159 @@ def _estimate_complexity(text: str) -> str:
     return "low"
 
 
+def _user_messages(session: IntakeSession) -> list[str]:
+    return [
+        str(message.get("content") or "").strip()
+        for message in session.messages
+        if message.get("role") == "user" and str(message.get("content") or "").strip()
+    ]
+
+
+def _derive_bootstrap_title(text: str) -> str:
+    cleaned = re.sub(r"(?i)\b(i want to build|build|create|make|need)\b", "", text).strip(" .:-")
+    cleaned = re.sub(r"\s+", " ", cleaned)
+    title = cleaned[:80].strip() or "New Project"
+    return title[:1].upper() + title[1:]
+
+
+def _candidate_points(text: str) -> list[str]:
+    points: list[str] = []
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        bullet_match = re.match(r"^\s*[-*+]\s*(.+)$", line)
+        if bullet_match:
+            candidate = _strip_markdown(bullet_match.group(1))
+            if candidate:
+                points.append(candidate)
+            continue
+        sentence_parts = re.split(r"(?<=[.!?])\s+", line)
+        for part in sentence_parts:
+            candidate = _strip_markdown(part)
+            if candidate:
+                points.append(candidate)
+    deduped: list[str] = []
+    for point in points:
+        if point not in deduped:
+            deduped.append(point)
+    return deduped
+
+
+def _extract_constraints(points: list[str]) -> list[str]:
+    keywords = ("must", "should", "need to", "cannot", "can't", "existing", "reuse", "without", "only")
+    return [point for point in points if any(keyword in point.lower() for keyword in keywords)][:6]
+
+
+def _extract_deliverables(points: list[str]) -> list[str]:
+    keywords = ("build", "create", "add", "support", "ship", "implement", "include", "expose")
+    deliverables = [point for point in points if any(keyword in point.lower() for keyword in keywords)]
+    return deliverables[:6] or points[:4]
+
+
+def _detect_stack(text: str) -> list[str]:
+    lowered = text.lower()
+    matches = [
+        label
+        for label, keywords in STACK_KEYWORDS.items()
+        if any(keyword in lowered for keyword in keywords)
+    ]
+    return matches[:6]
+
+
+def _detect_integrations(text: str) -> list[str]:
+    lowered = text.lower()
+    matches = [keyword.title() for keyword in INTEGRATION_KEYWORDS if keyword in lowered]
+    return matches[:6]
+
+
+def _detect_context(text: str) -> list[str]:
+    lowered = text.lower()
+    context: list[str] = []
+    if any(keyword in lowered for keyword in ("existing repo", "existing codebase", "in this repo", "inside this repo")):
+        context.append("Existing repository")
+    if any(keyword in lowered for keyword in ("greenfield", "from scratch", "new repo", "new project")):
+        context.append("Greenfield build")
+    if any(keyword in lowered for keyword in ("dashboard", "ui", "frontend", "browser")):
+        context.append("Browser/UI surface")
+    if any(keyword in lowered for keyword in ("api", "backend", "service")):
+        context.append("Backend/API surface")
+    if any(keyword in lowered for keyword in ("deploy", "production", "cloud", "docker")):
+        context.append("Deployment/ops requirements")
+    return context[:6]
+
+
+def _bootstrap_open_questions(
+    *,
+    stack: list[str],
+    context: list[str],
+    integrations: list[str],
+    constraints: list[str],
+) -> list[str]:
+    questions: list[str] = []
+    if not stack:
+        questions.append("What stack or primary framework should the project use?")
+    if not context:
+        questions.append("Is this for an existing repo or a greenfield project?")
+    if not integrations:
+        questions.append("Which external systems or APIs must this connect to?")
+    if not constraints:
+        questions.append("What constraints, deadlines, or non-negotiable requirements must the plan preserve?")
+    return questions[:4]
+
+
+def render_spec_bootstrap(spec: dict) -> str:
+    sections: list[str] = [f"# {spec['title']}", "", spec["summary"]]
+
+    def append_section(title: str, items: list[str]) -> None:
+        if not items:
+            return
+        sections.extend(["", f"## {title}"])
+        sections.extend([f"- {item}" for item in items])
+
+    append_section("Goals", list(spec.get("goals") or []))
+    append_section("Tech Stack", list(spec.get("tech_stack") or []))
+    append_section("Execution Context", list(spec.get("execution_context") or []))
+    append_section("Integrations", list(spec.get("integrations") or []))
+    append_section("Constraints", list(spec.get("constraints") or []))
+    append_section("Deliverables", list(spec.get("deliverables") or []))
+    append_section("Open Questions", list(spec.get("open_questions") or []))
+    return "\n".join(sections).strip()
+
+
+def build_spec_bootstrap(session: IntakeSession) -> dict | None:
+    user_messages = _user_messages(session)
+    if not user_messages:
+        return None
+
+    combined = "\n".join(user_messages).strip()
+    points = _candidate_points(combined)
+    stack = _detect_stack(combined)
+    integrations = _detect_integrations(combined)
+    context = _detect_context(combined)
+    constraints = _extract_constraints(points)
+    deliverables = _extract_deliverables(points)
+    summary = " ".join(points[:3]).strip() or combined[:240].strip()
+    spec = {
+        "title": session.project_name or _derive_bootstrap_title(user_messages[0]),
+        "summary": summary[:500],
+        "goals": deliverables[:4],
+        "tech_stack": stack,
+        "execution_context": context,
+        "integrations": integrations,
+        "constraints": constraints,
+        "deliverables": deliverables,
+        "open_questions": _bootstrap_open_questions(
+            stack=stack,
+            context=context,
+            integrations=integrations,
+            constraints=constraints,
+        ),
+    }
+    spec["rendered_spec"] = render_spec_bootstrap(spec)
+    return spec
+
+
 def _plan_needs_expansion(prd: dict, source_text: str) -> tuple[bool, str]:
     complexity = _estimate_complexity(source_text)
     if complexity == "low":
@@ -621,6 +805,7 @@ def run_intake_turn(
     response = _run_provider_prompt(conversation, provider, env, workdir, timeout_sec=timeout_sec)
 
     session.add_agent_message(response)
+    session.spec_bootstrap = build_spec_bootstrap(session)
 
     try:
         prd = json.loads(_extract_json_blob(response))
@@ -638,6 +823,34 @@ def run_intake_turn(
         pass
 
     return response
+
+
+def generate_prd_from_session_bootstrap(
+    session: IntakeSession,
+    *,
+    provider: str,
+    env: dict[str, str],
+    workdir: str = "/tmp",
+    planning_context: str = "",
+    timeout_sec: int = 600,
+) -> dict:
+    """Generate a PRD from the current guided-interview bootstrap state."""
+
+    bootstrap = session.spec_bootstrap or build_spec_bootstrap(session)
+    if not bootstrap:
+        raise ValueError("Interview session does not have enough information to build a spec yet.")
+
+    prd = generate_prd_from_spec(
+        bootstrap["rendered_spec"],
+        provider=provider,
+        env=env,
+        workdir=workdir,
+        planning_context=planning_context,
+        timeout_sec=timeout_sec,
+    )
+    session.prd = prd
+    session.spec_bootstrap = bootstrap
+    return prd
 
 
 def generate_prd_from_spec(
@@ -698,3 +911,12 @@ def save_prd(prd: dict, project_path: Path) -> Path:
     prd_path = tasks_dir / f"prd-{slug}.json"
     prd_path.write_text(json.dumps(prd, indent=2, ensure_ascii=False))
     return prd_path
+
+
+def save_spec_bootstrap(spec_bootstrap: dict, project_path: Path) -> Path:
+    """Save a rendered bootstrap spec next to the PRD."""
+    tasks_dir = project_path / ".agents" / "tasks"
+    tasks_dir.mkdir(parents=True, exist_ok=True)
+    spec_path = tasks_dir / "spec-bootstrap.md"
+    spec_path.write_text(str(spec_bootstrap.get("rendered_spec") or "").strip() + "\n")
+    return spec_path
