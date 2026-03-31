@@ -8,15 +8,22 @@ import time
 from pathlib import Path
 
 from autopilot.core.adapters import get_adapter, list_provider_families
+from autopilot.core.config import AutopilotConfig
 from autopilot.core.models import Profile
 
 
 class AccountManager:
     """Manage CLI profiles across providers with round-robin rotation."""
 
-    def __init__(self, profiles_dir: Path, cooldown_base: int = 300):
+    def __init__(
+        self,
+        profiles_dir: Path,
+        cooldown_base: int = 300,
+        config: AutopilotConfig | None = None,
+    ):
         self.profiles_dir = profiles_dir
         self.cooldown_base = cooldown_base
+        self.config = config
         self.pools: dict[str, list[Profile]] = {}
         self._indexes: dict[str, int] = {}
 
@@ -25,32 +32,65 @@ class AccountManager:
         self.pools.clear()
         self._indexes.clear()
 
-        for provider in list_provider_families():
+        for provider in self._configured_provider_families():
             adapter = get_adapter(provider)
             provider_dir = self.profiles_dir / provider
-            if not provider_dir.exists():
-                continue
 
             profiles: list[Profile] = []
-            for account_dir in sorted(provider_dir.iterdir()):
-                if not account_dir.is_dir() or not account_dir.name.startswith("acc"):
-                    continue
+            if provider_dir.exists():
+                for account_dir in sorted(provider_dir.iterdir()):
+                    if not account_dir.is_dir() or not account_dir.name.startswith("acc"):
+                        continue
 
-                if not adapter.profile_is_valid(account_dir):
-                    continue
+                    if not adapter.profile_is_valid(account_dir):
+                        continue
 
-                profiles.append(
-                    Profile(
-                        name=account_dir.name,
-                        provider=provider,
-                        adapter_id=adapter.adapter_id,
-                        path=str(account_dir),
+                    profiles.append(
+                        Profile(
+                            name=account_dir.name,
+                            provider=provider,
+                            adapter_id=adapter.adapter_id,
+                            path=str(account_dir),
+                        )
                     )
-                )
+
+            profiles.extend(self._stateless_profiles(provider))
 
             if profiles:
                 self.pools[provider] = profiles
                 self._indexes[provider] = 0
+
+    def _configured_provider_families(self) -> list[str]:
+        if self.config is None:
+            return list_provider_families()
+        families = self.config.configured_provider_families()
+        return families or list_provider_families()
+
+    def _stateless_profiles(self, provider: str) -> list[Profile]:
+        adapter = get_adapter(provider)
+        if adapter.requires_managed_profile:
+            return []
+
+        provider_configs = self.config.provider_configs_for_family(provider) if self.config is not None else []
+        if not provider_configs and self.config is not None and provider in set(self.config.providers_order):
+            provider_configs = [self.config.default_provider_config(provider)]
+        if not provider_configs:
+            return []
+
+        base_dir = (
+            (self.config.autopilot_home if self.config is not None else self.profiles_dir.parent) / "providers"
+        )
+        profiles: list[Profile] = []
+        for provider_config in provider_configs:
+            profiles.append(
+                Profile(
+                    name=provider_config.id,
+                    provider=provider,
+                    adapter_id=adapter.adapter_id,
+                    path=str(base_dir / provider_config.id),
+                )
+            )
+        return profiles
 
     def get_next(self, provider: str) -> Profile | None:
         """Get the next available profile using round-robin."""

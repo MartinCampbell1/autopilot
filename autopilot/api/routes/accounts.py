@@ -59,7 +59,10 @@ async def open_provider_login(provider: str) -> dict[str, str]:
     if not is_valid_provider(provider):
         raise HTTPException(404, f"Unknown provider: {provider}")
 
-    command = open_login_terminal(provider)
+    try:
+        command = open_login_terminal(provider)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
     return {
         "status": "ok",
         "provider": provider,

@@ -18,11 +18,11 @@ console = Console()
 def status() -> None:
     """Show status of configured accounts and projects."""
     config = load_config(Path.home() / ".autopilot" / "config.yaml")
-    account_mgr = AccountManager(profiles_dir=config.profiles_dir)
+    account_mgr = AccountManager(profiles_dir=config.profiles_dir, config=config)
     account_mgr.discover()
 
     console.print(Panel("[bold]Account Status[/bold]"))
-    for provider in ("codex", "claude", "gemini"):
+    for provider in account_mgr.pools:
         profiles = account_mgr.pools.get(provider, [])
         if not profiles:
             continue

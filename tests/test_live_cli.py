@@ -18,9 +18,10 @@ from autopilot.core.project_store import (
 
 
 class _FakeAccountManager:
-    def __init__(self, profiles_dir, cooldown_base=300):
+    def __init__(self, profiles_dir, cooldown_base=300, config=None):
         self.profiles_dir = profiles_dir
         self.cooldown_base = cooldown_base
+        self.config = config
 
     def discover(self) -> None:
         return None

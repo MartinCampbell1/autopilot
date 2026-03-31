@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 from autopilot.core.account_manager import AccountManager
+from autopilot.core.config import AutopilotConfig, ProviderConfig
 
 
 class TestAccountManager:
@@ -111,3 +112,44 @@ class TestAccountManager:
         assert name == "acc1"
         assert (profiles_dir / "codex" / "acc1" / "auth.json").exists()
         assert (profiles_dir / "codex" / "acc1" / "config.toml").exists()
+
+    def test_discover_stateless_provider_from_explicit_config(self, tmp_path: Path) -> None:
+        profiles_dir = tmp_path / "profiles"
+        config = AutopilotConfig(
+            autopilot_home_override=str(tmp_path / ".autopilot"),
+            providers=[
+                ProviderConfig(
+                    id="ollama-local",
+                    family="ollama",
+                    mode="local",
+                    transport="command",
+                    command=["ollama"],
+                    auth_strategy="none",
+                    capabilities=["exec", "review"],
+                )
+            ],
+        )
+
+        manager = AccountManager(profiles_dir=profiles_dir, config=config)
+        manager.discover()
+        profile = manager.get_next("ollama")
+
+        assert "ollama" in manager.pools
+        assert profile is not None
+        assert profile.name == "ollama-local"
+        assert profile.adapter_id == "ollama_local"
+
+    def test_discover_stateless_provider_from_providers_order(self, tmp_path: Path) -> None:
+        profiles_dir = tmp_path / "profiles"
+        config = AutopilotConfig(
+            autopilot_home_override=str(tmp_path / ".autopilot"),
+            providers_order=["ollama"],
+        )
+
+        manager = AccountManager(profiles_dir=profiles_dir, config=config)
+        manager.discover()
+        profile = manager.get_next("ollama")
+
+        assert "ollama" in manager.pools
+        assert profile is not None
+        assert profile.name == "ollama"

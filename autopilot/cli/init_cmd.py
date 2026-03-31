@@ -87,6 +87,7 @@ def init(
             account_mgr = AccountManager(
                 profiles_dir=config.profiles_dir,
                 cooldown_base=config.cooldown_base_sec,
+                config=config,
             )
             account_mgr.discover()
             profile = account_mgr.get_next("codex")
