@@ -120,6 +120,11 @@ Autopilot now exposes one user-facing tools layer over the local connector regis
 
 Current documented extension examples live in [docs/extensions.md](/Users/martin/Desktop/autopilot/docs/extensions.md).
 
+Custom tracker and notifier registrations now have a config-driven path:
+
+- add `trackers:` entries in `config.yaml` to register an inbound tracker contract and ingest items through `/api/integrations/tracker-items`
+- add `notifications:` entries in `config.yaml` to register real notifier channels that also appear in the extension registry with readiness and target metadata
+
 ## Official Verification Baseline
 
 ```bash

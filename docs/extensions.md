@@ -39,6 +39,8 @@ The shared lifecycle is:
 
 Today the provider and tool paths are the most mature public extension surfaces. Tracker and notifier slots are already visible in the registry and ship with built-in entries, but broader external packaging is still a later slice.
 
+Tracker and notifier registrations now also have a config-driven path, so external teams can register them without editing core orchestration code.
+
 ## Example 1: add an HTTP API tool
 
 Use the Settings page or write the same shape into `connectors.json`:
@@ -126,6 +128,52 @@ The provider becomes visible in:
 - `/api/capabilities/providers`
 - `/api/capabilities/extensions`
 - the Settings and Intake dashboards
+
+## Example 4: register a tracker contract
+
+Add a tracker in `config.yaml`:
+
+```yaml
+trackers:
+  - id: linear
+    display_name: Linear
+    kind: issue_tracker
+    transport: webhook
+    endpoint: https://linear.example.com/hooks/autopilot
+    auth_strategy: bearer
+    event_kinds: [issue.created, issue.updated]
+```
+
+This tracker shows up in the extension registry and can ingest external items through:
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/integrations/tracker-items \
+  -H "Content-Type: application/json" \
+  -d '{
+    "tracker_id": "linear",
+    "action": "issue.created",
+    "item_kind": "issue",
+    "item": {
+      "external_id": "ENG-42",
+      "title": "Ship notifier registry",
+      "body": "- [ ] Surface configured channels"
+    }
+  }'
+```
+
+## Example 5: register a notifier channel
+
+Add a notifier in `config.yaml`:
+
+```yaml
+notifications:
+  - name: ops-webhook
+    kind: webhook
+    events: [run_failed, story_stuck]
+    webhook_url: https://notify.example.com/autopilot
+```
+
+This channel keeps working as a real notification transport and now also appears in the extension registry with readiness and target metadata.
 
 ## What shows up at runtime
 
