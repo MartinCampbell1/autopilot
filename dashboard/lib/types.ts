@@ -40,6 +40,20 @@ export interface TaskSource {
   brief_ref: string;
 }
 
+export interface ProjectHandoffSummary {
+  story_id: number;
+  story_title: string;
+  head_branch: string;
+  number?: number | null;
+  url: string;
+  state: string;
+  ci_status: string;
+  review_status: string;
+  handoff_status: string;
+  merge_state: string;
+  updated_at?: string | null;
+}
+
 export interface LaunchPreset {
   id: string;
   label: string;
@@ -230,6 +244,7 @@ export interface ProjectSummary {
   provider_config?: ProviderConfig;
   runtime_profile?: RuntimeProfile;
   task_source?: TaskSource;
+  latest_handoff?: ProjectHandoffSummary | null;
   budget_policy?: RuntimeBudgetPolicy;
   budget_usage?: RuntimeBudgetUsage;
 }
