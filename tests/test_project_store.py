@@ -12,6 +12,7 @@ from autopilot.core.models import StoryDependencyError
 from autopilot.core.project_store import (
     auto_pause_project_run,
     build_project_detail,
+    build_project_summary,
     build_story_discovery_context,
     ensure_project_state,
     emit_project_event,
@@ -562,6 +563,38 @@ def test_build_project_detail_includes_story_ownership_and_checkout(tmp_path: Pa
     assert "budget_usage" in detail
     assert "cost_usage" in detail
     assert detail["stories"][0]["cost"]["invocations"] == 0
+
+
+def test_build_project_summary_includes_latest_handoff(tmp_path: Path) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    project_dir = tmp_path / "handoff-project"
+    project_dir.mkdir(parents=True)
+
+    project = register_project(config, name="Handoff Project", project_path=project_dir)
+    prd = normalize_prd(
+        {
+            "title": "Handoff Project",
+            "stories": [{"id": 1, "title": "Bootstrap", "description": "Start"}],
+        }
+    )
+    save_project_prd(project, prd)
+    state = ensure_project_state(config, project, seed_mode="new")
+    state["story_state"]["1"]["branch_name"] = "autopilot/handoff-project/story-1-bootstrap"
+    state["story_state"]["1"]["github_pr"] = {
+        "number": 12,
+        "url": "https://github.com/example/repo/pull/12",
+        "review_status": "approved",
+        "ci_status": "green",
+        "updated_at": "2026-03-31T12:00:00Z",
+    }
+    save_project_state(config, project["id"], state)
+
+    summary = build_project_summary(config, project)
+
+    assert summary["latest_handoff"]["story_id"] == 1
+    assert summary["latest_handoff"]["number"] == 12
+    assert summary["latest_handoff"]["handoff_status"] == "approved_and_green"
+    assert summary["latest_handoff"]["merge_state"] == "ready"
 
 
 def test_update_project_budget_policy_persists_changes(tmp_path: Path) -> None:

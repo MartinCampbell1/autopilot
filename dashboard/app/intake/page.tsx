@@ -13,7 +13,7 @@ import {
   fetchProjects,
   launchProject as launchProjectRun,
 } from "@/lib/api";
-import type { LaunchPreset, PRD, ProjectSummary, ProviderConfig, RuntimeProfile } from "@/lib/types";
+import type { LaunchPreset, PRD, ProjectSummary, ProviderConfig, RuntimeProfile, TaskSource } from "@/lib/types";
 
 const FALLBACK_PRESETS: LaunchPreset[] = [
   {
@@ -35,6 +35,24 @@ const FALLBACK_PRESETS: LaunchPreset[] = [
     launch_profile: { preset: "parallel", story_execution_mode: "team", project_concurrency_mode: "parallel", max_parallel_stories: 3 },
   },
 ];
+
+const TASK_SOURCE_OPTIONS = [
+  { id: "local_brief", label: "Local Brief" },
+  { id: "github_issue", label: "GitHub Issue" },
+  { id: "tracker_item", label: "Tracker Item" },
+  { id: "execution_brief", label: "Execution Brief" },
+] as const;
+
+function defaultBriefRefForSourceKind(sourceKind: string) {
+  if (sourceKind === "execution_brief") return ".agents/tasks/execution-brief.json";
+  if (sourceKind === "local_brief") return ".agents/tasks/prd.json";
+  return "";
+}
+
+function formatTaskSourceLabel(sourceKind: string) {
+  const match = TASK_SOURCE_OPTIONS.find((option) => option.id === sourceKind);
+  return match?.label || sourceKind || "Task Source";
+}
 
 function inferSpecialist(tags: string[] = []) {
   const set = new Set(tags);
@@ -111,6 +129,11 @@ export default function IntakePage() {
   const [runtimeProfiles, setRuntimeProfiles] = useState<RuntimeProfile[]>([]);
   const [providerConfigId, setProviderConfigId] = useState("");
   const [runtimeProfileId, setRuntimeProfileId] = useState("");
+  const [taskSourceKind, setTaskSourceKind] = useState<string>("local_brief");
+  const [taskSourceExternalId, setTaskSourceExternalId] = useState("");
+  const [taskSourceRepo, setTaskSourceRepo] = useState("");
+  const [taskSourceBranchPolicy, setTaskSourceBranchPolicy] = useState("isolated_worktree");
+  const [taskSourceBriefRef, setTaskSourceBriefRef] = useState(".agents/tasks/prd.json");
 
   const activeLaunchPreset =
     launchPresets.find((preset) => preset.id === launchPresetId) ||
@@ -144,6 +167,15 @@ export default function IntakePage() {
   }, [prd]);
 
   useEffect(() => {
+    setTaskSourceBriefRef((current) => {
+      if (current.trim() && current !== defaultBriefRefForSourceKind(taskSourceKind)) {
+        return current;
+      }
+      return defaultBriefRefForSourceKind(taskSourceKind);
+    });
+  }, [taskSourceKind]);
+
+  useEffect(() => {
     if (!providerConfigs.length) return;
     const current = providerConfigs.find((providerConfig) => providerConfig.id === providerConfigId);
     if (current) return;
@@ -174,6 +206,20 @@ export default function IntakePage() {
       activeLaunchProfile,
       selectedProviderConfig?.mode
     );
+  const resolvedTaskSourceRepo =
+    taskSourceRepo.trim() ||
+    (taskSourceKind === "local_brief" ? projectPath.trim() || projectName.trim() || prd?.title || "" : "");
+  const resolvedTaskSourceBriefRef =
+    taskSourceKind === "github_issue" || taskSourceKind === "tracker_item"
+      ? ""
+      : taskSourceBriefRef.trim() || defaultBriefRefForSourceKind(taskSourceKind);
+  const taskSourcePayload: TaskSource = {
+    source_kind: taskSourceKind,
+    external_id: taskSourceExternalId.trim(),
+    repo: resolvedTaskSourceRepo,
+    branch_policy: taskSourceBranchPolicy,
+    brief_ref: resolvedTaskSourceBriefRef,
+  };
 
   const handlePRDReady = (nextPrd: PRD) => {
     setPRD(nextPrd);
@@ -203,7 +249,8 @@ export default function IntakePage() {
       const data = await createProjectFromPrd(
         prd,
         projectName.trim() || prd.title,
-        projectPath.trim() || undefined
+        projectPath.trim() || undefined,
+        taskSourcePayload
       );
       const activePreset =
         launchPresets.find((preset) => preset.id === launchPresetId) ||
@@ -303,6 +350,122 @@ export default function IntakePage() {
                       className="h-10 w-full rounded-[8px] border border-[#e3e2e0] bg-[#fbfbf9] px-3 text-[14px] text-[#37352f] outline-none focus:border-[#37352f] focus:bg-white"
                     />
                   </label>
+                </div>
+              </div>
+
+              <div className="border-t border-[#e5e5e3] px-5 py-5">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <h4 className="text-[12px] font-semibold uppercase tracking-wider text-[#9ca3af]">
+                      Task Source
+                    </h4>
+                    <p className="mt-1 text-[13px] text-[#787774]">
+                      Define the source item Autopilot should preserve through workspace isolation and handoff.
+                    </p>
+                  </div>
+                  <span className="rounded-full bg-[#f7f7f5] px-3 py-1 text-[11px] font-semibold text-[#6b6b6b]">
+                    {formatTaskSourceLabel(taskSourceKind)}
+                  </span>
+                </div>
+
+                <div className="mt-4 grid gap-4 md:grid-cols-2">
+                  <label className="block">
+                    <span className="mb-1.5 block text-[11px] font-semibold uppercase tracking-[0.08em] text-[#9b9a97]">
+                      Source Kind
+                    </span>
+                    <select
+                      value={taskSourceKind}
+                      onChange={(event) => setTaskSourceKind(event.target.value)}
+                      className="h-10 w-full rounded-[8px] border border-[#e3e2e0] bg-white px-3 text-[14px] text-[#37352f] outline-none focus:border-[#37352f]"
+                    >
+                      {TASK_SOURCE_OPTIONS.map((option) => (
+                        <option key={option.id} value={option.id}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <label className="block">
+                    <span className="mb-1.5 block text-[11px] font-semibold uppercase tracking-[0.08em] text-[#9b9a97]">
+                      Branch Policy
+                    </span>
+                    <select
+                      value={taskSourceBranchPolicy}
+                      onChange={(event) => setTaskSourceBranchPolicy(event.target.value)}
+                      className="h-10 w-full rounded-[8px] border border-[#e3e2e0] bg-white px-3 text-[14px] text-[#37352f] outline-none focus:border-[#37352f]"
+                    >
+                      <option value="isolated_worktree">isolated_worktree</option>
+                      <option value="shared_main">shared_main</option>
+                    </select>
+                  </label>
+                </div>
+
+                <div className="mt-4 grid gap-4 md:grid-cols-2">
+                  <label className="block">
+                    <span className="mb-1.5 block text-[11px] font-semibold uppercase tracking-[0.08em] text-[#9b9a97]">
+                      External ID
+                    </span>
+                    <input
+                      value={taskSourceExternalId}
+                      onChange={(event) => setTaskSourceExternalId(event.target.value)}
+                      placeholder={taskSourceKind === "github_issue" ? "Issue id or number" : "Optional upstream id"}
+                      className="h-10 w-full rounded-[8px] border border-[#e3e2e0] bg-[#fbfbf9] px-3 text-[14px] text-[#37352f] outline-none focus:border-[#37352f] focus:bg-white"
+                    />
+                  </label>
+
+                  <label className="block">
+                    <span className="mb-1.5 block text-[11px] font-semibold uppercase tracking-[0.08em] text-[#9b9a97]">
+                      Repo / Source Ref
+                    </span>
+                    <input
+                      value={taskSourceRepo}
+                      onChange={(event) => setTaskSourceRepo(event.target.value)}
+                      placeholder={taskSourceKind === "local_brief" ? "Defaults to project path or name" : "org/repo or tracker project"}
+                      className="h-10 w-full rounded-[8px] border border-[#e3e2e0] bg-[#fbfbf9] px-3 text-[14px] text-[#37352f] outline-none focus:border-[#37352f] focus:bg-white"
+                    />
+                  </label>
+                </div>
+
+                {(taskSourceKind === "local_brief" || taskSourceKind === "execution_brief") && (
+                  <div className="mt-4 grid gap-4 md:grid-cols-2">
+                    <label className="block">
+                      <span className="mb-1.5 block text-[11px] font-semibold uppercase tracking-[0.08em] text-[#9b9a97]">
+                        Brief Ref
+                      </span>
+                      <input
+                        value={taskSourceBriefRef}
+                        onChange={(event) => setTaskSourceBriefRef(event.target.value)}
+                        placeholder={defaultBriefRefForSourceKind(taskSourceKind)}
+                        className="h-10 w-full rounded-[8px] border border-[#e3e2e0] bg-[#fbfbf9] px-3 text-[14px] text-[#37352f] outline-none focus:border-[#37352f] focus:bg-white"
+                      />
+                    </label>
+                  </div>
+                )}
+
+                <div className="mt-4 grid gap-3 md:grid-cols-2">
+                  <div className="rounded-[10px] border border-[#ecebe8] bg-[#fbfbf9] px-3 py-3">
+                    <p className="text-[11px] uppercase tracking-[0.08em] text-[#9b9a97]">Source contract</p>
+                    <p className="mt-1 text-[13px] font-medium text-[#37352f]">
+                      {taskSourcePayload.source_kind}
+                      {taskSourcePayload.external_id ? ` / ${taskSourcePayload.external_id}` : ""}
+                    </p>
+                    <p className="mt-2 text-[12px] text-[#787774]">
+                      Repo: {taskSourcePayload.repo || "Resolved from project defaults"}
+                    </p>
+                    <p className="mt-1 text-[12px] text-[#787774]">
+                      Branch policy: {taskSourcePayload.branch_policy}
+                    </p>
+                  </div>
+                  <div className="rounded-[10px] border border-[#ecebe8] bg-[#fbfbf9] px-3 py-3">
+                    <p className="text-[11px] uppercase tracking-[0.08em] text-[#9b9a97]">Brief / handoff ref</p>
+                    <p className="mt-1 text-[13px] font-medium text-[#37352f]">
+                      {taskSourcePayload.brief_ref || "External source item"}
+                    </p>
+                    <p className="mt-2 text-[12px] text-[#787774]">
+                      New projects will keep this source attached through execution and PR handoff metadata.
+                    </p>
+                  </div>
                 </div>
               </div>
 
