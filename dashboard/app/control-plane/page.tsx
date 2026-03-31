@@ -9,11 +9,6 @@ import {
   type QueueAdvanceSignal,
 } from "@/components/queue-advance-notice";
 import {
-  applyExecutionPlaneOrchestratorSessionControlPlan,
-  applyExecutionPlaneOrchestratorSessionRecommendation,
-  applyExecutionPlaneApproval,
-  approveExecutionPlaneApproval,
-  executeExecutionPlaneAgentAction,
   fetchAccountsHealth,
   fetchExecutionPlaneAgentDetail,
   fetchExecutionPlaneControlPassSummary,
@@ -23,8 +18,6 @@ import {
   fetchExecutionPlaneOrchestratorSessions,
   fetchExecutionPlaneOrchestratorSessionSummary,
   fetchProjects,
-  rejectExecutionPlaneApproval,
-  resolveExecutionPlaneIssue,
 } from "@/lib/api";
 import {
   approvalMatchesSearch,
@@ -33,8 +26,6 @@ import {
   describeRunResult,
   eventFamily,
   eventMatchesSearch,
-  extractLatestRunIdFromAppliedSteps,
-  extractRunId,
   formatJson,
   formatScopeList,
   formatTimestamp,
@@ -131,6 +122,11 @@ import {
   triageQueuePosition,
 } from "@/lib/control-plane-triage";
 import { passStatusClass } from "@/lib/control-plane-ui";
+import {
+  type PendingAgentPriorityAutoAdvance,
+  type PendingLineageAutoAdvance,
+  useControlPlaneActions,
+} from "@/lib/use-control-plane-actions";
 import { useSSE } from "@/lib/sse";
 import type {
   AccountHealth,
@@ -142,14 +138,12 @@ import type {
   OrchestratorControlPassRecord,
   OrchestratorControlPassSummary,
   OrchestratorSessionControlProfile,
-  OrchestratorSessionControlRecommendation,
   OrchestratorSessionDetail,
   OrchestratorSessionRecord,
   OrchestratorSessionSummary,
   ProjectSummary,
 } from "@/lib/types";
 
-const DEFAULT_CONTROL_ACTOR = "dashboard-control-plane";
 const LINEAGE_QUEUE_STORAGE_PREFIX = "control-plane:lineage-queue:";
 const AGENT_TIMELINE_STORAGE_PREFIX = "control-plane:agent-timeline:";
 const SESSION_QUEUE_FOCUS_STORAGE_PREFIX = "control-plane:session-queue-focus:";
@@ -194,17 +188,10 @@ export default function ControlPlanePage() {
   const [snoozedAgentTimelineUntil, setSnoozedAgentTimelineUntil] = useState<Record<string, number>>(
     {}
   );
-  const [pendingAgentPriorityAutoAdvance, setPendingAgentPriorityAutoAdvance] = useState<{
-    priority: "critical" | "high";
-    previousKey: string;
-    previousEntry: AgentTimelineEntry | null;
-  } | null>(null);
-  const [pendingLineageAutoAdvance, setPendingLineageAutoAdvance] = useState<{
-    filter: "attention" | "decisions";
-    previousKey: string;
-    previousEntry: SessionLineageEntry | null;
-    previousFilter: string;
-  } | null>(null);
+  const [pendingAgentPriorityAutoAdvance, setPendingAgentPriorityAutoAdvance] =
+    useState<PendingAgentPriorityAutoAdvance | null>(null);
+  const [pendingLineageAutoAdvance, setPendingLineageAutoAdvance] =
+    useState<PendingLineageAutoAdvance | null>(null);
   const [dismissedLineageQueueKeys, setDismissedLineageQueueKeys] = useState<
     Record<LineageQueueKind, string[]>
   >(() => emptyVisibilityKeysRecord(SESSION_LINEAGE_QUEUE_KEYS));
@@ -755,26 +742,6 @@ export default function ControlPlanePage() {
     }
   }, [selectedRunId, selectedRunResultIndex, selectedSession]);
 
-  const refresh = async () => {
-    setRefreshing(true);
-    try {
-      await loadOverview();
-      if (selectedSessionId) {
-        await loadSessionDetail(selectedSessionId);
-      }
-    } finally {
-      setRefreshing(false);
-    }
-  };
-
-  const refreshAfterMutation = useCallback(
-    async (sessionId: string) => {
-      await loadOverview();
-      await loadSessionDetail(sessionId);
-    },
-    [loadOverview, loadSessionDetail]
-  );
-
   const focusRuntimeAgent = useCallback((runtimeAgentId: string, syncSearch = false) => {
     if (!runtimeAgentId) return;
     setSelectedAgentId(runtimeAgentId);
@@ -797,290 +764,41 @@ export default function ControlPlanePage() {
     },
     []
   );
-
-  const refreshAfterAgentMutation = useCallback(
-    async (runtimeAgentId: string) => {
-      await loadOverview();
-      if (selectedSessionId) {
-        await loadSessionDetail(selectedSessionId);
-      }
-      await loadAgentDetail(runtimeAgentId).then((detail) => {
-        setSelectedAgent(detail);
-      });
-    },
-    [loadAgentDetail, loadOverview, loadSessionDetail, selectedSessionId]
-  );
-  const recordTriageInboxFeedback = useCallback(
-    (
-      itemKey: string,
-      itemLabel: string,
-      message: string,
-      tone: "info" | "success" = "success"
-    ) => {
-      if (!itemKey || !itemLabel || !message) return;
-      const feedback: TriageInboxFeedback = {
-        itemKey,
-        itemLabel,
-        message,
-        tone,
-        timestamp: new Date().toISOString(),
-      };
-      setTriageInboxFeedbackHistory((current) => {
-        const deduped = current.filter(
-          (entry) =>
-            !(
-              entry.itemKey === feedback.itemKey &&
-              entry.itemLabel === feedback.itemLabel &&
-              entry.message === feedback.message &&
-              entry.tone === feedback.tone
-            )
-        );
-        return [feedback, ...deduped].slice(0, TRIAGE_INBOX_FEEDBACK_LIMIT);
-      });
-    },
-    []
-  );
-
-  const runDecisionAction = useCallback(
-    async (
-      actionKey: string,
-      task: () => Promise<string>,
-      options?: { autoAdvanceQueue?: boolean }
-    ) => {
-      if (!selectedSessionId) return;
-      setBusyActionKey(actionKey);
-      setNotice("");
-      setErrorMessage("");
-      const currentTriageInboxKey = selectedTriageInboxKeyRef.current;
-      const currentLineageEntry = selectedSessionLineageEntryRef.current;
-      const currentLineageFilter = sessionLineageFilterRef.current;
-      const currentAgentEntry = selectedAgentTimelineEntryRef.current;
-      let autoAdvanceFilter: "attention" | "decisions" | "" = "";
-      let autoAdvanceAgentPriority: "critical" | "high" | "" = "";
-      if (options?.autoAdvanceQueue && currentLineageEntry) {
-        if (currentLineageFilter === "attention" || currentLineageFilter === "decisions") {
-          autoAdvanceFilter = currentLineageFilter;
-        } else if (matchesSessionLineageFilter(currentLineageEntry, "attention")) {
-          autoAdvanceFilter = "attention";
-        } else if (matchesSessionLineageFilter(currentLineageEntry, "decisions")) {
-          autoAdvanceFilter = "decisions";
-        }
-      }
-      if (options?.autoAdvanceQueue && currentAgentEntry) {
-        const priority = agentTimelinePriority(currentAgentEntry);
-        if (priority === "critical" || priority === "high") {
-          autoAdvanceAgentPriority = priority;
-        }
-      }
-      try {
-        const message = await task();
-        setNotice(message);
-        if (currentTriageInboxKey) {
-          const itemLabel =
-            currentTriageInboxKey === "session-attention"
-              ? "Session Attention"
-              : currentTriageInboxKey === "session-decisions"
-                ? "Session Decision"
-                : currentTriageInboxKey === "agent-critical"
-                  ? "Agent Critical"
-                  : currentTriageInboxKey === "agent-high"
-                    ? "Agent High"
-                    : "";
-          recordTriageInboxFeedback(currentTriageInboxKey, itemLabel, message, "success");
-        }
-        if (autoAdvanceFilter && currentLineageEntry) {
-          setPendingLineageAutoAdvance({
-            filter: autoAdvanceFilter,
-            previousKey: currentLineageEntry.key,
-            previousEntry: currentLineageEntry,
-            previousFilter: currentLineageFilter || autoAdvanceFilter,
-          });
-        }
-        if (autoAdvanceAgentPriority && currentAgentEntry) {
-          setPendingAgentPriorityAutoAdvance({
-            priority: autoAdvanceAgentPriority,
-            previousKey: agentTimelineEntryKey(currentAgentEntry),
-            previousEntry: currentAgentEntry,
-          });
-        }
-        await refreshAfterMutation(selectedSessionId);
-        if (selectedAgentId) {
-          const detail = await loadAgentDetail(selectedAgentId);
-          setSelectedAgent(detail);
-        }
-      } catch (error) {
-        setErrorMessage(
-          error instanceof Error ? error.message : "Failed to apply linked decision action."
-        );
-      } finally {
-        setBusyActionKey("");
-      }
-    },
-    [
-      loadAgentDetail,
-      recordTriageInboxFeedback,
-      refreshAfterMutation,
-      selectedAgentId,
-      selectedSessionId,
-    ]
-  );
-
-  const applyRecommendation = async (recommendation: OrchestratorSessionControlRecommendation) => {
-    if (!selectedSessionId) return;
-    const actionKey = `recommendation:${recommendation.kind}`;
-    setBusyActionKey(actionKey);
-    setNotice("");
-    setErrorMessage("");
-
-    try {
-      const payload = await applyExecutionPlaneOrchestratorSessionRecommendation(selectedSessionId, {
-        recommendationKind: recommendation.kind,
-        actor: DEFAULT_CONTROL_ACTOR,
-        reason: `Dashboard applied session recommendation ${recommendation.kind}`,
-      });
-      const runId = extractRunId(payload.result);
-      if (runId) setSelectedRunId(runId);
-      setNotice(
-        `${payload.recommendation.title || recommendation.kind} finished with status ${payload.status}.`
-      );
-      await refreshAfterMutation(selectedSessionId);
-    } catch (error) {
-      setErrorMessage(
-        error instanceof Error ? error.message : "Failed to apply session recommendation."
-      );
-    } finally {
-      setBusyActionKey("");
-    }
-  };
-
-  const approveApproval = async (approval: ExecutionApprovalRecord) => {
-    await runDecisionAction(
-      `approval-approve:${approval.id}`,
-      async () => {
-        const payload = await approveExecutionPlaneApproval(approval.id, {
-          actor: DEFAULT_CONTROL_ACTOR,
-          note: `Dashboard approved ${approval.action} for session ${selectedSessionId}`,
-        });
-        return `Approval ${payload.approval.id} marked ${payload.approval.status}.`;
-      },
-      { autoAdvanceQueue: true }
-    );
-  };
-
-  const rejectApproval = async (approval: ExecutionApprovalRecord) => {
-    await runDecisionAction(
-      `approval-reject:${approval.id}`,
-      async () => {
-        const payload = await rejectExecutionPlaneApproval(approval.id, {
-          actor: DEFAULT_CONTROL_ACTOR,
-          note: `Dashboard rejected ${approval.action} for session ${selectedSessionId}`,
-        });
-        return `Approval ${payload.approval.id} marked ${payload.approval.status}.`;
-      },
-      { autoAdvanceQueue: true }
-    );
-  };
-
-  const applyApproval = async (approval: ExecutionApprovalRecord) => {
-    await runDecisionAction(
-      `approval-apply:${approval.id}`,
-      async () => {
-        const payload = await applyExecutionPlaneApproval(approval.id, {
-          actor: DEFAULT_CONTROL_ACTOR,
-          note: `Dashboard applied ${approval.action} for session ${selectedSessionId}`,
-        });
-        return toStringValue(
-          payload.command_result.message,
-          `Approval ${payload.approval.id} applied successfully.`
-        );
-      },
-      { autoAdvanceQueue: true }
-    );
-  };
-
-  const resolveIssue = async (issue: ExecutionIssueRecord) => {
-    await runDecisionAction(
-      `issue-resolve:${issue.id}`,
-      async () => {
-        const payload = await resolveExecutionPlaneIssue(issue.id, {
-          actor: DEFAULT_CONTROL_ACTOR,
-          note: `Dashboard resolved issue ${issue.id} for session ${selectedSessionId}`,
-        });
-        return `Issue ${payload.issue.id} marked ${payload.issue.status}.`;
-      },
-      { autoAdvanceQueue: true }
-    );
-  };
-
-  const runAgentSuggestedCommand = async (
-    command: Record<string, unknown>,
-    mode: "execute_now" | "request_approval"
-  ) => {
-    if (!selectedAgent) return;
-    const commandName = toStringValue(command.command);
-    if (!commandName) return;
-    const actionKey = `${selectedAgent.runtime_agent_id}:command:${commandName}`;
-    const busyKey = `agent-command:${selectedAgent.runtime_agent_id}:${commandName}:${mode}`;
-    setBusyActionKey(busyKey);
-    setNotice("");
-    setErrorMessage("");
-
-    try {
-      const payload = await executeExecutionPlaneAgentAction({
-        actionKey,
-        orchestratorSessionId: selectedSessionId,
-        actor: DEFAULT_CONTROL_ACTOR,
-        mode,
-        reason: `Dashboard ${mode === "execute_now" ? "executed" : "requested approval for"} agent command ${commandName}`,
-      });
-      const runId = extractRunId(payload);
-      if (runId) setSelectedRunId(runId);
-      if (payload.approval?.id) {
-        setEntitySearch(payload.approval.id);
-      }
-      setNotice(
-        payload.message ||
-          toStringValue(payload.command_result?.message) ||
-          `Agent command ${commandName} finished with status ${payload.status}.`
-      );
-      await refreshAfterAgentMutation(selectedAgent.runtime_agent_id);
-    } catch (error) {
-      setErrorMessage(
-        error instanceof Error ? error.message : "Failed to execute runtime agent command."
-      );
-    } finally {
-      setBusyActionKey("");
-    }
-  };
-
-  const applyControlPlan = async (profile: OrchestratorSessionControlProfile) => {
-    if (!selectedSessionId) return;
-    const actionKey = `profile:${profile.name}`;
-    setBusyActionKey(actionKey);
-    setNotice("");
-    setErrorMessage("");
-
-    try {
-      const payload = await applyExecutionPlaneOrchestratorSessionControlPlan(selectedSessionId, {
-        profile: profile.name,
-        actor: DEFAULT_CONTROL_ACTOR,
-        reason: `Dashboard executed ${profile.name} control pass`,
-      });
-      const runId = extractLatestRunIdFromAppliedSteps(payload.applied);
-      if (runId) setSelectedRunId(runId);
-      setNotice(
-        `Control profile ${payload.profile.name} recorded pass ${payload.control_pass.id} with status ${payload.status}.`
-      );
-      setSelectedPassId(payload.control_pass.id);
-      await refreshAfterMutation(selectedSessionId);
-    } catch (error) {
-      setErrorMessage(
-        error instanceof Error ? error.message : "Failed to apply session control profile."
-      );
-    } finally {
-      setBusyActionKey("");
-    }
-  };
+  const {
+    refresh,
+    recordTriageInboxFeedback,
+    applyRecommendation,
+    approveApproval,
+    rejectApproval,
+    applyApproval,
+    resolveIssue,
+    runAgentSuggestedCommand,
+    applyControlPlan,
+  } = useControlPlaneActions({
+    selectedSessionId,
+    selectedAgentId,
+    selectedAgent,
+    setRefreshing,
+    setBusyActionKey,
+    setNotice,
+    setErrorMessage,
+    setSelectedRunId,
+    setSelectedPassId,
+    setSelectedAgent,
+    setEntitySearch,
+    setPendingLineageAutoAdvance,
+    setPendingAgentPriorityAutoAdvance,
+    setTriageInboxFeedbackHistory,
+    selectedSessionLineageEntryRef,
+    selectedAgentTimelineEntryRef,
+    selectedTriageInboxKeyRef,
+    sessionLineageFilterRef,
+    loadOverview,
+    loadSessionDetail,
+    loadAgentDetail,
+    toStringValue,
+    triageInboxFeedbackLimit: TRIAGE_INBOX_FEEDBACK_LIMIT,
+  });
 
   const visibleProjects = useMemo(
     () => projects.filter((project) => !project.archived),
@@ -2607,6 +2325,7 @@ export default function ControlPlanePage() {
       openCurrentAgentPriorityQueue,
     ]
   );
+  /* eslint-disable react-hooks/refs */
   const triageInboxItems = useMemo(
     () =>
       [
@@ -2728,6 +2447,7 @@ export default function ControlPlanePage() {
       snoozeSessionLineageQueueEntry,
     ]
   );
+  /* eslint-enable react-hooks/refs */
   const triageInboxItemCount = triageInboxItems.length;
   const selectedTriageInboxItem = useMemo(
     () =>
@@ -3199,6 +2919,7 @@ export default function ControlPlanePage() {
     openTriageInboxHistoryGroup,
     snoozeTriageInboxItem,
     dismissTriageInboxItem,
+    // eslint-disable-next-line react-hooks/refs
     runtimeAgentSectionProps: buildRuntimeAgentSectionProps({
       selectedAgentId,
       agentLoading,
