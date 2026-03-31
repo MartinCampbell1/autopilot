@@ -56,9 +56,12 @@ import { useControlPlaneSessionLineageModel } from "@/lib/use-control-plane-sess
 import { useControlPlaneSessionOverviewModel } from "@/lib/use-control-plane-session-overview-model";
 import { useControlPlaneSessionLineageQueues } from "@/lib/use-control-plane-session-lineage-queues";
 import { useControlPlaneTriageInbox } from "@/lib/use-control-plane-triage-inbox";
-import { useControlPlaneViewState } from "@/lib/use-control-plane-view-state";
+import {
+  type ControlPlaneViewSelection,
+  useControlPlaneViewState,
+} from "@/lib/use-control-plane-view-state";
 
-export function useControlPlanePageController() {
+export function useControlPlanePageController(initialSelection?: ControlPlaneViewSelection) {
   const TRIAGE_INBOX_FEEDBACK_LIMIT = 5;
   const {
     health,
@@ -173,7 +176,7 @@ export function useControlPlanePageController() {
     selectedAgentTimelineEntryRef,
     selectedTriageInboxKeyRef,
     sessionLineageFilterRef,
-  } = useControlPlaneViewState();
+  } = useControlPlaneViewState(initialSelection);
 
   const { loadOverview, loadSessionDetail, loadAgentDetail } = useControlPlaneDataLoader({
     selectedSessionId,
@@ -667,6 +670,10 @@ export function useControlPlanePageController() {
       loading,
       health,
       visibleProjects,
+      selectedSessionId,
+      selectedAgentId,
+      selectedRunId,
+      selectedPassId,
       headerSectionProps: null,
       mainSectionsProps: null,
     };
@@ -988,6 +995,10 @@ export function useControlPlanePageController() {
     loading,
     health,
     visibleProjects,
+    selectedSessionId,
+    selectedAgentId,
+    selectedRunId,
+    selectedPassId,
     headerSectionProps,
     mainSectionsProps,
   };

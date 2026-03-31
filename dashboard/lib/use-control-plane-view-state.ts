@@ -36,7 +36,22 @@ import type {
   PendingLineageAutoAdvance,
 } from "@/lib/use-control-plane-actions";
 
-export function useControlPlaneViewState() {
+export type ControlPlaneViewSelection = {
+  sessionId?: string | null;
+  agentId?: string | null;
+  runId?: string | null;
+  passId?: string | null;
+};
+
+function normalizeSelectionValue(value?: string | null): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+export function useControlPlaneViewState(initialSelection?: ControlPlaneViewSelection) {
+  const initialSessionId = normalizeSelectionValue(initialSelection?.sessionId);
+  const initialAgentId = normalizeSelectionValue(initialSelection?.agentId);
+  const initialRunId = normalizeSelectionValue(initialSelection?.runId);
+  const initialPassId = normalizeSelectionValue(initialSelection?.passId);
   const [health, setHealth] = useState<AccountHealth | null>(null);
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [controlPasses, setControlPasses] = useState<OrchestratorControlPassRecord[]>([]);
@@ -44,11 +59,11 @@ export function useControlPlaneViewState() {
   const [sessions, setSessions] = useState<OrchestratorSessionRecord[]>([]);
   const [sessionSummary, setSessionSummary] = useState<OrchestratorSessionSummary | null>(null);
   const [controlProfiles, setControlProfiles] = useState<OrchestratorSessionControlProfile[]>([]);
-  const [selectedSessionId, setSelectedSessionId] = useState("");
-  const [selectedAgentId, setSelectedAgentId] = useState("");
-  const [selectedRunId, setSelectedRunId] = useState("");
+  const [selectedSessionId, setSelectedSessionId] = useState(initialSessionId);
+  const [selectedAgentId, setSelectedAgentId] = useState(initialAgentId);
+  const [selectedRunId, setSelectedRunId] = useState(initialRunId);
   const [selectedRunResultIndex, setSelectedRunResultIndex] = useState(0);
-  const [selectedPassId, setSelectedPassId] = useState("");
+  const [selectedPassId, setSelectedPassId] = useState(initialPassId);
   const [selectedSession, setSelectedSession] = useState<OrchestratorSessionDetail | null>(null);
   const [selectedAgent, setSelectedAgent] = useState<ExecutionRuntimeAgentDetail | null>(null);
   const [agentLoading, setAgentLoading] = useState(false);
