@@ -78,7 +78,6 @@ import {
   agentQueueAdvanceTarget,
   agentTimelineEntryKey,
   agentTimelineRowDomId,
-  resolveAgentTimelineEntryFromTarget,
   resolveAgentTimelineRunLink,
   resolveRunLinkFromContext,
   resolveSessionEventFromContext,
@@ -123,6 +122,7 @@ import {
   useControlPlaneActions,
 } from "@/lib/use-control-plane-actions";
 import { useControlPlaneLinkedSelection } from "@/lib/use-control-plane-linked-selection";
+import { useControlPlaneRevealFlows } from "@/lib/use-control-plane-reveal-flows";
 import { useControlPlaneTriageInbox } from "@/lib/use-control-plane-triage-inbox";
 import { useSSE } from "@/lib/sse";
 import type {
@@ -146,14 +146,6 @@ const AGENT_TIMELINE_STORAGE_PREFIX = "control-plane:agent-timeline:";
 const SESSION_QUEUE_FOCUS_STORAGE_PREFIX = "control-plane:session-queue-focus:";
 const AGENT_QUEUE_FOCUS_STORAGE_PREFIX = "control-plane:agent-queue-focus:";
 const TRIAGE_INBOX_FEEDBACK_LIMIT = 5;
-
-function scrollToDomId(id: string): boolean {
-  if (!id || typeof document === "undefined") return false;
-  const node = document.getElementById(id);
-  if (!node) return false;
-  node.scrollIntoView({ behavior: "smooth", block: "center" });
-  return true;
-}
 
 export default function ControlPlanePage() {
   const [health, setHealth] = useState<AccountHealth | null>(null);
@@ -2022,73 +2014,36 @@ export default function ControlPlanePage() {
     },
     [filteredAgentTimelineEntries, inspectAgentTimelineEntry]
   );
-  const restoreAgentTimelineEntryVisibility = useCallback((entryKey: string) => {
-    if (!entryKey) return;
-    setDismissedAgentTimelineKeys((current) => current.filter((key) => key !== entryKey));
-    setSnoozedAgentTimelineUntil((current) => {
-      if (!(entryKey in current)) return current;
-      const next = { ...current };
-      delete next[entryKey];
-      return next;
-    });
-    setLineageQueueNow(Date.now());
-  }, []);
-  const revealAgentTimelineEntry = useCallback(
-    (entry: AgentTimelineEntry) => {
-      const entryKey = agentTimelineEntryKey(entry);
-      setAgentTimelineFilter("all");
-      setAgentTimelineSearch("");
-      setSelectedAgentTimelineKey(entryKey);
-      if (selectedAgentId) {
-        setPendingAgentTimelineRowDomId(agentTimelineRowDomId(selectedAgentId, entryKey));
-      }
-    },
-    [selectedAgentId]
-  );
-  const findSessionLineageEntryInSession = useCallback((entry: SessionLineageEntry) => {
-    setEntitySearch(entry.runId || entry.issueId || entry.approvalId || entry.title);
-    if (entry.runId) {
-      setSelectedRunId(entry.runId);
-      setSelectedRunResultIndex(entry.resultIndex);
-    }
-  }, []);
-  const revealSessionLineageEntryInTimeline = useCallback(
-    (entry: SessionLineageEntry) => {
-      syncLinkedSelection({
-        runId: entry.runId,
-        resultIndex: entry.resultIndex,
-        approvalId: entry.approvalId,
-        issueId: entry.issueId,
-        runtimeAgentId: entry.runtimeAgentId,
-        event: entry.event,
-      });
-    },
-    [syncLinkedSelection]
-  );
-  const findAgentTimelineEntryInSession = useCallback(
-    (entry: AgentTimelineEntry) => {
-      const relatedRunLink = resolveAgentTimelineRunLink(entry, linkedRuns);
-      const approvalId =
-        entry.approval?.id ||
-        entry.issue?.approval_id ||
-        toStringValue(entry.event?.approval_id);
-      const issueId = entry.issue?.id || toStringValue(entry.event?.issue_id);
-      const eventToken =
-        toStringValue(entry.event?.event) ||
-        toStringValue(entry.event?.message) ||
-        entry.id;
-
-      if (relatedRunLink) {
-        setEntitySearch(relatedRunLink.run.id || approvalId || issueId || eventToken);
-        setSelectedRunId(relatedRunLink.run.id);
-        setSelectedRunResultIndex(relatedRunLink.resultIndex);
-        return;
-      }
-
-      setEntitySearch(approvalId || issueId || eventToken);
-    },
-    [linkedRuns]
-  );
+  const {
+    restoreAgentTimelineEntryVisibility,
+    revealAgentTimelineEntry,
+    findSessionLineageEntryInSession,
+    revealSessionLineageEntryInTimeline,
+    findAgentTimelineEntryInSession,
+  } = useControlPlaneRevealFlows({
+    selectedAgentId,
+    selectedAgent,
+    linkedRuns,
+    syncLinkedSelection,
+    agentTimelineEntries,
+    visibleAgentTimelineEntries,
+    pendingAgentTimelineTarget,
+    setPendingAgentTimelineTarget,
+    pendingSessionRowDomId,
+    setPendingSessionRowDomId,
+    pendingAgentTimelineRowDomId,
+    setPendingAgentTimelineRowDomId,
+    setDismissedAgentTimelineKeys,
+    setSnoozedAgentTimelineUntil,
+    setLineageQueueNow,
+    setAgentTimelineFilter,
+    setAgentTimelineSearch,
+    setSelectedAgentTimelineKey,
+    setEntitySearch,
+    setSelectedRunId,
+    setSelectedRunResultIndex,
+    setNotice,
+  });
   const openSessionQueueAdvanceTarget = useCallback(
     (target: QueueAdvanceTarget | null | undefined) => {
       if (!target || target.kind !== "session-lineage") return;
@@ -2327,44 +2282,6 @@ export default function ControlPlanePage() {
     inspectAgentTimelineEntry,
     pendingAgentPriorityAutoAdvance,
   ]);
-  useEffect(() => {
-    if (!pendingAgentTimelineTarget) return;
-    if (!selectedAgentId || pendingAgentTimelineTarget.runtimeAgentId !== selectedAgentId) return;
-    if (!selectedAgent) return;
-
-    const matchedEntry = resolveAgentTimelineEntryFromTarget(
-      agentTimelineEntries,
-      pendingAgentTimelineTarget
-    );
-    if (matchedEntry) {
-      const matchedKey = agentTimelineEntryKey(matchedEntry);
-      setSelectedAgentTimelineKey(matchedKey);
-      setPendingAgentTimelineRowDomId(agentTimelineRowDomId(selectedAgentId, matchedKey));
-      setNotice("");
-    } else {
-      setNotice("Found runtime agent, but no linked timeline item was available for this outcome.");
-    }
-    setPendingAgentTimelineTarget(null);
-  }, [agentTimelineEntries, pendingAgentTimelineTarget, selectedAgent, selectedAgentId]);
-  useEffect(() => {
-    if (!pendingSessionRowDomId) return;
-    if (scrollToDomId(pendingSessionRowDomId)) {
-      setPendingSessionRowDomId("");
-    }
-  }, [
-    entitySearch,
-    eventFilter,
-    pendingSessionRowDomId,
-    visibleSessionApprovals,
-    visibleSessionEvents,
-    visibleSessionIssues,
-  ]);
-  useEffect(() => {
-    if (!pendingAgentTimelineRowDomId) return;
-    if (scrollToDomId(pendingAgentTimelineRowDomId)) {
-      setPendingAgentTimelineRowDomId("");
-    }
-  }, [pendingAgentTimelineRowDomId, selectedAgentId, visibleAgentTimelineEntries]);
   const selectedControl = selectedSession?.control ?? null;
   const loading = !controlSummary || !sessionSummary;
 
