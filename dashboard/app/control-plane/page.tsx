@@ -114,6 +114,7 @@ import { useControlPlaneOperatorPersistence } from "@/lib/use-control-plane-oper
 import { useControlPlaneQueueAdvance } from "@/lib/use-control-plane-queue-advance";
 import { useControlPlaneRevealFlows } from "@/lib/use-control-plane-reveal-flows";
 import { useControlPlaneRunSelection } from "@/lib/use-control-plane-run-selection";
+import { useControlPlaneSessionLineageSelection } from "@/lib/use-control-plane-session-lineage-selection";
 import { useControlPlaneTriageInbox } from "@/lib/use-control-plane-triage-inbox";
 import { useSSE } from "@/lib/sse";
 import type {
@@ -609,16 +610,16 @@ export default function ControlPlanePage() {
         left.resultIndex - right.resultIndex
     );
   }, [approvalById, issueById, linkedRuns, selectedSession]);
-  const selectedSessionLineageEntry = useMemo(() => {
-    if (selectedRunId) {
-      return (
-        sessionLineageEntries.find(
-          (entry) => entry.runId === selectedRunId && entry.resultIndex === selectedRunResultIndex
-        ) ?? null
-      );
-    }
-    return sessionLineageEntries[0] ?? null;
-  }, [selectedRunId, selectedRunResultIndex, sessionLineageEntries]);
+  const { selectedSessionLineageEntry } = useControlPlaneSessionLineageSelection({
+    selectedSessionId,
+    selectedRunId,
+    selectedRunResultIndex,
+    sessionLineageEntries,
+    sessionLineageFilter,
+    selectedSessionLineageEntryRef,
+    sessionLineageFilterRef,
+    setExpandedSessionLineageQueues,
+  });
   const filteredSessionLineageEntries = useMemo(
     () =>
       sessionLineageEntries.filter((entry) =>
@@ -861,12 +862,6 @@ export default function ControlPlanePage() {
   const selectedSessionLineageTraits = useMemo(() => {
     return sessionLineageTraits(selectedSessionLineageEntry);
   }, [selectedSessionLineageEntry]);
-  useEffect(() => {
-    selectedSessionLineageEntryRef.current = selectedSessionLineageEntry;
-  }, [selectedSessionLineageEntry]);
-  useEffect(() => {
-    sessionLineageFilterRef.current = sessionLineageFilter;
-  }, [sessionLineageFilter]);
   const {
     syncLinkedSelection,
     inspectSessionLineageEntry,
@@ -1713,9 +1708,6 @@ export default function ControlPlanePage() {
     recordTriageInboxFeedback,
     triageInboxFeedbackLimit: TRIAGE_INBOX_FEEDBACK_LIMIT,
   });
-  useEffect(() => {
-    setExpandedSessionLineageQueues([...SESSION_LINEAGE_QUEUE_KEYS]);
-  }, [selectedSessionId]);
   useEffect(() => {
     if (!pendingAgentPriorityAutoAdvance) return;
     const entries =
