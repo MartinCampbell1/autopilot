@@ -1,19 +1,47 @@
 # Autopilot
 
-Autopilot is a standalone CLI for orchestrating autonomous AI programmers with account rotation, critic loops, and project-level automation.
+Autopilot is the execution plane for FounderOS: a local-first CLI, API, and dashboard that turns an `Execution Brief` into tracked implementation with deterministic orchestration, quality gates, worktree isolation, budgets, approvals, and operator-visible run state.
 
-Current capabilities on this branch include:
+It is not another swarm orchestrator. `Quorum` decides what to build and why, `Execution Brief` is the contract, and `Autopilot` is the system that executes under explicit budget, approval, and review loops.
+
+## Release-Candidate Status
+
+Current branch truth:
+
+- branch hardening on `codex/founderos-control-plane` is already closed
+- the active `P0`, `P1`, and `P2` backlog slices from the 2026-03-31 branch handoff are already landed
+- the next default mode is `review/merge baseline -> productization -> OSS release surface`
+- `P3` items remain deferred unless a concrete failure mode justifies promotion
+
+The canonical next-step handoff is:
+
+- [docs/2026-03-31-next-product-plan.md](/Users/martin/Desktop/autopilot/docs/2026-03-31-next-product-plan.md)
+
+Release hygiene docs:
+
+- [docs/release-checklist.md](/Users/martin/Desktop/autopilot/docs/release-checklist.md)
+- [docs/release-notes-template.md](/Users/martin/Desktop/autopilot/docs/release-notes-template.md)
+- [CHANGELOG.md](/Users/martin/Desktop/autopilot/CHANGELOG.md)
+
+Current capabilities include:
 
 - autonomous story execution with worker -> gates -> critic loops
 - account preservation, cooldowns, and runtime budgeting
 - dependency-aware project/story scheduling
 - trace, cost, and diagnostic surfaces
 - headless execution and scheduled maintenance runs
-- execution/control-plane dashboard for projects, sessions, runtime agents, and action runs
+- execution/control-plane dashboard for projects, sessions, runtime agents, approvals, and action runs
+- execution-plane APIs for briefs, sessions, action previews, control passes, and command policy
 
-## Core Commands
+## Quickstart
 
 ```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev,api]"
+cd dashboard && npm install
+cd ..
+
 autopilot init /path/to/project --idea "Build a FastAPI bug tracker"
 autopilot doctor /path/to/project
 autopilot run /path/to/project
@@ -22,6 +50,7 @@ autopilot run-all --headless
 autopilot run-all --schedule 6h --max-runs 4
 autopilot trace /path/to/project
 autopilot live --once
+autopilot status
 autopilot dashboard
 ```
 
@@ -33,29 +62,20 @@ Useful patterns:
 - `autopilot trace` shows the structured worker/runtime history for a project
 - `autopilot live` renders an SSH-friendly snapshot of accounts, projects, stories, and recent events
 
-## Development
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -e ".[dev]"
-autopilot version
-```
-
-## Current Status
-
-The repo is well past the initial scaffold stage.
-
-Current branch status:
-
-- Phase 1 foundation is in place
-- Phase 2 runtime-control primitives are in place
-- Phase 3 execution/control-plane work is real and operational
-- the active `P0`, `P1`, and `P2` hardening backlog called out in the 2026-03-31 handoff docs has been implemented on `codex/founderos-control-plane`
-
-Recommended verification baseline:
+## Official Verification Baseline
 
 ```bash
 ./.venv/bin/python -m pytest -q
-cd dashboard && npm run lint && npm run build
+./.venv/bin/ruff check autopilot tests
+(cd dashboard && npm run lint)
+(cd dashboard && npm run build)
+./.venv/bin/autopilot dashboard --no-browser
+./.venv/bin/autopilot live --once
+./.venv/bin/autopilot status
 ```
+
+Supporting architecture docs:
+
+- [docs/execution-brief-bridge.md](/Users/martin/Desktop/autopilot/docs/execution-brief-bridge.md)
+- [docs/phase3-founderos-execution-plane.md](/Users/martin/Desktop/autopilot/docs/phase3-founderos-execution-plane.md)
+- [docs/phase4-approval-foundation.md](/Users/martin/Desktop/autopilot/docs/phase4-approval-foundation.md)

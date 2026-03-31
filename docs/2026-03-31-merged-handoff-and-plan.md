@@ -2,6 +2,8 @@
 
 Date: `2026-03-31`
 
+> Historical branch handoff. For the next chat use [2026-03-31-next-product-plan.md](/Users/martin/Desktop/autopilot/docs/2026-03-31-next-product-plan.md) as the canonical starting point.
+
 Primary source docs:
 
 - [2026-03-31-pr-summary.md](/Users/martin/Desktop/autopilot/docs/2026-03-31-pr-summary.md)
@@ -14,7 +16,7 @@ Primary source docs:
 
 ## Purpose
 
-This is the one-file handoff for the next agent.
+This document is now historical branch context, not the default handoff for future work.
 
 It merges:
 
@@ -23,7 +25,7 @@ It merges:
 - the broader `Autopilot` platform backlog
 - the GitHub-research-driven feature roadmap
 
-Use this as the main doc in the next chat.
+For the next chat, use [2026-03-31-next-product-plan.md](/Users/martin/Desktop/autopilot/docs/2026-03-31-next-product-plan.md) instead.
 
 ## Current Branch / Current Reality
 

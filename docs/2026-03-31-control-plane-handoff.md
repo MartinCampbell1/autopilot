@@ -2,6 +2,8 @@
 
 Date: 2026-03-31
 
+> Historical architecture handoff. For new work use [2026-03-31-next-product-plan.md](/Users/martin/Desktop/autopilot/docs/2026-03-31-next-product-plan.md) as the canonical next-step plan.
+
 Branch: `codex/founderos-control-plane`
 
 Local HEAD when this handoff was written: `e518450`
