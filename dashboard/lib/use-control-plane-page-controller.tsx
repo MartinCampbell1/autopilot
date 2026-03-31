@@ -371,6 +371,33 @@ export function useControlPlanePageController(
     setSelectedRunId,
     setSelectedRunResultIndex,
   });
+  const latestSessionPreviewRun = useMemo(() => {
+    const previewRuns = linkedRuns.filter(
+      (run) =>
+        run.dry_run &&
+        run.run_kind === "batch" &&
+        toStringArray(run.selection?.selected_action_keys).length > 0
+    );
+    if (!previewRuns.length) return null;
+    const executionRuns = linkedRuns.filter((run) => !run.dry_run);
+    return (
+      previewRuns.find((previewRun) => {
+        const previewKey = toStringValue(previewRun.preview_id, previewRun.id);
+        return !executionRuns.some(
+          (run) => toStringValue(run.preview_id) === previewKey
+        );
+      }) ?? previewRuns[0]
+    );
+  }, [linkedRuns]);
+  const latestSessionPreviewAppliedRun = useMemo(() => {
+    if (!latestSessionPreviewRun) return null;
+    const previewKey = toStringValue(latestSessionPreviewRun.preview_id, latestSessionPreviewRun.id);
+    return (
+      linkedRuns.find(
+        (run) => !run.dry_run && toStringValue(run.preview_id) === previewKey
+      ) ?? null
+    );
+  }, [latestSessionPreviewRun, linkedRuns]);
   const {
     sessionLineageEntries,
     selectedSessionLineageEntry,
@@ -1133,8 +1160,11 @@ export function useControlPlanePageController(
     setEntitySearch,
     sortedProfiles,
     busyActionKey,
+    latestPreviewRun: latestSessionPreviewRun,
+    latestPreviewAppliedRun: latestSessionPreviewAppliedRun,
     applyControlPlan,
     applyRecommendation,
+    applyPreviewRun,
     runFilter: runFilter as "all" | "execute" | "preview" | "attention",
     setRunFilter,
     matchesRunFilter,
