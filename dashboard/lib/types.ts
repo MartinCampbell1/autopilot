@@ -54,6 +54,44 @@ export interface ProjectHandoffSummary {
   updated_at?: string | null;
 }
 
+export interface ProjectHandoffArtifact {
+  artifact_id: string;
+  artifact_type: string;
+  project_id: string;
+  project_name: string;
+  story: {
+    id: number;
+    title: string;
+  };
+  task_source: TaskSource;
+  brief: {
+    title: string;
+    relpath: string;
+    path: string;
+    present: boolean;
+  };
+  ref: string;
+  ref_label: string;
+  relpath: string;
+  path: string;
+  present: boolean;
+  generated_at?: string | null;
+  handoff: {
+    provider: string;
+    head_branch: string;
+    base_branch: string;
+    number?: number | null;
+    url: string;
+    title: string;
+    state: string;
+    ci_status: string;
+    review_status: string;
+    handoff_status: string;
+    merge_state: string;
+    updated_at?: string | null;
+  };
+}
+
 export interface ProjectDeliveryLoop {
   source: TaskSource;
   brief: {
@@ -76,6 +114,7 @@ export interface ProjectDeliveryLoop {
     } | null;
   };
   handoff?: ProjectHandoffSummary | null;
+  artifact?: ProjectHandoffArtifact | null;
 }
 
 export interface LaunchPreset {
@@ -235,6 +274,7 @@ export interface Story {
   ownership?: StoryOwnership | null;
   checkout?: StoryCheckout | null;
   github_pr?: StoryGitHubPullRequest | null;
+  handoff_artifact?: ProjectHandoffArtifact | null;
 }
 
 export interface TimelineEvent {

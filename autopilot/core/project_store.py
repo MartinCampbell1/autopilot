@@ -44,6 +44,7 @@ from autopilot.core.runtime_budgets import default_budget_policy, default_budget
 
 TIMELINE_LIMIT = 300
 DISCOVERY_BOARD_LIMIT = 200
+HANDOFF_ARTIFACT_RELPATH = ".agents/tasks/handoff-artifact.json"
 TERMINAL_STORY_STATUSES = {"done", "skipped", "stuck", "merge_blocked"}
 PLACEHOLDER_ISSUE_PATTERN = re.compile(
     r"^-\s*(?:Issue\s+\d+:\s*specific description|<[^>]+>|concrete issue\b.*|second concrete issue\b.*)\s*$",
@@ -1044,6 +1045,8 @@ def emit_project_event(
         handoff = _build_event_story_handoff_summary(project, state, story_id=story_id)
         if handoff is not None:
             event_record["handoff"] = handoff
+    if project is not None:
+        _write_project_handoff_artifact(project, merge_project_stories(config, project, state))
 
     timeline = state.setdefault("timeline", [])
     timeline.append(event_record)
@@ -1316,56 +1319,56 @@ def merge_project_stories(
     for story in prd.get("stories", []):
         runtime = state.get("story_state", {}).get(str(story["id"]), {})
         runtime_metadata = _resolve_story_runtime_metadata(config, state, story, runtime)
-        merged.append(
-            {
-                "id": story["id"],
-                "title": story["title"],
-                "description": story["description"],
-                "position": story["position"],
-                "phase_id": story.get("phase_id"),
-                "phase_title": story.get("phase_title"),
-                "phase_goal": story.get("phase_goal"),
-                "tags": story.get("tags", []),
-                "role": story.get("role"),
-                "skill_packs": story.get("skill_packs", []),
-                "connectors": story.get("connectors", []),
-                "required_connectors": story.get("required_connectors", []),
-                "preferred_connectors": story.get("preferred_connectors", []),
-                "forbidden_connectors": story.get("forbidden_connectors", []),
-                "acceptance_criteria": story.get("acceptance_criteria", []),
-                "blocked_by": runtime.get("blocked_by", story.get("blocked_by", [])),
-                "blocked_on": runtime.get("blocked_on", []),
-                "status": runtime.get("status", "open"),
-                "started_at": runtime.get("started_at"),
-                "completed_at": runtime.get("completed_at"),
-                "updated_at": runtime.get("updated_at"),
-                "iteration": runtime.get("iteration"),
-                "agent": runtime.get("agent"),
-                "critic": runtime.get("critic"),
-                "last_error": _sanitize_message(runtime.get("last_error") or ""),
-                "team_mode": runtime_metadata["team_mode"],
-                "team_members": runtime_metadata["team_members"],
-                "story_pipeline": runtime_metadata["story_pipeline"],
-                "review_phases": runtime_metadata["review_phases"] or story.get("review_phases", []),
-                "discoveries": build_story_discovery_context(state, story_id=int(story["id"])),
-                "pipeline_state": runtime_metadata["pipeline_state"],
-                "connector_activation": runtime_metadata["connector_activation"],
-                "tools": runtime_metadata["planned_tools"],
-                "active_tools": runtime_metadata["active_tools"],
-                "activation_errors": runtime_metadata["activation_errors"],
-                "worktree_path": runtime.get("worktree_path"),
-                "branch_name": runtime.get("branch_name"),
-                "ownership": runtime.get("ownership"),
-                "checkout": runtime.get("checkout"),
-                "github_pr": runtime.get("github_pr") or normalize_story_github_pr(project["name"], story),
-                "cost": dict(
-                    (state.get("cost_usage", {}).get("stories") or {}).get(
-                        str(story["id"]),
-                        default_cost_usage()["project"],
-                    )
-                ),
-            }
-        )
+        merged_story = {
+            "id": story["id"],
+            "title": story["title"],
+            "description": story["description"],
+            "position": story["position"],
+            "phase_id": story.get("phase_id"),
+            "phase_title": story.get("phase_title"),
+            "phase_goal": story.get("phase_goal"),
+            "tags": story.get("tags", []),
+            "role": story.get("role"),
+            "skill_packs": story.get("skill_packs", []),
+            "connectors": story.get("connectors", []),
+            "required_connectors": story.get("required_connectors", []),
+            "preferred_connectors": story.get("preferred_connectors", []),
+            "forbidden_connectors": story.get("forbidden_connectors", []),
+            "acceptance_criteria": story.get("acceptance_criteria", []),
+            "blocked_by": runtime.get("blocked_by", story.get("blocked_by", [])),
+            "blocked_on": runtime.get("blocked_on", []),
+            "status": runtime.get("status", "open"),
+            "started_at": runtime.get("started_at"),
+            "completed_at": runtime.get("completed_at"),
+            "updated_at": runtime.get("updated_at"),
+            "iteration": runtime.get("iteration"),
+            "agent": runtime.get("agent"),
+            "critic": runtime.get("critic"),
+            "last_error": _sanitize_message(runtime.get("last_error") or ""),
+            "team_mode": runtime_metadata["team_mode"],
+            "team_members": runtime_metadata["team_members"],
+            "story_pipeline": runtime_metadata["story_pipeline"],
+            "review_phases": runtime_metadata["review_phases"] or story.get("review_phases", []),
+            "discoveries": build_story_discovery_context(state, story_id=int(story["id"])),
+            "pipeline_state": runtime_metadata["pipeline_state"],
+            "connector_activation": runtime_metadata["connector_activation"],
+            "tools": runtime_metadata["planned_tools"],
+            "active_tools": runtime_metadata["active_tools"],
+            "activation_errors": runtime_metadata["activation_errors"],
+            "worktree_path": runtime.get("worktree_path"),
+            "branch_name": runtime.get("branch_name"),
+            "ownership": runtime.get("ownership"),
+            "checkout": runtime.get("checkout"),
+            "github_pr": runtime.get("github_pr") or normalize_story_github_pr(project["name"], story),
+            "cost": dict(
+                (state.get("cost_usage", {}).get("stories") or {}).get(
+                    str(story["id"]),
+                    default_cost_usage()["project"],
+                )
+            ),
+        }
+        merged_story["handoff_artifact"] = _build_story_handoff_artifact(project, merged_story)
+        merged.append(merged_story)
     return merged
 
 
@@ -1384,6 +1387,25 @@ def _read_log_tail(log_path: str, lines: int = 80) -> str:
         return ""
     content = path.read_text().splitlines()
     return "\n".join(content[-lines:])
+
+
+def project_handoff_artifact_path(project: dict[str, Any]) -> Path:
+    return Path(project["path"]) / HANDOFF_ARTIFACT_RELPATH
+
+
+def _build_project_brief_contract(project: dict[str, Any]) -> dict[str, Any]:
+    control_plane = dict(project.get("control_plane") or {})
+    execution_brief = dict(control_plane.get("execution_brief") or {})
+    task_source = resolve_project_task_source(project)
+    brief_relpath = str(execution_brief.get("relpath") or task_source.get("brief_ref") or "").strip()
+    brief_title = str(execution_brief.get("title") or project.get("name") or "").strip()
+    brief_path = (Path(project["path"]) / brief_relpath).resolve() if brief_relpath else None
+    return {
+        "title": brief_title,
+        "relpath": brief_relpath,
+        "path": str(brief_path) if brief_path is not None and brief_path.exists() else "",
+        "present": bool(brief_path is not None and brief_path.exists()),
+    }
 
 
 def _project_progress_counts(stories: list[dict[str, Any]]) -> tuple[int, int]:
@@ -1438,25 +1460,98 @@ def _build_project_handoff_summary(stories: list[dict[str, Any]]) -> dict[str, A
     return candidates[0]
 
 
+def _build_story_handoff_artifact(project: dict[str, Any], story: dict[str, Any]) -> dict[str, Any] | None:
+    handoff = _build_story_handoff_summary(story)
+    if handoff is None:
+        return None
+
+    github_pr = dict(story.get("github_pr") or {})
+    artifact_path = project_handoff_artifact_path(project)
+    number = handoff.get("number")
+    url = str(handoff.get("url") or "").strip()
+    head_branch = str(handoff.get("head_branch") or "").strip()
+    ref = url or head_branch
+    ref_label = f"PR #{number}" if number else (head_branch or f"Story {int(story['id'])}")
+    return {
+        "artifact_id": f"handoff_{project['id']}_story_{int(story['id'])}",
+        "artifact_type": "github_pr" if number or url else "branch_handoff",
+        "project_id": project["id"],
+        "project_name": str(project.get("name") or ""),
+        "story": {
+            "id": int(story["id"]),
+            "title": str(story.get("title") or ""),
+        },
+        "task_source": resolve_project_task_source(project),
+        "brief": _build_project_brief_contract(project),
+        "ref": ref,
+        "ref_label": ref_label,
+        "relpath": HANDOFF_ARTIFACT_RELPATH,
+        "path": str(artifact_path.resolve()),
+        "present": artifact_path.exists(),
+        "generated_at": (
+            handoff.get("updated_at")
+            or story.get("updated_at")
+            or story.get("completed_at")
+            or story.get("started_at")
+        ),
+        "handoff": {
+            "provider": str(github_pr.get("provider") or "github").strip() or "github",
+            "head_branch": head_branch,
+            "base_branch": str(github_pr.get("base_branch") or "").strip(),
+            "number": number,
+            "url": url,
+            "title": str(github_pr.get("title") or "").strip(),
+            "state": str(handoff.get("state") or "").strip(),
+            "ci_status": str(handoff.get("ci_status") or "").strip(),
+            "review_status": str(handoff.get("review_status") or "").strip(),
+            "handoff_status": str(handoff.get("handoff_status") or "").strip(),
+            "merge_state": str(handoff.get("merge_state") or "").strip(),
+            "updated_at": handoff.get("updated_at"),
+        },
+    }
+
+
+def _build_project_handoff_artifact(
+    project: dict[str, Any],
+    stories: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    candidates = [artifact for story in stories if (artifact := _build_story_handoff_artifact(project, story)) is not None]
+    if not candidates:
+        return None
+    candidates.sort(
+        key=lambda artifact: (
+            str((artifact.get("handoff") or {}).get("updated_at") or artifact.get("generated_at") or ""),
+            int((artifact.get("story") or {}).get("id") or 0),
+        ),
+        reverse=True,
+    )
+    return candidates[0]
+
+
+def _write_project_handoff_artifact(
+    project: dict[str, Any],
+    stories: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    artifact = _build_project_handoff_artifact(project, stories)
+    if artifact is None:
+        return None
+    payload = dict(artifact)
+    payload["present"] = True
+    _atomic_write_json(project_handoff_artifact_path(project), payload)
+    artifact["present"] = True
+    return artifact
+
+
 def _build_project_delivery_loop(
     project: dict[str, Any],
     state: dict[str, Any],
     stories: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    control_plane = dict(project.get("control_plane") or {})
-    execution_brief = dict(control_plane.get("execution_brief") or {})
-    brief_relpath = str(execution_brief.get("relpath") or "").strip()
-    brief_path = (Path(project["path"]) / brief_relpath).resolve() if brief_relpath else None
     current_story = next((story for story in stories if story["id"] == state.get("current_story_id")), None)
     last_event = state.get("timeline", [])[-1] if state.get("timeline") else None
     return {
         "source": resolve_project_task_source(project),
-        "brief": {
-            "title": str(execution_brief.get("title") or "").strip(),
-            "relpath": brief_relpath,
-            "path": str(brief_path) if brief_path is not None and brief_path.exists() else "",
-            "present": bool(brief_path is not None and brief_path.exists()),
-        },
+        "brief": _build_project_brief_contract(project),
         "run": {
             "status": str(state.get("status") or "idle"),
             "started_at": state.get("started_at"),
@@ -1475,6 +1570,7 @@ def _build_project_delivery_loop(
             ),
         },
         "handoff": _build_project_handoff_summary(stories),
+        "artifact": _build_project_handoff_artifact(project, stories),
     }
 
 
