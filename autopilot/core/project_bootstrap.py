@@ -49,6 +49,7 @@ def create_project_from_prd(
     project_path: str | None = None,
     priority: str = "normal",
     launch: bool = False,
+    task_source: dict | None = None,
 ) -> CreatedProject:
     """Create a new local project directory from a PRD and optionally launch it."""
     normalized_prd = normalize_prd(prd, seed_mode="new")
@@ -91,6 +92,14 @@ def create_project_from_prd(
         project_path=root_dir,
         prd_relpath=".agents/tasks/prd.json",
         priority=priority,
+        task_source=task_source
+        or {
+            "source_kind": "local_brief",
+            "external_id": "",
+            "repo": str(root_dir),
+            "branch_policy": "isolated_worktree",
+            "brief_ref": ".agents/tasks/prd.json",
+        },
     )
     prd_path = save_project_prd(project_entry, normalized_prd)
     ensure_project_state(config, project_entry, seed_mode="new")

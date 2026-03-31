@@ -65,6 +65,8 @@ def test_create_list_detail_and_pause_project(tmp_path: Path, monkeypatch) -> No
     assert detail["stories"][1]["status"] == "open"
     assert detail["provider_config"]["family"] == "codex"
     assert detail["runtime_profile"]["id"] == "cloud"
+    assert detail["task_source"]["source_kind"] == "local_brief"
+    assert detail["task_source"]["branch_policy"] == "isolated_worktree"
 
     pause_response = client.post(f"/api/projects/{project_id}/pause")
     assert pause_response.status_code == 200
@@ -419,6 +421,8 @@ def test_create_project_from_execution_brief(
     assert "Core Thesis" in mock_generate_prd_from_spec.call_args.args[0]
     assert "Founder Context" in mock_generate_prd_from_spec.call_args.args[0]
     assert payload["project"]["source_kind"] == "execution_brief"
+    assert payload["project"]["task_source"]["source_kind"] == "execution_brief"
+    assert payload["project"]["task_source"]["branch_policy"] == "isolated_worktree"
     assert mock_launch_project_run.call_args.kwargs["launch_profile"]["preset"] == "parallel"
 
     state = load_project_state(config, payload["project_id"])

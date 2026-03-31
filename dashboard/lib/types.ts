@@ -32,6 +32,14 @@ export interface RuntimeProfile {
   default_tools: string[];
 }
 
+export interface TaskSource {
+  source_kind: string;
+  external_id: string;
+  repo: string;
+  branch_policy: string;
+  brief_ref: string;
+}
+
 export interface LaunchPreset {
   id: string;
   label: string;
@@ -221,6 +229,7 @@ export interface ProjectSummary {
   launch_profile?: LaunchProfile;
   provider_config?: ProviderConfig;
   runtime_profile?: RuntimeProfile;
+  task_source?: TaskSource;
   budget_policy?: RuntimeBudgetPolicy;
   budget_usage?: RuntimeBudgetUsage;
 }

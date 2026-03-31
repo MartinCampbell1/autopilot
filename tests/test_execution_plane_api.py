@@ -627,6 +627,8 @@ def test_execution_plane_routes_create_list_and_detail_projects(
     assert payload["status"] == "ok"
     assert payload["launched"] is False
     assert payload["project"]["source_kind"] == "execution_brief"
+    assert payload["project"]["task_source"]["source_kind"] == "execution_brief"
+    assert payload["project"]["task_source"]["branch_policy"] == "isolated_worktree"
     assert payload["project"]["initiative"]["id"] == "init_founderos_1"
     assert payload["project"]["orchestration"]["orchestrator"] == "founderos"
     assert payload["project"]["execution_brief_path"].endswith(".agents/tasks/execution-brief.json")
@@ -638,6 +640,8 @@ def test_execution_plane_routes_create_list_and_detail_projects(
     persisted_brief = json.loads(brief_path.read_text())
     assert persisted_brief["initiative"]["id"] == "init_founderos_1"
     assert persisted_brief["orchestration"]["run_id"] == "run_123"
+    assert persisted_brief["task_source"]["source_kind"] == "execution_brief"
+    assert persisted_brief["task_source"]["branch_policy"] == "isolated_worktree"
 
     project_id = payload["project"]["project_id"]
     list_response = client.get("/api/execution-plane/projects", params={"initiative_id": "init_founderos_1"})
@@ -654,6 +658,7 @@ def test_execution_plane_routes_create_list_and_detail_projects(
     assert detail_response.status_code == 200
     detail = detail_response.json()
     assert detail["brief"]["provenance"]["source_system"] == "quorum"
+    assert detail["task_source"]["source_kind"] == "execution_brief"
     assert detail["command_policy"]["parallel_launch_requires_approval"] is True
     assert detail["provider_config"]["family"] == "codex"
     assert detail["runtime_profile"]["id"] == "cloud"
