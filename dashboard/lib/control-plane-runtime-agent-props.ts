@@ -11,6 +11,7 @@ import type {
   ExecutionApprovalRecord,
   ExecutionAgentActionRunRecord,
   ExecutionIssueRecord,
+  ExecutionRuntimeAgentTaskRecord,
 } from "@/lib/types";
 
 type RuntimeAgentSectionProps = ComponentProps<typeof RuntimeAgentSection>;
@@ -58,6 +59,8 @@ type BuildRuntimeAgentSectionPropsArgs = {
     mode: "execute_now" | "request_approval"
   ) => Promise<void>;
   inspectAsyncFollowThrough: () => void;
+  refreshAsyncTask: (task: ExecutionRuntimeAgentTaskRecord) => Promise<void>;
+  waitForAsyncTaskSettlement: (task: ExecutionRuntimeAgentTaskRecord) => Promise<void>;
   onAllowToolPermissionRuntime: RuntimeAgentSectionProps["onAllowToolPermissionRuntime"];
   onDenyToolPermissionRuntime: RuntimeAgentSectionProps["onDenyToolPermissionRuntime"];
   agentScopedRuns: ExecutionAgentActionRunRecord[];
@@ -150,6 +153,8 @@ export function buildRuntimeAgentSectionProps({
   focusRuntimeAgent,
   runAgentSuggestedCommand,
   inspectAsyncFollowThrough,
+  refreshAsyncTask,
+  waitForAsyncTaskSettlement,
   onAllowToolPermissionRuntime,
   onDenyToolPermissionRuntime,
   agentScopedRuns,
@@ -370,6 +375,12 @@ export function buildRuntimeAgentSectionProps({
       void runAgentSuggestedCommand(command, mode);
     },
     onInspectAsyncFollowThrough: inspectAsyncFollowThrough,
+    onRefreshAsyncTask: (task) => {
+      void refreshAsyncTask(task);
+    },
+    onWaitForAsyncTaskSettlement: (task) => {
+      void waitForAsyncTaskSettlement(task);
+    },
     activitySectionProps,
     timelineSectionProps,
   };

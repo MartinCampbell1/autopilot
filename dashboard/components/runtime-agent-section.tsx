@@ -22,6 +22,7 @@ import {
 import type {
   ExecutionAgentActionRunRecord,
   ExecutionRuntimeAgentDetail,
+  ExecutionRuntimeAgentTaskRecord,
   ToolPermissionRuntimeRecord,
 } from "@/lib/types";
 
@@ -69,6 +70,8 @@ type RuntimeAgentSectionProps = {
     mode: "execute_now" | "request_approval"
   ) => void;
   onInspectAsyncFollowThrough: () => void;
+  onRefreshAsyncTask?: (task: ExecutionRuntimeAgentTaskRecord) => void;
+  onWaitForAsyncTaskSettlement?: (task: ExecutionRuntimeAgentTaskRecord) => void;
   activitySectionProps: ComponentProps<typeof RuntimeAgentActivitySection> | null;
   timelineSectionProps: ComponentProps<typeof RuntimeAgentTimelineSection> | null;
 };
@@ -88,6 +91,8 @@ export function RuntimeAgentSection({
   onFocusRuntimeAgent,
   onRunSuggestedCommand,
   onInspectAsyncFollowThrough,
+  onRefreshAsyncTask,
+  onWaitForAsyncTaskSettlement,
   activitySectionProps,
   timelineSectionProps,
 }: RuntimeAgentSectionProps) {
@@ -441,6 +446,34 @@ export function RuntimeAgentSection({
                       <p className="mt-2 text-[12px] text-[#6b6b6b]">
                         {task.result_summary || task.placeholder_result || "Background task is still running."}
                       </p>
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        {onRefreshAsyncTask && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-7 rounded-lg border-[#d3e5ef] bg-[#eef7fb] px-2 text-[11px] text-[#2a6690] hover:bg-[#e3f2f8]"
+                            disabled={Boolean(busyActionKey)}
+                            onClick={() => {
+                              onRefreshAsyncTask(task);
+                            }}
+                          >
+                            {busyActionKey === `async-task-refresh:${task.id}` ? "Refreshing..." : "Refresh"}
+                          </Button>
+                        )}
+                        {onWaitForAsyncTaskSettlement && !task.terminal && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-7 rounded-lg border-[#d6e9dc] bg-[#eef8f1] px-2 text-[11px] text-[#2b6e3f] hover:bg-[#e4f3e8]"
+                            disabled={Boolean(busyActionKey)}
+                            onClick={() => {
+                              onWaitForAsyncTaskSettlement(task);
+                            }}
+                          >
+                            {busyActionKey === `async-task-wait:${task.id}` ? "Waiting..." : "Wait"}
+                          </Button>
+                        )}
+                      </div>
                       <div className="mt-3 grid gap-2 sm:grid-cols-2">
                         <SessionMetric
                           label="Started"
