@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, type Dispatch, type SetStateAction } from "react";
+import { useCallback, useEffect, useRef, type Dispatch, type SetStateAction } from "react";
 import {
   fetchAccountsHealth,
   fetchExecutionPlaneAgentDetail,
@@ -35,6 +35,39 @@ const AGENT_ASYNC_REFRESH_EVENTS = new Set([
   "execution_plane_runtime_agent_task_cancelled",
 ]);
 
+const OVERVIEW_REFRESH_EVENTS = new Set([
+  "project_created",
+  "project_archived",
+  "run_started",
+  "run_finished",
+  "run_failed",
+  "paused",
+  "resumed",
+  "budget_paused",
+  "interrupt_paused",
+  "execution_plane_orchestrator_session_created",
+  "execution_plane_orchestrator_session_updated",
+  "execution_plane_orchestrator_session_recommendation_applied",
+  "execution_plane_orchestrator_session_control_plan_applied",
+  "execution_plane_orchestrator_session_control_pass_recorded",
+  "execution_plane_agent_action_pending_approval",
+  "execution_plane_agent_action_executed",
+  "execution_plane_agent_action_run_recorded",
+  "tool_permission_runtime_pending",
+  "tool_permission_runtime_resolved",
+]);
+
+const SESSION_REFRESH_EVENTS = new Set([
+  ...OVERVIEW_REFRESH_EVENTS,
+  ...AGENT_ASYNC_REFRESH_EVENTS,
+]);
+
+const CONTROL_PLANE_SSE_EVENT_TYPES = Array.from(
+  new Set([...OVERVIEW_REFRESH_EVENTS, ...SESSION_REFRESH_EVENTS])
+);
+
+const REFRESH_COALESCE_DELAY_MS = 300;
+
 type UseControlPlaneDataLoaderArgs = {
   selectedSessionId: string;
   selectedAgentId: string;
@@ -68,6 +101,29 @@ export function useControlPlaneDataLoader({
   setSelectedRunId,
   setSelectedPassId,
 }: UseControlPlaneDataLoaderArgs) {
+  const selectedSessionIdRef = useRef(selectedSessionId);
+  const selectedAgentIdRef = useRef(selectedAgentId);
+  const overviewRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const sessionRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const agentRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const scheduleOverviewRefreshRef = useRef<() => void>(() => {});
+  const scheduleSessionRefreshRef = useRef<() => void>(() => {});
+  const scheduleAgentRefreshRef = useRef<() => void>(() => {});
+  const overviewRefreshInFlightRef = useRef(false);
+  const sessionRefreshInFlightRef = useRef(false);
+  const agentRefreshInFlightRef = useRef(false);
+  const overviewRefreshQueuedRef = useRef(false);
+  const sessionRefreshQueuedRef = useRef(false);
+  const agentRefreshQueuedRef = useRef(false);
+
+  useEffect(() => {
+    selectedSessionIdRef.current = selectedSessionId;
+  }, [selectedSessionId]);
+
+  useEffect(() => {
+    selectedAgentIdRef.current = selectedAgentId;
+  }, [selectedAgentId]);
+
   const loadOverview = useCallback(async () => {
     try {
       const [
@@ -134,6 +190,100 @@ export function useControlPlaneDataLoader({
     return fetchExecutionPlaneAgentDetail(runtimeAgentId, { eventLimit: 12 });
   }, []);
 
+  const scheduleOverviewRefresh = useCallback(() => {
+    if (overviewRefreshTimerRef.current) {
+      return;
+    }
+    overviewRefreshTimerRef.current = setTimeout(() => {
+      overviewRefreshTimerRef.current = null;
+      if (overviewRefreshInFlightRef.current) {
+        overviewRefreshQueuedRef.current = true;
+        return;
+      }
+      overviewRefreshInFlightRef.current = true;
+      void loadOverview().finally(() => {
+        overviewRefreshInFlightRef.current = false;
+        if (overviewRefreshQueuedRef.current) {
+          overviewRefreshQueuedRef.current = false;
+          scheduleOverviewRefreshRef.current();
+        }
+      });
+    }, REFRESH_COALESCE_DELAY_MS);
+  }, [loadOverview]);
+
+  const scheduleSessionRefresh = useCallback(() => {
+    if (sessionRefreshTimerRef.current) {
+      return;
+    }
+    sessionRefreshTimerRef.current = setTimeout(() => {
+      sessionRefreshTimerRef.current = null;
+      const sessionId = selectedSessionIdRef.current;
+      if (!sessionId) {
+        return;
+      }
+      if (sessionRefreshInFlightRef.current) {
+        sessionRefreshQueuedRef.current = true;
+        return;
+      }
+      sessionRefreshInFlightRef.current = true;
+      void loadSessionDetail(sessionId)
+        .catch(() => {
+          // Keep current detail state on transient SSE fetch failures.
+        })
+        .finally(() => {
+          sessionRefreshInFlightRef.current = false;
+          if (sessionRefreshQueuedRef.current) {
+            sessionRefreshQueuedRef.current = false;
+            scheduleSessionRefreshRef.current();
+          }
+        });
+    }, REFRESH_COALESCE_DELAY_MS);
+  }, [loadSessionDetail]);
+
+  const scheduleAgentRefresh = useCallback(() => {
+    if (agentRefreshTimerRef.current) {
+      return;
+    }
+    agentRefreshTimerRef.current = setTimeout(() => {
+      agentRefreshTimerRef.current = null;
+      const runtimeAgentId = selectedAgentIdRef.current;
+      if (!runtimeAgentId) {
+        return;
+      }
+      if (agentRefreshInFlightRef.current) {
+        agentRefreshQueuedRef.current = true;
+        return;
+      }
+      agentRefreshInFlightRef.current = true;
+      void loadAgentDetail(runtimeAgentId)
+        .then((detail) => {
+          setSelectedAgent(detail);
+        })
+        .catch(() => {
+          // Keep current agent state on transient SSE fetch failures.
+        })
+        .finally(() => {
+          agentRefreshInFlightRef.current = false;
+          if (agentRefreshQueuedRef.current) {
+            agentRefreshQueuedRef.current = false;
+            scheduleAgentRefreshRef.current();
+          }
+        });
+    }, REFRESH_COALESCE_DELAY_MS);
+  }, [loadAgentDetail, setSelectedAgent]);
+
+  useEffect(() => {
+    scheduleOverviewRefreshRef.current = scheduleOverviewRefresh;
+  }, [scheduleOverviewRefresh]);
+
+  useEffect(() => {
+    scheduleSessionRefreshRef.current = scheduleSessionRefresh;
+  }, [scheduleSessionRefresh]);
+
+  useEffect(() => {
+    scheduleAgentRefreshRef.current = scheduleAgentRefresh;
+  }, [scheduleAgentRefresh]);
+
   useEffect(() => {
     const initialLoad = setTimeout(() => {
       void loadOverview();
@@ -147,31 +297,33 @@ export function useControlPlaneDataLoader({
     };
   }, [loadOverview]);
 
+  useEffect(() => {
+    return () => {
+      if (overviewRefreshTimerRef.current) clearTimeout(overviewRefreshTimerRef.current);
+      if (sessionRefreshTimerRef.current) clearTimeout(sessionRefreshTimerRef.current);
+      if (agentRefreshTimerRef.current) clearTimeout(agentRefreshTimerRef.current);
+    };
+  }, []);
+
   useSSE(
     useCallback((event) => {
-      void loadOverview();
-      if (selectedSessionId) {
-        void loadSessionDetail(selectedSessionId).catch(() => {
-          // Keep current detail state on transient SSE fetch failures.
-        });
+      if (OVERVIEW_REFRESH_EVENTS.has(event)) {
+        scheduleOverviewRefresh();
       }
-      if (selectedAgentId && AGENT_ASYNC_REFRESH_EVENTS.has(event)) {
-        void loadAgentDetail(selectedAgentId)
-          .then((detail) => {
-            setSelectedAgent(detail);
-          })
-          .catch(() => {
-            // Keep current agent state on transient SSE fetch failures.
-          });
+      if (SESSION_REFRESH_EVENTS.has(event)) {
+        scheduleSessionRefresh();
+      }
+      if (AGENT_ASYNC_REFRESH_EVENTS.has(event)) {
+        scheduleAgentRefresh();
       }
     }, [
-      loadAgentDetail,
-      loadOverview,
-      loadSessionDetail,
-      selectedAgentId,
-      selectedSessionId,
-      setSelectedAgent,
-    ])
+      scheduleAgentRefresh,
+      scheduleOverviewRefresh,
+      scheduleSessionRefresh,
+    ]),
+    {
+      eventTypes: CONTROL_PLANE_SSE_EVENT_TYPES,
+    }
   );
 
   return {
