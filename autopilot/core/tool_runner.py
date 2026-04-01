@@ -201,6 +201,7 @@ def _materialize_pending_classifier_runtime(
             "tool_use_id": tool_use_id,
             "actor": use_context.actor,
             "source": "classifier",
+            "orchestrator_session_id": str(use_context.orchestrator_session_id or "").strip(),
         },
     )
     annotate_approval_runtime(
@@ -258,6 +259,7 @@ def _materialize_pending_permission_runtime(
             "tool_use_id": tool_use_id,
             "actor": use_context.actor,
             "source": source,
+            "orchestrator_session_id": str(use_context.orchestrator_session_id or "").strip(),
         },
         publish_pending=True,
         pending_message_type="tool_permission_pending",
@@ -362,6 +364,7 @@ def _ensure_tool_permission_runtime(
             "tool_use_id": tool_use_id,
             "actor": use_context.actor,
             "source": permission_source,
+            "orchestrator_session_id": str(use_context.orchestrator_session_id or "").strip(),
         },
     )
     use_context.metadata["approval_runtime_id"] = runtime.id

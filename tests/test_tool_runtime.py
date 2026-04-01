@@ -613,6 +613,7 @@ def test_tool_runner_ask_creates_pending_user_runtime_and_mailbox(tmp_path: Path
             actor="tester",
             project_id="proj_tool_ask",
             runtime_agent_ids=("proj_tool_ask:1:worker:a", "proj_tool_ask:1:review:b"),
+            orchestrator_session_id="sess_tool_ask",
         ),
         permission_context=permission_context,
     )
@@ -629,12 +630,14 @@ def test_tool_runner_ask_creates_pending_user_runtime_and_mailbox(tmp_path: Path
     assert runtime is not None
     assert runtime.metadata["tool_name"] == "demo.pause"
     assert runtime.metadata["tool_use_id"].startswith("toolu_")
+    assert runtime.metadata["orchestrator_session_id"] == "sess_tool_ask"
     assert runtime.metadata["pending"]["stage"] == "pending_user"
     assert runtime.runtime_agent_ids == ["proj_tool_ask:1:review:b", "proj_tool_ask:1:worker:a"]
     assert len(generic_mailbox) == 2
     assert len(user_mailbox) == 2
     assert event_lines[-1]["event"] == "tool_permission_runtime_pending"
     assert event_lines[-1]["project_id"] == "proj_tool_ask"
+    assert event_lines[-1]["orchestrator_session_id"] == "sess_tool_ask"
     assert event_lines[-1]["pending_stage"] == "pending_user"
     assert event_lines[-1]["approval_runtime_id"] == result.approval_runtime_id
 
