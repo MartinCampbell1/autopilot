@@ -10,6 +10,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from autopilot.core.approval_runtime import annotate_approval_runtime, settle_approval_runtime
 from autopilot.core.config import AutopilotConfig
 from autopilot.core.permission_sync import annotate_permission_sync
 from autopilot.core.project_store import emit_project_event
@@ -42,6 +43,7 @@ class ApprovalRecord(BaseModel):
     orchestration_run_id: str = ""
     issue_id: str = ""
     permission_sync_key: str = ""
+    approval_runtime_id: str = ""
     runtime_agent_ids: list[str] = Field(default_factory=list)
     policy_reasons: list[str] = Field(default_factory=list)
     created_at: str
@@ -100,6 +102,7 @@ def create_approval(
     reason: str = "",
     issue_id: str = "",
     permission_sync_key: str = "",
+    approval_runtime_id: str = "",
     runtime_agent_ids: list[str] | None = None,
     policy_reasons: list[str] | None = None,
 ) -> ApprovalRecord:
@@ -121,6 +124,7 @@ def create_approval(
         orchestration_run_id=orchestration_run_id,
         issue_id=issue_id,
         permission_sync_key=permission_sync_key,
+        approval_runtime_id=approval_runtime_id,
         runtime_agent_ids=list(runtime_agent_ids or []),
         policy_reasons=list(policy_reasons or []),
         created_at=created_at,
@@ -147,6 +151,19 @@ def create_approval(
             approval.permission_sync_key,
             metadata_updates={
                 "settlement": {
+                    "stage": "pending",
+                    "approval_id": approval.id,
+                    "issue_id": approval.issue_id,
+                    "updated_at": approval.updated_at,
+                }
+            },
+        )
+    if approval.approval_runtime_id:
+        annotate_approval_runtime(
+            config,
+            approval_runtime_id=approval.approval_runtime_id,
+            metadata_updates={
+                "lifecycle": {
                     "stage": "pending",
                     "approval_id": approval.id,
                     "issue_id": approval.issue_id,
@@ -251,6 +268,20 @@ def decide_approval(
                 }
             },
         )
+    if approval.approval_runtime_id:
+        settle_approval_runtime(
+            config,
+            approval_runtime_id=approval.approval_runtime_id,
+            source="user",
+            outcome=decision,
+            message=note,
+            payload={
+                "approval_id": approval.id,
+                "issue_id": approval.issue_id,
+                "actor": actor,
+                "note": note,
+            },
+        )
     return approval
 
 
@@ -299,6 +330,25 @@ def mark_approval_applied(
                     "actor": actor,
                     "updated_at": approval.updated_at,
                 }
+            },
+        )
+    if approval.approval_runtime_id:
+        annotate_approval_runtime(
+            config,
+            approval_runtime_id=approval.approval_runtime_id,
+            metadata_updates={
+                "lifecycle": {
+                    "stage": "applied",
+                    "approval_id": approval.id,
+                    "issue_id": approval.issue_id,
+                    "actor": actor,
+                    "updated_at": approval.updated_at,
+                }
+            },
+            mailbox_message_type="approval_applied",
+            mailbox_payload={
+                "actor": actor,
+                "applied_at": approval.applied_at,
             },
         )
     return approval

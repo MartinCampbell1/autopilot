@@ -6,6 +6,8 @@ import io
 import json
 from pathlib import Path
 
+from autopilot.core.agent_mailbox import list_agent_mailbox_messages
+from autopilot.core.approval_runtime import get_approval_runtime
 from autopilot.core.config import AutopilotConfig
 from autopilot.core.permission_audit import read_permission_audit_entries
 from autopilot.core.structured_io import StructuredIO
@@ -280,6 +282,61 @@ def test_tool_runner_permission_hook_can_auto_allow_and_pre_hook_can_mutate_inpu
     assert result.tool_result is not None
     assert result.tool_result.payload["value"] == "mutated"
     assert result.tool_result.payload["post_hook"] is True
+
+
+def test_permission_request_hooks_use_first_decisive_runtime_settlement(tmp_path: Path) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    tool = build_tool(
+        name="demo.write",
+        description="Write demo payload.",
+        approval_policy="policy",
+        execute=lambda tool_input, _: ToolResult(status="ok", payload=tool_input),
+    )
+    permission_context = apply_permission_update(
+        get_empty_tool_permission_context(),
+        PermissionUpdate(
+            type="add_rules",
+            destination="session",
+            behavior="ask",
+            rules=[PermissionRuleValue(tool_name="demo.write")],
+        ),
+    )
+    hooks = [
+        ToolHookDefinition(
+            name="deny-first",
+            event="permission_request",
+            handler=lambda _: {"permission_behavior": "deny", "message": "Denied by the first hook."},
+        ),
+        ToolHookDefinition(
+            name="allow-later",
+            event="permission_request",
+            handler=lambda _: {"permission_behavior": "allow", "message": "Later hook tried to allow."},
+        ),
+    ]
+
+    result = run_tool_use(
+        tool,
+        {"value": "original"},
+        ToolUseContext(
+            config=config,
+            actor="tester",
+            project_id="proj_hooks",
+            runtime_agent_ids=("proj_hooks:1:worker:a",),
+            metadata={"tool_use_id": "toolu_hooks_1"},
+        ),
+        permission_context=permission_context,
+        hooks=hooks,
+    )
+
+    runtime = get_approval_runtime(config, key="tool-permission:proj_hooks:demo.write:toolu_hooks_1")
+    mailbox = list_agent_mailbox_messages(config, project_id="proj_hooks", runtime_agent_id="proj_hooks:1:worker:a")
+
+    assert result.status == "denied"
+    assert result.message == "Denied by the first hook."
+    assert runtime is not None
+    assert runtime.winner_source == "hook:deny-first"
+    assert runtime.outcome == "deny"
+    assert any(message.message_type == "permission_hook_deny" for message in mailbox)
 
 
 def test_tool_runner_returns_denied_for_explicit_rule() -> None:

@@ -1,0 +1,370 @@
+"""Resolve-once approval runtime contexts for deterministic settlement."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import time
+import uuid
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+from pydantic import BaseModel, Field
+
+from autopilot.core.agent_mailbox import publish_agent_mailbox_messages
+from autopilot.core.config import AutopilotConfig
+
+
+def _utcnow_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = path.with_suffix(f"{path.suffix}.{uuid.uuid4().hex}.tmp")
+    temp_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False))
+    temp_path.replace(path)
+
+
+def _runtime_id_for_key(key: str) -> str:
+    digest = hashlib.sha1(str(key or "").encode("utf-8")).hexdigest()[:12]
+    return f"apprt_{digest}"
+
+
+class ApprovalRuntimeRecord(BaseModel):
+    """One resolve-once approval context for approval or permission decisions."""
+
+    id: str
+    key: str
+    project_id: str
+    status: str = "pending"
+    approval_id: str = ""
+    issue_id: str = ""
+    permission_sync_key: str = ""
+    runtime_agent_ids: list[str] = Field(default_factory=list)
+    winner_source: str = ""
+    outcome: str = ""
+    message: str = ""
+    payload: dict[str, Any] = Field(default_factory=dict)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    created_at: str
+    updated_at: str
+    resolved_at: str | None = None
+
+
+def approval_runtime_path(config: AutopilotConfig, approval_runtime_id: str) -> Path:
+    """Return the persisted path for one approval runtime context."""
+
+    return config.approval_runtime_dir / f"{approval_runtime_id}.json"
+
+
+def approval_runtime_lock_path(config: AutopilotConfig, approval_runtime_id: str) -> Path:
+    """Return the resolve-once lock path for one approval runtime context."""
+
+    return approval_runtime_path(config, approval_runtime_id).with_suffix(".lock")
+
+
+def get_approval_runtime(
+    config: AutopilotConfig,
+    *,
+    approval_runtime_id: str = "",
+    key: str = "",
+) -> ApprovalRuntimeRecord | None:
+    """Load one approval runtime context by id or key."""
+
+    normalized_id = str(approval_runtime_id or "").strip() or _runtime_id_for_key(str(key or "").strip())
+    if not normalized_id:
+        return None
+    path = approval_runtime_path(config, normalized_id)
+    if not path.exists():
+        return None
+    try:
+        return ApprovalRuntimeRecord.model_validate(json.loads(path.read_text()))
+    except Exception:
+        return None
+
+
+def save_approval_runtime(
+    config: AutopilotConfig,
+    record: ApprovalRuntimeRecord,
+) -> ApprovalRuntimeRecord:
+    """Persist one approval runtime context."""
+
+    record.updated_at = _utcnow_iso()
+    _atomic_write_json(approval_runtime_path(config, record.id), record.model_dump())
+    return record
+
+
+def list_approval_runtimes(
+    config: AutopilotConfig,
+    *,
+    project_id: str | None = None,
+    approval_id: str | None = None,
+    issue_id: str | None = None,
+    status: str | None = None,
+    runtime_agent_id: str | None = None,
+) -> list[ApprovalRuntimeRecord]:
+    """List approval runtime contexts with lightweight filtering."""
+
+    directory = config.approval_runtime_dir
+    if not directory.exists():
+        return []
+    records: list[ApprovalRuntimeRecord] = []
+    for path in sorted(directory.glob("*.json")):
+        try:
+            record = ApprovalRuntimeRecord.model_validate(json.loads(path.read_text()))
+        except Exception:
+            continue
+        if project_id and record.project_id != project_id:
+            continue
+        if approval_id and record.approval_id != approval_id:
+            continue
+        if issue_id and record.issue_id != issue_id:
+            continue
+        if status and record.status != status:
+            continue
+        if runtime_agent_id and runtime_agent_id not in record.runtime_agent_ids:
+            continue
+        records.append(record)
+    records.sort(key=lambda item: (item.created_at, item.id))
+    return records
+
+
+def _try_claim_lock(lock_path: Path) -> bool:
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError:
+        return False
+    try:
+        os.write(fd, str(time.time()).encode("utf-8"))
+    finally:
+        os.close(fd)
+    return True
+
+
+def _release_lock(lock_path: Path) -> None:
+    try:
+        lock_path.unlink()
+    except FileNotFoundError:
+        pass
+
+
+def create_or_reuse_approval_runtime(
+    config: AutopilotConfig,
+    *,
+    key: str,
+    project_id: str,
+    approval_id: str = "",
+    issue_id: str = "",
+    permission_sync_key: str = "",
+    runtime_agent_ids: list[str] | tuple[str, ...] = (),
+    metadata: dict[str, Any] | None = None,
+    publish_pending: bool = False,
+    pending_message_type: str = "approval_pending",
+    pending_payload: dict[str, Any] | None = None,
+) -> ApprovalRuntimeRecord:
+    """Create or reuse one approval runtime context by stable key."""
+
+    normalized_key = str(key or "").strip()
+    if not normalized_key:
+        raise ValueError("Approval runtime requires `key`.")
+    runtime_id = _runtime_id_for_key(normalized_key)
+    existing = get_approval_runtime(config, approval_runtime_id=runtime_id)
+    desired_runtime_agent_ids = sorted({str(item).strip() for item in runtime_agent_ids if str(item).strip()})
+    if existing is None:
+        now = _utcnow_iso()
+        record = ApprovalRuntimeRecord(
+            id=runtime_id,
+            key=normalized_key,
+            project_id=str(project_id or "").strip(),
+            approval_id=str(approval_id or "").strip(),
+            issue_id=str(issue_id or "").strip(),
+            permission_sync_key=str(permission_sync_key or "").strip(),
+            runtime_agent_ids=desired_runtime_agent_ids,
+            metadata=dict(metadata or {}),
+            created_at=now,
+            updated_at=now,
+        )
+    else:
+        merged_metadata = dict(existing.metadata)
+        merged_metadata.update(dict(metadata or {}))
+        record = existing.model_copy(
+            update={
+                "project_id": str(project_id or "").strip() or existing.project_id,
+                "approval_id": str(approval_id or "").strip() or existing.approval_id,
+                "issue_id": str(issue_id or "").strip() or existing.issue_id,
+                "permission_sync_key": str(permission_sync_key or "").strip() or existing.permission_sync_key,
+                "runtime_agent_ids": sorted({*existing.runtime_agent_ids, *desired_runtime_agent_ids}),
+                "metadata": merged_metadata,
+            }
+        )
+    saved = save_approval_runtime(config, record)
+    if publish_pending and saved.runtime_agent_ids:
+        publish_agent_mailbox_messages(
+            config,
+            project_id=saved.project_id,
+            runtime_agent_ids=saved.runtime_agent_ids,
+            message_type=pending_message_type,
+            payload={
+                "approval_runtime_id": saved.id,
+                "approval_id": saved.approval_id,
+                "issue_id": saved.issue_id,
+                "permission_sync_key": saved.permission_sync_key,
+                **dict(pending_payload or {}),
+            },
+            dedupe_key=f"{saved.id}:{pending_message_type}",
+            approval_id=saved.approval_id,
+            approval_runtime_id=saved.id,
+            issue_id=saved.issue_id,
+            permission_sync_key=saved.permission_sync_key,
+        )
+    return saved
+
+
+def settle_approval_runtime(
+    config: AutopilotConfig,
+    *,
+    approval_runtime_id: str = "",
+    key: str = "",
+    source: str,
+    outcome: str,
+    message: str = "",
+    payload: dict[str, Any] | None = None,
+    metadata_updates: dict[str, Any] | None = None,
+    mailbox_message_type: str | None = None,
+) -> ApprovalRuntimeRecord:
+    """Resolve one approval runtime exactly once; later writers observe the winner."""
+
+    record = get_approval_runtime(config, approval_runtime_id=approval_runtime_id, key=key)
+    if record is None:
+        raise KeyError(approval_runtime_id or key)
+    lock_path = approval_runtime_lock_path(config, record.id)
+    deadline = time.monotonic() + 2.0
+    while True:
+        current = get_approval_runtime(config, approval_runtime_id=record.id)
+        if current is None:
+            raise KeyError(record.id)
+        if current.status == "resolved":
+            return current
+        if _try_claim_lock(lock_path):
+            try:
+                latest = get_approval_runtime(config, approval_runtime_id=record.id)
+                if latest is None:
+                    raise KeyError(record.id)
+                if latest.status == "resolved":
+                    return latest
+                merged_metadata = dict(latest.metadata)
+                merged_metadata.update(dict(metadata_updates or {}))
+                resolved = latest.model_copy(
+                    update={
+                        "status": "resolved",
+                        "winner_source": str(source or "").strip(),
+                        "outcome": str(outcome or "").strip(),
+                        "message": str(message or "").strip(),
+                        "payload": dict(payload or {}),
+                        "metadata": merged_metadata,
+                        "resolved_at": _utcnow_iso(),
+                    }
+                )
+                resolved = save_approval_runtime(config, resolved)
+                if resolved.runtime_agent_ids:
+                    resolved_message_type = (
+                        str(mailbox_message_type).strip()
+                        if mailbox_message_type is not None
+                        else f"approval_{resolved.outcome or 'resolved'}"
+                    )
+                    publish_agent_mailbox_messages(
+                        config,
+                        project_id=resolved.project_id,
+                        runtime_agent_ids=resolved.runtime_agent_ids,
+                        message_type=resolved_message_type,
+                        payload={
+                            "approval_runtime_id": resolved.id,
+                            "approval_id": resolved.approval_id,
+                            "issue_id": resolved.issue_id,
+                            "permission_sync_key": resolved.permission_sync_key,
+                            "source": resolved.winner_source,
+                            "outcome": resolved.outcome,
+                            "message": resolved.message,
+                            **dict(resolved.payload or {}),
+                        },
+                        dedupe_key=f"{resolved.id}:{resolved_message_type}",
+                        approval_id=resolved.approval_id,
+                        approval_runtime_id=resolved.id,
+                        issue_id=resolved.issue_id,
+                        permission_sync_key=resolved.permission_sync_key,
+                    )
+                return resolved
+            finally:
+                _release_lock(lock_path)
+        if time.monotonic() >= deadline:
+            latest = get_approval_runtime(config, approval_runtime_id=record.id)
+            if latest is not None:
+                return latest
+            raise TimeoutError(f"Timed out settling approval runtime `{record.id}`.")
+        time.sleep(0.02)
+
+
+def annotate_approval_runtime(
+    config: AutopilotConfig,
+    *,
+    approval_runtime_id: str = "",
+    key: str = "",
+    metadata_updates: dict[str, Any] | None = None,
+    payload_updates: dict[str, Any] | None = None,
+    mailbox_message_type: str | None = None,
+    mailbox_payload: dict[str, Any] | None = None,
+) -> ApprovalRuntimeRecord:
+    """Update one approval runtime context without changing its winner."""
+
+    record = get_approval_runtime(config, approval_runtime_id=approval_runtime_id, key=key)
+    if record is None:
+        raise KeyError(approval_runtime_id or key)
+    metadata = dict(record.metadata)
+    for meta_key, value in (metadata_updates or {}).items():
+        if isinstance(value, dict) and isinstance(metadata.get(meta_key), dict):
+            metadata[meta_key] = {**dict(metadata.get(meta_key) or {}), **value}
+        else:
+            metadata[meta_key] = value
+    payload = dict(record.payload)
+    for payload_key, value in (payload_updates or {}).items():
+        if isinstance(value, dict) and isinstance(payload.get(payload_key), dict):
+            payload[payload_key] = {**dict(payload.get(payload_key) or {}), **value}
+        else:
+            payload[payload_key] = value
+    updated = record.model_copy(update={"metadata": metadata, "payload": payload})
+    updated = save_approval_runtime(config, updated)
+    if mailbox_message_type and updated.runtime_agent_ids:
+        publish_agent_mailbox_messages(
+            config,
+            project_id=updated.project_id,
+            runtime_agent_ids=updated.runtime_agent_ids,
+            message_type=str(mailbox_message_type).strip(),
+            payload={
+                "approval_runtime_id": updated.id,
+                "approval_id": updated.approval_id,
+                "issue_id": updated.issue_id,
+                "permission_sync_key": updated.permission_sync_key,
+                **dict(mailbox_payload or {}),
+            },
+            dedupe_key=f"{updated.id}:{str(mailbox_message_type).strip()}",
+            approval_id=updated.approval_id,
+            approval_runtime_id=updated.id,
+            issue_id=updated.issue_id,
+            permission_sync_key=updated.permission_sync_key,
+        )
+    return updated
+
+
+__all__ = [
+    "ApprovalRuntimeRecord",
+    "annotate_approval_runtime",
+    "create_or_reuse_approval_runtime",
+    "get_approval_runtime",
+    "list_approval_runtimes",
+    "save_approval_runtime",
+    "settle_approval_runtime",
+]
