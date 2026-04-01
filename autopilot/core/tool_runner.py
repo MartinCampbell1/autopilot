@@ -31,6 +31,11 @@ from autopilot.core.tool_hooks import (
     execute_permission_request_hooks,
     run_pre_tool_use_hooks,
 )
+from autopilot.core.tool_permission_runtime import (
+    get_tool_permission_runtime,
+    get_tool_permission_runtime_decision,
+    tool_permission_runtime_key,
+)
 from autopilot.core.tool_permissions import PermissionDecision, resolve_tool_permission_decision
 from autopilot.core.tool_permissions import has_permissions_to_use_tool
 from autopilot.core.tool_result_storage import store_large_tool_result
@@ -209,11 +214,39 @@ def _tool_permission_runtime_key(
     use_context: ToolUseContext,
     tool_use_id: str,
 ) -> str:
-    normalized_project_id = str(use_context.project_id or "").strip()
-    normalized_tool_use_id = str(tool_use_id or "").strip()
-    if not normalized_project_id or not normalized_tool_use_id:
-        return ""
-    return f"tool-permission:{normalized_project_id}:{tool.name}:{normalized_tool_use_id}"
+    return tool_permission_runtime_key(
+        str(use_context.project_id or ""),
+        tool.name,
+        tool_use_id,
+    )
+
+
+def _observe_existing_tool_permission_runtime(
+    tool: ToolDef,
+    use_context: ToolUseContext,
+    *,
+    tool_use_id: str,
+) -> tuple[str, str, PermissionDecision | None]:
+    if use_context.config is None:
+        return "", "", None
+    runtime_key = _tool_permission_runtime_key(tool, use_context, tool_use_id)
+    if not runtime_key:
+        return "", "", None
+    existing_runtime = get_tool_permission_runtime(use_context.config, key=runtime_key)
+    if existing_runtime is None:
+        return runtime_key, "", None
+    _ensure_tool_permission_runtime(
+        tool,
+        use_context,
+        tool_use_id=tool_use_id,
+        permission_source="tool_runner.runtime_reuse",
+    )
+    observed = get_tool_permission_runtime_decision(use_context.config, key=runtime_key)
+    if observed is None:
+        return runtime_key, "", None
+    runtime_record, decision = observed
+    use_context.metadata["approval_runtime_id"] = runtime_record.id
+    return runtime_key, runtime_record.id, decision
 
 
 def _ensure_tool_permission_runtime(
@@ -561,7 +594,20 @@ def run_tool_use(
     resolved_permission_context = permission_context or get_empty_tool_permission_context()
     hook_records: list[HookExecutionRecord] = []
     tool_use_id = _resolve_tool_use_id(use_context, normalized_input)
-    bridge_decision, permission_source = _bridge_permission_decision(tool, normalized_input, use_context)
+    _, reused_approval_runtime_id, reused_runtime_decision = _observe_existing_tool_permission_runtime(
+        tool,
+        use_context,
+        tool_use_id=tool_use_id,
+    )
+    if reused_runtime_decision is not None:
+        bridge_decision = reused_runtime_decision
+        permission_source = (
+            "tool_runner.runtime_resolved_reuse"
+            if reused_runtime_decision.behavior in {"allow", "deny"}
+            else "tool_runner.runtime_pending_reuse"
+        )
+    else:
+        bridge_decision, permission_source = _bridge_permission_decision(tool, normalized_input, use_context)
     classifier_context = _permission_classifier_context_from_use_context(use_context)
     precomputed_decision = bridge_decision
     if precomputed_decision is None:
@@ -592,7 +638,7 @@ def run_tool_use(
         actor=use_context.actor,
         source=permission_source,
     )
-    if permission_decision.behavior in {"ask", "pending_classifier", "pending_user"}:
+    if reused_runtime_decision is None and permission_decision.behavior in {"ask", "pending_classifier", "pending_user"}:
         permission_hook_result = execute_permission_request_hooks(
             tool,
             normalized_input,
@@ -612,6 +658,21 @@ def run_tool_use(
                 hooks=hook_records,
             )
         permission_decision = permission_hook_result.permission_decision or permission_decision
+
+    if reused_runtime_decision is not None and permission_decision.behavior in {
+        "pending_classifier",
+        "pending_hook",
+        "pending_user",
+    }:
+        return ToolRunResult(
+            status="approval_required",
+            tool_name=tool.name,
+            message=permission_decision.message,
+            input=normalized_input,
+            permission=permission_decision,
+            approval_runtime_id=reused_approval_runtime_id,
+            hooks=hook_records,
+        )
 
     if permission_decision.behavior == "pending_classifier":
         approval_runtime_id = _materialize_pending_classifier_runtime(

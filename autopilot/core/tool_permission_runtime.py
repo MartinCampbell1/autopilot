@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Literal
+from typing import Any, Literal
 
 from autopilot.core.approval_runtime import (
     ApprovalRuntimeRecord,
@@ -12,6 +12,7 @@ from autopilot.core.approval_runtime import (
     settle_approval_runtime,
 )
 from autopilot.core.config import AutopilotConfig
+from autopilot.core.tool_permissions import PermissionDecision
 
 ToolPermissionResolutionOutcome = Literal["allow", "deny"]
 ToolPermissionResolutionSource = Literal["user", "channel"]
@@ -26,16 +27,141 @@ def _is_tool_permission_runtime(record: ApprovalRuntimeRecord) -> bool:
     return kind.startswith("tool_permission")
 
 
+def tool_permission_runtime_key(project_id: str, tool_name: str, tool_use_id: str) -> str:
+    """Return the stable runtime key for one tool-permission request."""
+
+    normalized_project_id = str(project_id or "").strip()
+    normalized_tool_name = str(tool_name or "").strip()
+    normalized_tool_use_id = str(tool_use_id or "").strip()
+    if not normalized_project_id or not normalized_tool_name or not normalized_tool_use_id:
+        return ""
+    return f"tool-permission:{normalized_project_id}:{normalized_tool_name}:{normalized_tool_use_id}"
+
+
+def _dict_value(value: Any) -> dict[str, Any]:
+    return dict(value) if isinstance(value, dict) else {}
+
+
+def _string_value(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def _first_string(candidates: list[dict[str, Any]], key: str) -> str:
+    for candidate in candidates:
+        value = _string_value(candidate.get(key))
+        if value:
+            return value
+    return ""
+
+
+def _first_reasons(candidates: list[dict[str, Any]]) -> list[str]:
+    for candidate in candidates:
+        reasons = [str(reason).strip() for reason in candidate.get("reasons") or [] if str(reason).strip()]
+        if reasons:
+            return reasons
+    return []
+
+
+def _pending_stage(record: ApprovalRuntimeRecord) -> str:
+    pending = _dict_value(record.metadata.get("pending"))
+    stage = _string_value(pending.get("stage"))
+    if stage:
+        return stage
+    classifier = _dict_value(record.metadata.get("classifier"))
+    stage = _string_value(classifier.get("stage"))
+    if stage == "pending_classifier":
+        return stage
+    return ""
+
+
+def permission_decision_from_tool_permission_runtime(
+    record: ApprovalRuntimeRecord,
+) -> PermissionDecision | None:
+    """Project one persisted tool-permission runtime into a permission decision."""
+
+    if not _is_tool_permission_runtime(record):
+        return None
+
+    status = _string_value(record.status)
+    if status == "resolved":
+        behavior = _string_value(record.outcome).lower()
+    elif status == "pending":
+        behavior = _pending_stage(record)
+    else:
+        behavior = ""
+    if behavior not in {"allow", "deny", "pending_classifier", "pending_user", "pending_hook"}:
+        return None
+
+    payload = _dict_value(record.payload)
+    metadata_bridge = _dict_value(record.metadata.get("bridge_decision"))
+    metadata_classifier = _dict_value(record.metadata.get("classifier"))
+    candidates: list[dict[str, Any]] = []
+    if behavior:
+        candidates.append(_dict_value(payload.get(behavior)))
+    if behavior == "pending_classifier":
+        candidates.append(_dict_value(payload.get("classifier")))
+        candidates.append(_dict_value(payload.get("classifier_decision")))
+        candidates.append(metadata_classifier)
+    candidates.append(_dict_value(payload.get("bridge_decision")))
+    candidates.append(metadata_bridge)
+    candidates.append(_dict_value(payload.get("resolution")))
+    candidates.append(payload)
+
+    message = _string_value(record.message) or _first_string(candidates, "message")
+    reasons = _first_reasons(candidates)
+    if not reasons and message:
+        reasons = [message]
+    rule_source = _first_string(candidates, "rule_source") or (
+        "classifier" if behavior == "pending_classifier" else ""
+    )
+    matched_rule = _first_string(candidates, "matched_rule")
+    denial_count_raw = _first_string(candidates, "denial_count")
+    try:
+        denial_count = int(denial_count_raw or 0)
+    except ValueError:
+        denial_count = 0
+    escalation_required = any(bool(candidate.get("escalation_required")) for candidate in candidates)
+
+    return PermissionDecision(
+        behavior=behavior,
+        message=message,
+        reasons=reasons,
+        rule_source=rule_source or None,
+        matched_rule=matched_rule or None,
+        denial_count=denial_count,
+        escalation_required=escalation_required,
+    )
+
+
 def get_tool_permission_runtime(
     config: AutopilotConfig,
-    approval_runtime_id: str,
+    approval_runtime_id: str = "",
+    *,
+    key: str = "",
 ) -> ApprovalRuntimeRecord | None:
     """Return one tool-permission runtime if it exists."""
 
-    record = get_approval_runtime(config, approval_runtime_id=approval_runtime_id)
+    record = get_approval_runtime(config, approval_runtime_id=approval_runtime_id, key=key)
     if record is None or not _is_tool_permission_runtime(record):
         return None
     return record
+
+
+def get_tool_permission_runtime_decision(
+    config: AutopilotConfig,
+    *,
+    approval_runtime_id: str = "",
+    key: str = "",
+) -> tuple[ApprovalRuntimeRecord, PermissionDecision] | None:
+    """Return the current pending/resolved decision for one tool-permission runtime."""
+
+    record = get_tool_permission_runtime(config, approval_runtime_id=approval_runtime_id, key=key)
+    if record is None:
+        return None
+    decision = permission_decision_from_tool_permission_runtime(record)
+    if decision is None:
+        return None
+    return record, decision
 
 
 def list_tool_permission_runtimes(
@@ -156,7 +282,10 @@ __all__ = [
     "ToolPermissionResolutionOutcome",
     "ToolPermissionResolutionSource",
     "get_tool_permission_runtime",
+    "get_tool_permission_runtime_decision",
     "list_tool_permission_runtimes",
+    "permission_decision_from_tool_permission_runtime",
     "serialize_tool_permission_runtime",
     "resolve_tool_permission_runtime",
+    "tool_permission_runtime_key",
 ]

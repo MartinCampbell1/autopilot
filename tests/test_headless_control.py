@@ -595,6 +595,113 @@ def test_headless_control_can_return_pending_user_runtime(tmp_path: Path) -> Non
     assert len(user_mailbox) == 1
 
 
+def test_headless_control_reuses_existing_tool_permission_runtime_for_same_tool_use_id(tmp_path: Path) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    project = _create_project(config, tmp_path / "project")
+    session = create_headless_control_session(config, project_entry=project, session_id="sess_headless")
+    request_payload = {
+        "subtype": "can_use_tool",
+        "tool_name": "demo.read",
+        "input": {"path": "README.md"},
+        "tool_use_id": "toolu_reuse",
+        "agent_id": "proj_headless_reuse:1:worker:a",
+    }
+
+    first = session.handle_request(
+        {
+            "type": "control_request",
+            "request_id": "req_can_use_tool_reuse_first",
+            "request": request_payload,
+            "session_id": "sess_headless",
+        }
+    ).response.response
+    generic_pending_before = list_agent_mailbox_messages(
+        config,
+        project_id=str(project["id"]),
+        runtime_agent_id="proj_headless_reuse:1:worker:a",
+        message_type="tool_permission_pending",
+    )
+    user_pending_before = list_agent_mailbox_messages(
+        config,
+        project_id=str(project["id"]),
+        runtime_agent_id="proj_headless_reuse:1:worker:a",
+        message_type="tool_permission_user_pending",
+    )
+
+    second = session.handle_request(
+        {
+            "type": "control_request",
+            "request_id": "req_can_use_tool_reuse_second",
+            "request": request_payload,
+            "session_id": "sess_headless",
+        }
+    ).response.response
+    generic_pending_after = list_agent_mailbox_messages(
+        config,
+        project_id=str(project["id"]),
+        runtime_agent_id="proj_headless_reuse:1:worker:a",
+        message_type="tool_permission_pending",
+    )
+    user_pending_after = list_agent_mailbox_messages(
+        config,
+        project_id=str(project["id"]),
+        runtime_agent_id="proj_headless_reuse:1:worker:a",
+        message_type="tool_permission_user_pending",
+    )
+
+    assert first["behavior"] == "pending_user"
+    assert first["approval_runtime_id"]
+    assert second["behavior"] == "pending_user"
+    assert second["approval_runtime_id"] == first["approval_runtime_id"]
+    assert len(generic_pending_before) == 1
+    assert len(user_pending_before) == 1
+    assert len(generic_pending_after) == 1
+    assert len(user_pending_after) == 1
+
+    session.handle_request(
+        {
+            "type": "control_request",
+            "request_id": "req_resolve_tool_permission_runtime_reuse",
+            "request": {
+                "subtype": "resolve_tool_permission_runtime",
+                "approval_runtime_id": str(first["approval_runtime_id"]),
+                "outcome": "allow",
+                "actor": "founderos",
+                "note": "Continue with the tool.",
+                "source": "user",
+            },
+            "session_id": "sess_headless",
+        }
+    )
+
+    third = session.handle_request(
+        {
+            "type": "control_request",
+            "request_id": "req_can_use_tool_reuse_third",
+            "request": request_payload,
+            "session_id": "sess_headless",
+        }
+    ).response.response
+    generic_pending_final = list_agent_mailbox_messages(
+        config,
+        project_id=str(project["id"]),
+        runtime_agent_id="proj_headless_reuse:1:worker:a",
+        message_type="tool_permission_pending",
+    )
+    user_pending_final = list_agent_mailbox_messages(
+        config,
+        project_id=str(project["id"]),
+        runtime_agent_id="proj_headless_reuse:1:worker:a",
+        message_type="tool_permission_user_pending",
+    )
+
+    assert third["behavior"] == "allow"
+    assert third["approval_runtime_id"] == first["approval_runtime_id"]
+    assert third["message"] == "Continue with the tool."
+    assert len(generic_pending_final) == 1
+    assert len(user_pending_final) == 1
+
+
 def test_headless_control_can_list_get_and_resolve_tool_permission_runtimes(tmp_path: Path) -> None:
     config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
     project = _create_project(config, tmp_path / "project")
