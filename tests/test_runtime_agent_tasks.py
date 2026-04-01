@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from autopilot.core.agent_mailbox import list_agent_mailbox_messages
 from autopilot.core.config import AutopilotConfig
 from autopilot.core.project_store import (
     ensure_project_state,
@@ -18,6 +19,7 @@ from autopilot.core.runtime_agent_tasks import (
     link_runtime_agent_task_run,
     list_runtime_agent_tasks,
     refresh_runtime_agent_task,
+    wait_for_runtime_agent_task_mailbox_resolution,
 )
 from autopilot.core.task_output import get_task_output, read_task_output_text
 from autopilot.core.task_transcript import get_task_transcript, read_task_transcript_text, task_transcript_id
@@ -154,3 +156,80 @@ def test_runtime_agent_task_persists_transcript_history_and_run_link(tmp_path: P
     assert "linked_agent_action_run" in transcript_text
     assert "task_completed" in transcript_text
     assert refreshed.history[-1]["event"] == "task_completed"
+
+
+def test_runtime_agent_task_terminal_transition_publishes_resolution_mailbox(tmp_path: Path) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    project = _seed_project(config, tmp_path / "async-task-mailbox-project")
+    log_path = config.autopilot_home / "logs" / "mailbox.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path.write_text("launch started\nlaunch finished\n", encoding="utf-8")
+
+    task = create_or_reuse_runtime_agent_task(
+        config,
+        project_id=str(project["id"]),
+        command="launch",
+        actor="founderos",
+        reason="Launch background work.",
+        orchestrator_session_id="ors_async_mailbox",
+        runtime_agent_ids=["proj:1:worker:a"],
+        output_path=str(log_path),
+    )
+    link_runtime_agent_task_run(config, task.id, agent_action_run_id="aar_mailbox_1")
+
+    state = load_project_state(config, str(project["id"]))
+    state["status"] = "completed"
+    state["paused"] = False
+    state["finished_at"] = "2026-04-01T12:34:56+00:00"
+    state["log_path"] = str(log_path)
+    save_project_state(config, str(project["id"]), state)
+
+    refreshed = refresh_runtime_agent_task(config, task.id)
+    messages = list_agent_mailbox_messages(
+        config,
+        project_id=str(project["id"]),
+        runtime_agent_id="proj:1:worker:a",
+    )
+
+    assert refreshed.status == "completed"
+    assert any(message.message_type == "runtime_agent_task_resolved" for message in messages)
+    specific = next(message for message in messages if message.message_type == "runtime_agent_task_completed")
+    assert specific.payload["task_id"] == task.id
+    assert specific.payload["agent_action_run_id"] == "aar_mailbox_1"
+    assert specific.payload["resume_contract"]["task_id"] == task.id
+
+
+def test_wait_for_runtime_agent_task_mailbox_resolution_returns_terminal_task(tmp_path: Path) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    project = _seed_project(config, tmp_path / "async-task-mailbox-wait-project")
+    log_path = config.autopilot_home / "logs" / "mailbox-wait.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path.write_text("resume started\nresume finished\n", encoding="utf-8")
+
+    task = create_or_reuse_runtime_agent_task(
+        config,
+        project_id=str(project["id"]),
+        command="resume",
+        actor="founderos",
+        reason="Resume background work.",
+        runtime_agent_ids=["proj:1:worker:a"],
+        output_path=str(log_path),
+    )
+
+    state = load_project_state(config, str(project["id"]))
+    state["status"] = "completed"
+    state["paused"] = False
+    state["finished_at"] = "2026-04-01T12:36:00+00:00"
+    state["log_path"] = str(log_path)
+    save_project_state(config, str(project["id"]), state)
+
+    refresh_runtime_agent_task(config, task.id)
+    resolved = wait_for_runtime_agent_task_mailbox_resolution(
+        config,
+        runtime_agent_id="proj:1:worker:a",
+        task_id=task.id,
+        wait_timeout_sec=0.1,
+    )
+
+    assert resolved.id == task.id
+    assert resolved.status == "completed"

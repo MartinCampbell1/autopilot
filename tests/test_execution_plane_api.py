@@ -2736,6 +2736,82 @@ def test_execution_plane_agent_action_run_surfaces_linked_async_task_without_inl
 
 
 @patch("autopilot.core.execution_plane.generate_prd_from_spec")
+def test_execution_plane_agent_action_run_wait_for_async_settlement_observes_linked_task_mailbox(
+    mock_generate_prd_from_spec,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    client = _build_client(config, monkeypatch)
+    mock_generate_prd_from_spec.return_value = {
+        "title": "FounderOS Copilot",
+        "description": "Execution-ready FounderOS project.",
+        "stories": [{"id": 1, "title": "Bootstrap", "description": "Create the app shell"}],
+    }
+
+    created = _create_execution_project(client, tmp_path / "action-run-mailbox-project")
+    project_id = created["project"]["project_id"]
+    session = _create_orchestrator_session(
+        client,
+        project_ids=[project_id],
+        actor="founderos",
+        title="Async action run mailbox lifecycle",
+    )
+
+    task = create_or_reuse_runtime_agent_task(
+        config,
+        project_id=project_id,
+        command="launch",
+        actor="founderos",
+        reason="Launch background execution.",
+        orchestrator_session_id=session["id"],
+        runtime_agent_ids=["runtime-agent-1"],
+        output_path=str(config.autopilot_home / "logs" / f"{project_id}.log"),
+    )
+    run = create_agent_action_batch_run(
+        config,
+        run_kind="single_action",
+        orchestrator_session_id=session["id"],
+        actor="founderos",
+        mode="auto",
+        selection={"mode": "single_action", "project_id": project_id},
+        summary={"selected_count": 1, "processed_count": 1, "status_counts": {"ok": 1}},
+        results=[{"status": "ok", "command_result": {"command": "launch"}, "async_task": {"id": task.id}}],
+        status="ok",
+        project_ids=[project_id],
+        runtime_agent_ids=["runtime-agent-1"],
+    )
+    link_runtime_agent_task_run(config, task.id, agent_action_run_id=run.id)
+
+    state = load_project_state(config, project_id)
+    state["status"] = "completed"
+    state["paused"] = False
+    state["finished_at"] = "2026-04-01T12:55:00+00:00"
+    log_path = config.autopilot_home / "logs" / f"{project_id}.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path.write_text("launch started\nlaunch finished\n", encoding="utf-8")
+    state["log_path"] = str(log_path)
+    save_project_state(config, project_id, state)
+
+    response = client.get(
+        f"/api/execution-plane/agents/action-runs/{run.id}",
+        params={"wait_for_async_settlement": "true", "runtime_agent_id": "runtime-agent-1", "wait_timeout_ms": 200},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["completion_state"] == "completed"
+    assert payload["active_async_task_count"] == 0
+    assert payload["async_tasks"][0]["id"] == task.id
+    mailbox = list_agent_mailbox_messages(
+        config,
+        project_id=project_id,
+        runtime_agent_id="runtime-agent-1",
+        message_type="runtime_agent_task_resolved",
+    )
+    assert any(message.payload["task_id"] == task.id for message in mailbox)
+
+
+@patch("autopilot.core.execution_plane.generate_prd_from_spec")
 def test_execution_plane_agent_action_batch_execute_escalates_filtered_actions(
     mock_generate_prd_from_spec,
     tmp_path: Path,

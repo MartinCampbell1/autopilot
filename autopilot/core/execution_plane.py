@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
@@ -108,6 +109,7 @@ from autopilot.core.runtime_agent_tasks import (
     link_runtime_agent_task_run,
     list_runtime_agent_tasks,
     refresh_runtime_agent_task,
+    wait_for_runtime_agent_task_mailbox_resolution,
 )
 from autopilot.core.runtime_budgets import ensure_budget_state
 from autopilot.core.runtime_control import list_project_work_item_leases
@@ -2673,6 +2675,65 @@ def get_execution_plane_agent_action_run(
     if record is None:
         raise KeyError(run_id)
     return _materialize_execution_plane_agent_action_run_record(config, record)
+
+
+def wait_for_execution_plane_agent_action_run_async_settlement(
+    config: AutopilotConfig,
+    run_id: str,
+    *,
+    runtime_agent_id: str = "",
+    wait_timeout_sec: float = 0.5,
+) -> dict[str, Any]:
+    """Wait for one pending async action run to settle via linked task mailbox messages."""
+
+    record = get_agent_action_batch_run(config, run_id)
+    if record is None:
+        raise KeyError(run_id)
+
+    payload = _materialize_execution_plane_agent_action_run_record(config, record)
+    if str(payload.get("completion_state") or "") != "pending_async":
+        return payload
+
+    async_tasks = [
+        dict(item)
+        for item in payload.get("async_tasks") or []
+        if isinstance(item, dict) and bool(item.get("active"))
+    ]
+    if not async_tasks:
+        return payload
+
+    normalized_runtime_agent_id = str(runtime_agent_id or "").strip()
+    if not normalized_runtime_agent_id:
+        runtime_agent_ids = payload.get("runtime_agent_ids")
+        if isinstance(runtime_agent_ids, list) and runtime_agent_ids:
+            normalized_runtime_agent_id = str(runtime_agent_ids[0] or "").strip()
+    if not normalized_runtime_agent_id:
+        normalized_runtime_agent_id = str(async_tasks[0].get("runtime_agent_id") or "").strip()
+    if not normalized_runtime_agent_id:
+        return payload
+
+    deadline = time.monotonic() + max(float(wait_timeout_sec), 0.0)
+    for task in async_tasks:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        task_id = str(task.get("id") or "").strip()
+        if not task_id:
+            continue
+        try:
+            wait_for_runtime_agent_task_mailbox_resolution(
+                config,
+                runtime_agent_id=normalized_runtime_agent_id,
+                task_id=task_id,
+                wait_timeout_sec=remaining,
+            )
+        except TimeoutError:
+            break
+
+    refreshed = get_agent_action_batch_run(config, run_id)
+    if refreshed is None:
+        raise KeyError(run_id)
+    return _materialize_execution_plane_agent_action_run_record(config, refreshed)
 
 
 def list_execution_plane_runtime_agent_tasks(
