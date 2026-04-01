@@ -804,6 +804,37 @@ export interface ExecutionRuntimeAgentTaskRecord {
   resume_contract?: ExecutionRuntimeAgentTaskResumeContract | null;
 }
 
+export interface ExecutionRuntimeAgentTaskOutputArtifact {
+  id: string;
+  owner_kind: string;
+  owner_id: string;
+  source_path: string;
+  content_path: string;
+  content_bytes: number;
+  truncated: boolean;
+  preview: string;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+  task_id: string;
+  artifact_ref: string;
+  content: string;
+}
+
+export interface ExecutionRuntimeAgentTaskTranscriptArtifact {
+  id: string;
+  owner_kind: string;
+  owner_id: string;
+  content_path: string;
+  preview: string;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+  task_id: string;
+  artifact_ref: string;
+  content: string;
+}
+
 export interface ExecutionAgentActionRunSummary {
   selected_count?: number;
   processed_count?: number;
