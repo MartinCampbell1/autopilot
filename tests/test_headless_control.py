@@ -226,6 +226,72 @@ def test_headless_control_repeated_denials_trigger_circuit_breaker(tmp_path: Pat
     assert responses[2]["escalation_required"] is True
 
 
+def test_headless_control_rejects_bypass_permissions_mode(tmp_path: Path) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    project = _create_project(config, tmp_path / "project")
+    session = create_headless_control_session(config, project_entry=project, session_id="sess_headless")
+
+    response = session.handle_request(
+        {
+            "type": "control_request",
+            "request_id": "req_permission_mode",
+            "request": {"subtype": "set_permission_mode", "mode": "bypass_permissions"},
+            "session_id": "sess_headless",
+        }
+    )
+
+    assert response.response.subtype == "error"
+    assert "not available" in response.response.error.lower()
+
+
+def test_headless_control_plan_mode_strips_dangerous_allow_rules(tmp_path: Path) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    project = _create_project(config, tmp_path / "project")
+    persist_permission_update(
+        config,
+        PermissionUpdate(
+            type="add_rules",
+            destination="project",
+            behavior="allow",
+            project_id=project["id"],
+            rules=[PermissionRuleValue(tool_name="execution.archive")],
+        ),
+    )
+    session = create_headless_control_session(config, project_entry=project, session_id="sess_headless")
+
+    mode_response = session.handle_request(
+        {
+            "type": "control_request",
+            "request_id": "req_permission_mode",
+            "request": {"subtype": "set_permission_mode", "mode": "plan"},
+            "session_id": "sess_headless",
+        }
+    )
+    assert mode_response.response.subtype == "success"
+    assert mode_response.response.response["stripped_allow_rules"] == ["execution.archive"]
+
+    tool_response = session.handle_request(
+        {
+            "type": "control_request",
+            "request_id": "req_can_use_tool_archive",
+            "request": {
+                "subtype": "can_use_tool",
+                "tool_name": "execution.archive",
+                "input": {},
+                "tool_use_id": "toolu_archive",
+            },
+            "session_id": "sess_headless",
+        }
+    )
+
+    assert tool_response.response.subtype == "success"
+    assert tool_response.response.response["behavior"] == "ask"
+    assert any(
+        "strips dangerous allow rule" in reason.lower()
+        for reason in tool_response.response.response["reasons"]
+    )
+
+
 def test_headless_control_interrupt_tracks_pending_request(tmp_path: Path) -> None:
     config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
     project = _create_project(config, tmp_path / "project")

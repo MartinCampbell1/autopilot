@@ -9,6 +9,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
+from autopilot.core.command_permissions import sanitize_permission_context_for_mode
 from autopilot.core.config import AutopilotConfig
 from autopilot.core.tool_contracts import ToolDef, ToolPermissionContext, get_empty_tool_permission_context
 
@@ -567,6 +568,7 @@ def has_permissions_to_use_tool(
     """Resolve the final permission decision for one tool use."""
 
     del tool_input
+    permission_context = sanitize_permission_context_for_mode(permission_context)
 
     if permission_context.mode == "bypass_permissions":
         return PermissionDecision(behavior="allow")

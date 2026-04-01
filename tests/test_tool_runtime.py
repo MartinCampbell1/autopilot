@@ -210,6 +210,37 @@ def test_tool_runner_denial_breaker_escalates_to_approval(tmp_path: Path) -> Non
     assert "explicit approval" in third.message
 
 
+def test_plan_mode_strips_dangerous_allow_rules_into_approval(tmp_path: Path) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    tool = build_tool(
+        name="execution.archive",
+        description="Archive one execution project.",
+        approval_policy="policy",
+        execute=lambda tool_input, _: ToolResult(status="ok", payload=tool_input),
+    )
+    permission_context = apply_permission_update(
+        get_empty_tool_permission_context().model_copy(update={"mode": "plan"}),
+        PermissionUpdate(
+            type="add_rules",
+            destination="session",
+            behavior="allow",
+            rules=[PermissionRuleValue(tool_name="execution.archive")],
+        ),
+    )
+
+    decision = resolve_tool_permission_decision(
+        tool,
+        {},
+        permission_context,
+        config=config,
+        project_id="proj_archive",
+        record_denial=False,
+    )
+
+    assert decision.behavior == "ask"
+    assert any("strips dangerous allow rule" in reason.lower() for reason in decision.reasons)
+
+
 def test_tool_runner_stores_large_results_on_disk(tmp_path: Path) -> None:
     config = AutopilotConfig(
         autopilot_home_override=str(tmp_path / ".autopilot"),
