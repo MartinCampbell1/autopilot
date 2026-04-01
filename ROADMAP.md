@@ -4,11 +4,11 @@ This roadmap tracks the public product direction for Autopilot as the execution 
 
 ## Current Focus
 
-### Release Candidate
+### Release Candidate Wrap-Up
 
-- stabilize the `Execution Brief -> tracked execution -> PR/handoff` loop
-- finish the OSS/community release surface
+- merge the green release-candidate PR and decide the first public release cut
 - keep verification reproducible from a clean setup path
+- start post-release expansion only after the release-candidate decision is explicit
 
 ### Product Principles
 
@@ -17,18 +17,21 @@ This roadmap tracks the public product direction for Autopilot as the execution 
 - human-visible approvals, budgets, and quality gates
 - extensible tools and provider contracts without core rewrites
 
-## In Progress
+## Recently Completed
 
 - workflow closure from source item to final PR or handoff artifact
 - public workflow, comparison, quickstart, verification, and smoke-story docs for external adopters
 - OSS release hygiene and contributor surface
+- first public screenshots and portable external docs links
+- `Phase 0` through `Phase 5` of the pre-release plan
 
-## Planned Before First Public Release
+## Next Up
 
-- product README polish
-- documented extension examples for providers, tools, and trackers
-- first public screenshots are landed; richer GIF walkthroughs remain optional
-- benchmark harness remains post-release; keep the public smoke story small and repeatable before then
+- merge or cut the first public release candidate
+- optional cleanup:
+  - GitHub Actions Node 20 deprecation warnings
+  - noisy local Ctrl-C shutdown traceback for `autopilot dashboard --no-browser` under Python `3.14`
+- after release, move into `Phase 6` expansion
 
 ## After First Public Release
 

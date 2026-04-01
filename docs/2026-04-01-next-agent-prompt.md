@@ -1,0 +1,5 @@
+# Next Agent Prompt
+
+Use this as the kickoff message for the next chat:
+
+> Continue from [docs/2026-04-01-post-phase5-handoff.md](2026-04-01-post-phase5-handoff.md). `Phase 0` through `Phase 5` are already complete and should not be reimplemented. Treat PR `#1` on branch `codex/founderos-control-plane-phase3-hardening` as the current green release-candidate baseline. Start by reading the handoff and then either: 1. help merge/cut the first public release candidate, or 2. begin `Phase 6` post-release expansion, or 3. execute newly promoted follow-up phases if the user provides them. Preserve deterministic orchestration. Do not claim that `Quorum` and `Autopilot` already share one unified UI; the bridge exists at the `Execution Brief` and workflow layer, not as one merged interface. Do not touch the user’s unrelated local changes in `dashboard/app/globals.css`, `dashboard/app/projects/[projectId]/page.tsx`, `dashboard/components/app-sidebar.tsx`, or `docs/2026-03-31-merged-handoff-and-plan.md`.
