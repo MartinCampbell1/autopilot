@@ -117,6 +117,7 @@ type BuildSessionDrilldownSectionPropsArgs = {
   loadAsyncTaskTranscriptArtifact: (
     task: ExecutionRuntimeAgentTaskRecord
   ) => Promise<ExecutionRuntimeAgentTaskTranscriptArtifact>;
+  refreshAsyncTask: (task: ExecutionRuntimeAgentTaskRecord) => Promise<void>;
 };
 
 export function buildSessionDrilldownSectionProps({
@@ -192,6 +193,7 @@ export function buildSessionDrilldownSectionProps({
   onCopySessionContextLink,
   loadAsyncTaskOutputArtifact,
   loadAsyncTaskTranscriptArtifact,
+  refreshAsyncTask,
 }: BuildSessionDrilldownSectionPropsArgs): SessionDrilldownSectionProps {
   return {
     selectedSessionId,
@@ -413,6 +415,9 @@ export function buildSessionDrilldownSectionProps({
       },
       onLoadAsyncTaskOutputArtifact: (task) => loadAsyncTaskOutputArtifact(task),
       onLoadAsyncTaskTranscriptArtifact: (task) => loadAsyncTaskTranscriptArtifact(task),
+      onRefreshAsyncTask: (task) => {
+        void refreshAsyncTask(task);
+      },
       onAdvanceCurrentQueue:
         currentSessionLineageQueue && selectedSessionLineageEntry
           ? () => {
