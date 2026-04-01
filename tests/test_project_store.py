@@ -858,4 +858,48 @@ def test_launch_project_run_initializes_ralph_before_background_run(
     state = load_project_state(config, project["id"])
     assert state["runtime_session_id"] == mock_popen.call_args.kwargs["env"]["AUTOPILOT_RUNTIME_SESSION_ID"]
     assert state["budget_usage"]["run"]["started_at"] is not None
+
+
+@patch("autopilot.core.project_store.subprocess.Popen")
+@patch("autopilot.core.project_store.init_ralph_project")
+@patch("autopilot.core.project_store.check_ralph_installed")
+def test_launch_project_run_sanitizes_parent_env_for_background_runtime(
+    mock_check_ralph: MagicMock,
+    mock_init_ralph: MagicMock,
+    mock_popen: MagicMock,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    project_dir = tmp_path / "launch-project"
+    project_dir.mkdir(parents=True)
+
+    project = register_project(config, name="Launch Project", project_path=project_dir)
+    prd = normalize_prd(
+        {
+            "title": "Launch Project",
+            "stories": [{"id": 1, "title": "Bootstrap", "description": "Start"}],
+        }
+    )
+    save_project_prd(project, prd)
+    ensure_project_state(config, project, seed_mode="new")
+
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    monkeypatch.setenv("HTTPS_PROXY", "http://proxy.internal:8080")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setenv("SHOULD_NOT_LEAK", "secret")
+    mock_check_ralph.return_value = True
+    mock_init_ralph.return_value = True
+    mock_popen.return_value = MagicMock(pid=43210)
+
+    launched, _, _ = launch_project_run(config, project["id"])
+
+    assert launched is True
+    env = mock_popen.call_args.kwargs["env"]
+    assert env["PATH"] == "/usr/bin:/bin"
+    assert env["HTTPS_PROXY"] == "http://proxy.internal:8080"
+    assert env["OPENAI_API_KEY"] == "sk-test"
+    assert env["AUTOPILOT_RUNTIME_SESSION_ID"].startswith("run_")
+    assert "SHOULD_NOT_LEAK" not in env
+    state = load_project_state(config, project["id"])
     assert state["budget_usage"]["run"]["worker_iterations"] == 0
