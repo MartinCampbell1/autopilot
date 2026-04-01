@@ -48,6 +48,7 @@ from autopilot.core.runtime_budgets import (
     start_run_budget_bucket,
     update_budget_policy,
 )
+from autopilot.core.runtime_env import build_runtime_base_env
 
 TIMELINE_LIMIT = 300
 DISCOVERY_BOARD_LIMIT = 200
@@ -2092,7 +2093,7 @@ def launch_project_run(
             stderr=subprocess.STDOUT,
             start_new_session=True,
             env={
-                **os.environ,
+                **build_runtime_base_env(),
                 "AUTOPILOT_RUNTIME_SESSION_ID": runtime_session_id,
             },
         )
