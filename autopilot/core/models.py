@@ -145,6 +145,7 @@ class IterationRecord:
     elapsed_sec: float = 0.0
     timestamp: float = field(default_factory=time.time)
     git_diff_empty: bool = False
+    diff_signature: str = ""
     gate_results: list[GateResult] = field(default_factory=list)
     worker_usage: dict[str, Any] = field(default_factory=dict)
     critic_usage: dict[str, Any] = field(default_factory=dict)

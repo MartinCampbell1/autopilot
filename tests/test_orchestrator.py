@@ -148,6 +148,7 @@ class TestOrchestrator:
 
         assert outcome == StoryOutcome.APPROVED
         assert callable(mock_ralph.call_args.kwargs["on_progress"])
+        assert orchestrator.iteration_history[-1].diff_signature
 
     @patch("autopilot.core.orchestrator.check_git_diff_empty")
     @patch("autopilot.core.orchestrator.get_last_commit_diff")
