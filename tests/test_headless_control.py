@@ -177,6 +177,48 @@ def test_headless_control_can_use_tool_respects_permission_mode(tmp_path: Path) 
     assert allow_response.response.response["permission_mode"] == "approved"
 
 
+def test_headless_control_ignores_project_mode_escalation_until_session_override(tmp_path: Path) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    project = _create_project(config, tmp_path / "project")
+    persist_permission_update(
+        config,
+        PermissionUpdate(
+            type="set_mode",
+            destination="project",
+            project_id=project["id"],
+            mode="approved",
+        ),
+    )
+    persist_permission_update(
+        config,
+        PermissionUpdate(
+            type="add_rules",
+            destination="project",
+            behavior="ask",
+            project_id=project["id"],
+            rules=[PermissionRuleValue(tool_name="execution.pause")],
+        ),
+    )
+    session = create_headless_control_session(config, project_entry=project, session_id="sess_headless")
+
+    response = session.handle_request(
+        {
+            "type": "control_request",
+            "request_id": "req_can_use_tool_project_mode",
+            "request": {
+                "subtype": "can_use_tool",
+                "tool_name": "execution.pause",
+                "input": {},
+                "tool_use_id": "toolu_project_mode",
+            },
+            "session_id": "sess_headless",
+        }
+    )
+
+    assert response.response.response["behavior"] == "ask"
+    assert response.response.response["permission_mode"] == "default"
+
+
 def test_headless_control_repeated_denials_trigger_circuit_breaker(tmp_path: Path) -> None:
     config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
     project = _create_project(config, tmp_path / "project")

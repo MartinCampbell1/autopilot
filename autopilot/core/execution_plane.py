@@ -57,6 +57,7 @@ from autopilot.core.agent_action_runs import (
 from autopilot.core.control_plane_issues import create_issue, link_issue_approval, list_issues, resolve_issue
 from autopilot.core.tool_contracts import ToolResult, ToolUseContext, build_tool
 from autopilot.core.tool_permissions import (
+    PermissionContextOverlay,
     PermissionRuleValue,
     load_tool_permission_context,
     permission_rule_value_to_string,
@@ -3762,27 +3763,18 @@ def _execution_command_permission_context(
     payload: dict[str, Any] | None = None,
     mode: str = "default",
 ) -> Any:
-    context = load_tool_permission_context(config, project_id=project_id)
-    if mode != "default":
-        context = context.model_copy(update={"mode": mode})
     reasons = _execution_command_policy_reasons(
         load_project_command_policy(config, project_id),
         command=command,
         payload=payload,
     )
-    if not reasons:
-        return context
-
     tool_name = _execution_command_tool_name(command)
-    always_ask_rules = {key: list(values) for key, values in context.always_ask_rules.items()}
-    serialized_rule = permission_rule_value_to_string(PermissionRuleValue(tool_name=tool_name))
-    project_policy_rules = list(always_ask_rules.get("project_policy", []))
-    if serialized_rule not in project_policy_rules:
-        project_policy_rules.append(serialized_rule)
-    always_ask_rules["project_policy"] = project_policy_rules
-    tool_reasons = {key: list(values) for key, values in context.tool_reasons.items()}
-    tool_reasons[tool_name] = reasons
-    return context.model_copy(update={"always_ask_rules": always_ask_rules, "tool_reasons": tool_reasons})
+    overlay = PermissionContextOverlay(mode=mode if mode != "default" else None)
+    if reasons:
+        overlay.ask_rules = [permission_rule_value_to_string(PermissionRuleValue(tool_name=tool_name))]
+        overlay.tool_reasons = {tool_name: reasons}
+    overlays = {"command": overlay} if overlay.mode is not None or overlay.ask_rules or overlay.tool_reasons else None
+    return load_tool_permission_context(config, project_id=project_id, overlays=overlays)
 
 
 def _build_execution_command_tool(

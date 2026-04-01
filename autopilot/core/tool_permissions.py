@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field, model_validator
 from autopilot.core.command_permissions import (
     check_projected_command_permission,
     command_rule_matches,
+    normalize_permission_mode,
     normalize_serialized_permission_rules,
     parse_permission_rule,
     sanitize_permission_context_for_mode,
@@ -23,17 +24,19 @@ from autopilot.core.tool_contracts import ToolDef, ToolPermissionContext, get_em
 
 PermissionMode = Literal["default", "approved", "bypass_permissions", "dont_ask", "plan"]
 PermissionBehavior = Literal["allow", "deny", "ask"]
-PermissionRuleSource = Literal["session", "user", "project", "project_policy", "workspace_policy"]
+PermissionRuleSource = Literal["command", "session", "project", "user", "project_policy", "workspace_policy"]
 PermissionUpdateDestination = Literal["session", "user", "project"]
 
 RULE_SOURCE_ORDER: tuple[PermissionRuleSource, ...] = (
-    "workspace_policy",
-    "project_policy",
+    "command",
+    "session",
     "project",
     "user",
-    "session",
+    "project_policy",
+    "workspace_policy",
 )
 DENIAL_BREAKER_THRESHOLD = 3
+VALID_PERMISSION_RULE_SOURCES = set(RULE_SOURCE_ORDER)
 
 
 class PermissionRuleValue(BaseModel):
@@ -98,6 +101,16 @@ class PermissionScopeState(BaseModel):
     ask_rules: list[str] = Field(default_factory=list)
 
 
+class PermissionContextOverlay(BaseModel):
+    """Ephemeral permission overlay merged on top of persisted state."""
+
+    mode: PermissionMode | None = None
+    allow_rules: list[str] = Field(default_factory=list)
+    deny_rules: list[str] = Field(default_factory=list)
+    ask_rules: list[str] = Field(default_factory=list)
+    tool_reasons: dict[str, list[str]] = Field(default_factory=dict)
+
+
 class PersistedToolPermissionState(BaseModel):
     """File-backed permission state."""
 
@@ -145,6 +158,70 @@ def permission_denial_state_path(config: AutopilotConfig) -> Path:
 
 def _utcnow_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _merge_serialized_rules(existing: list[str], additions: list[str]) -> list[str]:
+    merged = normalize_serialized_permission_rules(list(existing))
+    for item in normalize_serialized_permission_rules(list(additions)):
+        if item not in merged:
+            merged.append(item)
+    return merged
+
+
+def _merge_tool_reasons(
+    existing: dict[str, list[str]],
+    additions: dict[str, list[str]] | None = None,
+) -> dict[str, list[str]]:
+    merged = {str(key): [str(reason) for reason in values] for key, values in existing.items()}
+    for raw_key, raw_values in (additions or {}).items():
+        key = str(raw_key or "").strip()
+        if not key:
+            continue
+        current = [reason for reason in merged.get(key, []) if str(reason).strip()]
+        for raw_reason in raw_values or []:
+            reason = str(raw_reason or "").strip()
+            if reason and reason not in current:
+                current.append(reason)
+        if current:
+            merged[key] = current
+    return merged
+
+
+def _resolve_loaded_permission_mode(
+    *,
+    user_mode: str,
+    project_mode: str,
+    overlays: dict[str, PermissionContextOverlay] | None = None,
+    explicit_mode: str | None = None,
+) -> tuple[str, dict[str, Any]]:
+    normalized_user_mode = normalize_permission_mode(user_mode or "default")
+    resolved_mode = normalized_user_mode
+    normalized_project_mode = normalize_permission_mode(project_mode or "default")
+    overlay_modes: dict[str, str] = {}
+    ignored_project_mode = ""
+
+    if normalized_project_mode != "default" and normalized_project_mode != resolved_mode:
+        ignored_project_mode = normalized_project_mode
+
+    for source in ("command", "session", "project_policy", "workspace_policy"):
+        overlay = (overlays or {}).get(source)
+        if overlay is None or overlay.mode is None:
+            continue
+        normalized_mode = normalize_permission_mode(overlay.mode)
+        overlay_modes[source] = normalized_mode
+        resolved_mode = normalized_mode
+
+    if explicit_mode is not None:
+        resolved_mode = normalize_permission_mode(explicit_mode)
+
+    return resolved_mode, {
+        "user_mode": normalized_user_mode,
+        "project_mode": normalized_project_mode,
+        "ignored_project_mode": ignored_project_mode,
+        "overlay_modes": overlay_modes,
+        "explicit_mode": normalize_permission_mode(explicit_mode) if explicit_mode is not None else "",
+        "resolved_mode": resolved_mode,
+    }
 
 
 def permission_rule_value_to_string(rule_value: PermissionRuleValue) -> str:
@@ -405,38 +482,56 @@ def load_tool_permission_context(
     config: AutopilotConfig,
     *,
     project_id: str | None = None,
+    overlays: dict[str, PermissionContextOverlay] | None = None,
+    mode: str | None = None,
 ) -> ToolPermissionContext:
     """Load the merged tool permission context for one project scope."""
 
     state = _load_persisted_state(config)
-    context = get_empty_tool_permission_context()
-    context = context.model_copy(
-        update={
-            "mode": state.user.mode,
-            "always_allow_rules": {"user": normalize_serialized_permission_rules(list(state.user.allow_rules))},
-            "always_deny_rules": {"user": normalize_serialized_permission_rules(list(state.user.deny_rules))},
-            "always_ask_rules": {"user": normalize_serialized_permission_rules(list(state.user.ask_rules))},
-        }
-    )
+    always_allow_rules = {"user": normalize_serialized_permission_rules(list(state.user.allow_rules))}
+    always_deny_rules = {"user": normalize_serialized_permission_rules(list(state.user.deny_rules))}
+    always_ask_rules = {"user": normalize_serialized_permission_rules(list(state.user.ask_rules))}
+    metadata: dict[str, Any] = {}
+    project_mode = "default"
 
     normalized_project_id = str(project_id or "").strip()
     if normalized_project_id and normalized_project_id in state.projects:
         scope = state.projects[normalized_project_id]
-        always_allow_rules = {key: list(values) for key, values in context.always_allow_rules.items()}
-        always_deny_rules = {key: list(values) for key, values in context.always_deny_rules.items()}
-        always_ask_rules = {key: list(values) for key, values in context.always_ask_rules.items()}
         always_allow_rules["project"] = normalize_serialized_permission_rules(list(scope.allow_rules))
         always_deny_rules["project"] = normalize_serialized_permission_rules(list(scope.deny_rules))
         always_ask_rules["project"] = normalize_serialized_permission_rules(list(scope.ask_rules))
-        context = context.model_copy(
-            update={
-                "mode": scope.mode if scope.mode != "default" else context.mode,
-                "always_allow_rules": always_allow_rules,
-                "always_deny_rules": always_deny_rules,
-                "always_ask_rules": always_ask_rules,
-            }
-        )
-    return context
+        project_mode = scope.mode
+
+    normalized_overlays = dict(overlays or {})
+    for source in normalized_overlays:
+        if source not in VALID_PERMISSION_RULE_SOURCES:
+            raise ValueError(f"Unsupported permission overlay source `{source}`.")
+    for source, overlay in normalized_overlays.items():
+        always_allow_rules[source] = _merge_serialized_rules(always_allow_rules.get(source, []), overlay.allow_rules)
+        always_deny_rules[source] = _merge_serialized_rules(always_deny_rules.get(source, []), overlay.deny_rules)
+        always_ask_rules[source] = _merge_serialized_rules(always_ask_rules.get(source, []), overlay.ask_rules)
+
+    resolved_mode, mode_resolution = _resolve_loaded_permission_mode(
+        user_mode=state.user.mode,
+        project_mode=project_mode,
+        overlays=normalized_overlays,
+        explicit_mode=mode,
+    )
+    metadata["mode_resolution"] = mode_resolution
+    tool_reasons: dict[str, list[str]] = {}
+    for overlay in normalized_overlays.values():
+        tool_reasons = _merge_tool_reasons(tool_reasons, overlay.tool_reasons)
+
+    return get_empty_tool_permission_context().model_copy(
+        update={
+            "mode": resolved_mode,
+            "always_allow_rules": always_allow_rules,
+            "always_deny_rules": always_deny_rules,
+            "always_ask_rules": always_ask_rules,
+            "tool_reasons": tool_reasons,
+            "metadata": metadata,
+        }
+    )
 
 
 def _rules_for_behavior(
