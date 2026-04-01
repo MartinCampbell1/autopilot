@@ -2,16 +2,19 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from autopilot.core.agent_mailbox import list_agent_mailbox_messages
 from autopilot.core.approval_runtime import annotate_approval_runtime, create_or_reuse_approval_runtime
 from autopilot.core.config import AutopilotConfig
+from autopilot.core.project_store import save_project_state
 from autopilot.core.tool_permission_runtime import get_tool_permission_runtime, resolve_tool_permission_runtime
 
 
 def test_resolve_tool_permission_runtime_preserves_pending_payload_and_publishes_mailbox(tmp_path: Path) -> None:
     config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    save_project_state(config, "proj_tool_runtime", {"status": "running"})
     runtime = create_or_reuse_approval_runtime(
         config,
         key="tool-permission:proj_tool_runtime:demo.pause:toolu_123",
@@ -61,6 +64,7 @@ def test_resolve_tool_permission_runtime_preserves_pending_payload_and_publishes
     )
     messages = list_agent_mailbox_messages(config, approval_runtime_id=runtime.id)
     stored = get_tool_permission_runtime(config, runtime.id)
+    event_lines = [json.loads(line) for line in config.events_log_path.read_text().splitlines() if line.strip()]
 
     assert resolved.status == "resolved"
     assert resolved.winner_source == "user"
@@ -72,3 +76,8 @@ def test_resolve_tool_permission_runtime_preserves_pending_payload_and_publishes
     assert stored.status == "resolved"
     assert any(message.message_type == "approval_runtime_resolved" for message in messages)
     assert any(message.message_type == "tool_permission_user_allow" for message in messages)
+    assert event_lines[-2]["event"] == "tool_permission_runtime_pending"
+    assert event_lines[-1]["event"] == "tool_permission_runtime_resolved"
+    assert event_lines[-1]["approval_runtime_id"] == runtime.id
+    assert event_lines[-1]["resolved_behavior"] == "allow"
+    assert event_lines[-1]["resolved_by"] == "founderos"

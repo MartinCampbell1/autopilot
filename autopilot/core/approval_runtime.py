@@ -15,8 +15,19 @@ from pydantic import BaseModel, Field
 
 from autopilot.core.agent_mailbox import poll_agent_mailbox_messages, publish_agent_mailbox_messages
 from autopilot.core.config import AutopilotConfig
+from autopilot.core.tool_permission_events import (
+    emit_tool_permission_pending_event,
+    emit_tool_permission_resolved_event,
+)
 
 _MAX_SETTLEMENT_ATTEMPTS = 25
+_TOOL_PERMISSION_PENDING_MESSAGE_TYPES = {
+    "permission_hook_pending",
+    "tool_permission_classifier_pending",
+    "tool_permission_hook_pending",
+    "tool_permission_pending",
+    "tool_permission_user_pending",
+}
 
 
 class _ApprovalRuntimeReclaimableWait(Exception):
@@ -307,6 +318,30 @@ def _append_settlement_attempt(
     return record.model_copy(update={"settlement_attempts": attempts[-_MAX_SETTLEMENT_ATTEMPTS:]})
 
 
+def _is_tool_permission_runtime(record: ApprovalRuntimeRecord) -> bool:
+    kind = str(record.metadata.get("kind") or "").strip().lower()
+    return kind.startswith("tool_permission")
+
+
+def _should_emit_tool_permission_pending_event(
+    previous: ApprovalRuntimeRecord,
+    updated: ApprovalRuntimeRecord,
+    mailbox_message_type: str | None,
+) -> bool:
+    normalized_message_type = str(mailbox_message_type or "").strip()
+    if normalized_message_type not in _TOOL_PERMISSION_PENDING_MESSAGE_TYPES:
+        return False
+    if not _is_tool_permission_runtime(updated) or str(updated.status or "").strip() != "pending":
+        return False
+    updated_pending = dict(updated.metadata.get("pending") or {})
+    if not str(updated_pending.get("stage") or "").strip():
+        return False
+    previous_pending = dict(previous.metadata.get("pending") or {})
+    if str(previous.status or "").strip() == "pending" and previous_pending == updated_pending:
+        return False
+    return True
+
+
 def _wait_for_runtime_resolution(
     config: AutopilotConfig,
     *,
@@ -539,6 +574,12 @@ def settle_approval_runtime(
                     resolved,
                     specific_message_type=resolved_message_type,
                 )
+                if _is_tool_permission_runtime(resolved):
+                    emit_tool_permission_resolved_event(
+                        config,
+                        resolved,
+                        event_source=resolved_message_type,
+                    )
                 return resolved
             finally:
                 _release_lock(lock_path, claim_id=claim.id)
@@ -613,6 +654,12 @@ def annotate_approval_runtime(
             approval_runtime_id=updated.id,
             issue_id=updated.issue_id,
             permission_sync_key=updated.permission_sync_key,
+        )
+    if _should_emit_tool_permission_pending_event(record, updated, mailbox_message_type):
+        emit_tool_permission_pending_event(
+            config,
+            updated,
+            event_source=str(mailbox_message_type or "").strip(),
         )
     return updated
 

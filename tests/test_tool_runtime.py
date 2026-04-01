@@ -12,6 +12,7 @@ from autopilot.core.agent_mailbox import list_agent_mailbox_messages
 from autopilot.core.approval_runtime import create_or_reuse_approval_runtime, get_approval_runtime, settle_approval_runtime
 from autopilot.core.config import AutopilotConfig
 from autopilot.core.permission_audit import read_permission_audit_entries
+from autopilot.core.project_store import save_project_state
 from autopilot.core.structured_io import StructuredIO
 from autopilot.core.structured_runtime import activate_structured_io
 from autopilot.core.tool_contracts import ToolResult, ToolUseContext, build_tool, get_empty_tool_permission_context
@@ -586,6 +587,7 @@ def test_tool_runner_classifier_pending_keeps_runtime_open_for_hook_resolution(t
 
 def test_tool_runner_ask_creates_pending_user_runtime_and_mailbox(tmp_path: Path) -> None:
     config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    save_project_state(config, "proj_tool_ask", {"status": "running"})
     tool = build_tool(
         name="demo.pause",
         description="Pause demo execution.",
@@ -617,6 +619,7 @@ def test_tool_runner_ask_creates_pending_user_runtime_and_mailbox(tmp_path: Path
     runtime = get_approval_runtime(config, approval_runtime_id=result.approval_runtime_id)
     generic_mailbox = list_agent_mailbox_messages(config, project_id="proj_tool_ask", message_type="tool_permission_pending")
     user_mailbox = list_agent_mailbox_messages(config, project_id="proj_tool_ask", message_type="tool_permission_user_pending")
+    event_lines = [json.loads(line) for line in config.events_log_path.read_text().splitlines() if line.strip()]
 
     assert result.status == "approval_required"
     assert result.permission is not None
@@ -629,10 +632,15 @@ def test_tool_runner_ask_creates_pending_user_runtime_and_mailbox(tmp_path: Path
     assert runtime.runtime_agent_ids == ["proj_tool_ask:1:review:b", "proj_tool_ask:1:worker:a"]
     assert len(generic_mailbox) == 2
     assert len(user_mailbox) == 2
+    assert event_lines[-1]["event"] == "tool_permission_runtime_pending"
+    assert event_lines[-1]["project_id"] == "proj_tool_ask"
+    assert event_lines[-1]["pending_stage"] == "pending_user"
+    assert event_lines[-1]["approval_runtime_id"] == result.approval_runtime_id
 
 
 def test_tool_runner_hook_ask_creates_pending_hook_runtime_and_mailbox(tmp_path: Path) -> None:
     config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    save_project_state(config, "proj_hook_pending", {"status": "running"})
     tool = build_tool(
         name="demo.pause",
         description="Pause demo execution.",
@@ -694,6 +702,7 @@ def test_tool_runner_hook_ask_creates_pending_hook_runtime_and_mailbox(tmp_path:
         runtime_agent_id="proj_hook_pending:1:worker:a",
         message_type="tool_permission_hook_pending",
     )
+    event_lines = [json.loads(line) for line in config.events_log_path.read_text().splitlines() if line.strip()]
 
     assert result.status == "approval_required"
     assert result.permission is not None
@@ -705,6 +714,10 @@ def test_tool_runner_hook_ask_creates_pending_hook_runtime_and_mailbox(tmp_path:
     assert len(generic_mailbox) == 1
     assert len(hook_mailbox) == 1
     assert len(hook_pending_mailbox) == 1
+    assert event_lines[-1]["event"] == "tool_permission_runtime_pending"
+    assert event_lines[-1]["project_id"] == "proj_hook_pending"
+    assert event_lines[-1]["pending_stage"] == "pending_hook"
+    assert event_lines[-1]["approval_runtime_id"] == result.approval_runtime_id
 
 
 def test_repeated_denials_escalate_to_explicit_approval(tmp_path: Path) -> None:
