@@ -19,7 +19,11 @@ import {
   passStatusClass,
   priorityClass,
 } from "@/lib/control-plane-ui";
-import type { ExecutionRuntimeAgentDetail, ToolPermissionRuntimeRecord } from "@/lib/types";
+import type {
+  ExecutionAgentActionRunRecord,
+  ExecutionRuntimeAgentDetail,
+  ToolPermissionRuntimeRecord,
+} from "@/lib/types";
 
 function formatToolPermissionStage(value?: string | null): string {
   const normalized = (value || "").trim();
@@ -55,6 +59,7 @@ type RuntimeAgentSectionProps = {
   formatTimestamp: (value?: string | null) => string;
   toNumber: (value: unknown, fallback?: number) => number;
   toStringValue: (value: unknown, fallback?: string) => string;
+  pendingAsyncRuns: ExecutionAgentActionRunRecord[];
   onAllowToolPermissionRuntime: (runtime: ToolPermissionRuntimeRecord) => void;
   onDenyToolPermissionRuntime: (runtime: ToolPermissionRuntimeRecord) => void;
   onCopyLink: () => void;
@@ -63,6 +68,7 @@ type RuntimeAgentSectionProps = {
     command: Record<string, unknown>,
     mode: "execute_now" | "request_approval"
   ) => void;
+  onInspectAsyncFollowThrough: () => void;
   activitySectionProps: ComponentProps<typeof RuntimeAgentActivitySection> | null;
   timelineSectionProps: ComponentProps<typeof RuntimeAgentTimelineSection> | null;
 };
@@ -75,11 +81,13 @@ export function RuntimeAgentSection({
   formatTimestamp,
   toNumber,
   toStringValue,
+  pendingAsyncRuns,
   onAllowToolPermissionRuntime,
   onDenyToolPermissionRuntime,
   onCopyLink,
   onFocusRuntimeAgent,
   onRunSuggestedCommand,
+  onInspectAsyncFollowThrough,
   activitySectionProps,
   timelineSectionProps,
 }: RuntimeAgentSectionProps) {
@@ -90,6 +98,9 @@ export function RuntimeAgentSection({
       if (updatedDelta !== 0) return updatedDelta;
       return right.id.localeCompare(left.id);
     });
+  const activeAsyncTasks = (selectedAgent?.async_tasks || []).filter((task) =>
+    Boolean(task.active) || task.status === "queued" || task.status === "running"
+  );
 
   return (
     <Card className="border border-[#e5e5e3] bg-white shadow-[0_1px_3px_rgba(15,15,15,0.08),0_0_1px_rgba(15,15,15,0.04)]">
@@ -264,6 +275,20 @@ export function RuntimeAgentSection({
                       <p className="mt-2 text-[12px] text-[#6b6b6b]">
                         {toStringValue(recommendation.reason, "No reason provided")}
                       </p>
+                      {toStringValue(recommendation.kind) === "inspect_async_follow_through" && (
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-8 rounded-lg border-[#e5e5e3] bg-white text-[12px] text-[#37352f] hover:bg-[#f7f7f5]"
+                            onClick={() => {
+                              onInspectAsyncFollowThrough();
+                            }}
+                          >
+                            Inspect async follow-through
+                          </Button>
+                        </div>
+                      )}
                     </div>
                   ))}
                   {selectedAgent.suggested_commands.slice(0, 2).map((command, index) => (
@@ -331,6 +356,108 @@ export function RuntimeAgentSection({
                 </div>
               )}
             </div>
+
+            {(activeAsyncTasks.length > 0 || pendingAsyncRuns.length > 0) && (
+              <div className="rounded-2xl border border-[#ecebe8] bg-[#fbfbf9] p-4">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#9b9a97]">
+                      Async Follow-Through
+                    </p>
+                    <p className="mt-2 text-[13px] text-[#6b6b6b]">
+                      Background tasks and pending async action runs linked to this agent.
+                    </p>
+                  </div>
+                  <Badge
+                    variant="outline"
+                    className="rounded-full border-[#e5e5e3] bg-white px-2.5 py-1 text-[11px] font-medium text-[#37352f]"
+                  >
+                    {activeAsyncTasks.length + pendingAsyncRuns.length} active item
+                    {activeAsyncTasks.length + pendingAsyncRuns.length === 1 ? "" : "s"}
+                  </Badge>
+                </div>
+                <div className="mt-3 space-y-3">
+                  {pendingAsyncRuns.map((run) => (
+                    <div
+                      key={`pending-run-${run.id}`}
+                      className="rounded-xl border border-[#ecebe8] bg-white p-3"
+                    >
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div>
+                          <p className="text-[13px] font-semibold text-[#37352f]">{run.id}</p>
+                          <p className="mt-1 text-[12px] text-[#787774]">
+                            async action run · {formatTimestamp(run.created_at)}
+                          </p>
+                        </div>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-8 rounded-lg border-[#e5e5e3] bg-white text-[12px] text-[#37352f] hover:bg-[#f7f7f5]"
+                          onClick={() => {
+                            onInspectAsyncFollowThrough();
+                          }}
+                        >
+                          Inspect run
+                        </Button>
+                      </div>
+                      <p className="mt-2 text-[12px] text-[#6b6b6b]">
+                        {run.completion_message || "Async follow-through is still running."}
+                      </p>
+                      <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                        <SessionMetric
+                          label="Active Tasks"
+                          value={String(run.active_async_task_count ?? 0)}
+                          detail={`${run.async_task_count ?? 0} total linked async task${(run.async_task_count ?? 0) === 1 ? "" : "s"}`}
+                        />
+                        <SessionMetric
+                          label="Mode"
+                          value={run.mode || "auto"}
+                          detail={run.actor || "unknown actor"}
+                        />
+                      </div>
+                    </div>
+                  ))}
+                  {activeAsyncTasks.map((task) => (
+                    <div
+                      key={`pending-task-${task.id}`}
+                      className="rounded-xl border border-[#ecebe8] bg-white p-3"
+                    >
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div>
+                          <p className="text-[13px] font-semibold text-[#37352f]">
+                            {task.command || task.id}
+                          </p>
+                          <p className="mt-1 text-[12px] text-[#787774]">
+                            {task.id} · {task.status}
+                          </p>
+                        </div>
+                        <Badge
+                          variant="outline"
+                          className="rounded-full border-[#d3e5ef] bg-[#eef7fb] px-2.5 py-1 text-[11px] font-medium text-[#2a6690]"
+                        >
+                          running
+                        </Badge>
+                      </div>
+                      <p className="mt-2 text-[12px] text-[#6b6b6b]">
+                        {task.result_summary || task.placeholder_result || "Background task is still running."}
+                      </p>
+                      <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                        <SessionMetric
+                          label="Started"
+                          value={formatTimestamp(task.started_at || task.created_at)}
+                          detail={task.reason || "No task reason provided"}
+                        />
+                        <SessionMetric
+                          label="Linked Run"
+                          value={task.agent_action_run_id || "Task only"}
+                          detail={task.runtime_agent_id || selectedAgent.runtime_agent_id}
+                        />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {pendingToolPermissionRuntimes.length > 0 && (
               <div className="rounded-2xl border border-[#ecebe8] bg-[#fbfbf9] p-4">

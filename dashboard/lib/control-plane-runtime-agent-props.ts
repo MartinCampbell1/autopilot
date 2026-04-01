@@ -57,6 +57,7 @@ type BuildRuntimeAgentSectionPropsArgs = {
     command: Record<string, unknown>,
     mode: "execute_now" | "request_approval"
   ) => Promise<void>;
+  inspectAsyncFollowThrough: () => void;
   onAllowToolPermissionRuntime: RuntimeAgentSectionProps["onAllowToolPermissionRuntime"];
   onDenyToolPermissionRuntime: RuntimeAgentSectionProps["onDenyToolPermissionRuntime"];
   agentScopedRuns: ExecutionAgentActionRunRecord[];
@@ -148,6 +149,7 @@ export function buildRuntimeAgentSectionProps({
   onCopyAgentLink,
   focusRuntimeAgent,
   runAgentSuggestedCommand,
+  inspectAsyncFollowThrough,
   onAllowToolPermissionRuntime,
   onDenyToolPermissionRuntime,
   agentScopedRuns,
@@ -341,6 +343,14 @@ export function buildRuntimeAgentSectionProps({
       }
     : null;
 
+  const pendingAsyncRuns = agentScopedRuns
+    .filter((run) => run.completion_state === "pending_async")
+    .sort(
+      (left, right) =>
+        (right.updated_at || right.created_at).localeCompare(left.updated_at || left.created_at) ||
+        right.id.localeCompare(left.id)
+    );
+
   return {
     selectedAgentId,
     agentLoading,
@@ -349,6 +359,7 @@ export function buildRuntimeAgentSectionProps({
     formatTimestamp,
     toNumber,
     toStringValue,
+    pendingAsyncRuns,
     onCopyLink: onCopyAgentLink,
     onFocusRuntimeAgent: (runtimeAgentId) => {
       focusRuntimeAgent(runtimeAgentId, true);
@@ -358,6 +369,7 @@ export function buildRuntimeAgentSectionProps({
     onRunSuggestedCommand: (command, mode) => {
       void runAgentSuggestedCommand(command, mode);
     },
+    onInspectAsyncFollowThrough: inspectAsyncFollowThrough,
     activitySectionProps,
     timelineSectionProps,
   };

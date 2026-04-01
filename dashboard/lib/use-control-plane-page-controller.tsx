@@ -1086,6 +1086,16 @@ export function useControlPlanePageController(
       },
       focusRuntimeAgent,
       runAgentSuggestedCommand,
+      inspectAsyncFollowThrough: () => {
+        const pendingAsyncRun =
+          agentScopedRuns.find((run) => run.completion_state === "pending_async") ??
+          agentScopedRuns.find((run) => (run.async_task_count ?? 0) > 0);
+        setAgentActivityFilter("attention");
+        if (pendingAsyncRun) {
+          setSelectedRunId(pendingAsyncRun.id);
+          setSelectedRunResultIndex(0);
+        }
+      },
       onAllowToolPermissionRuntime: (runtime) => {
         void resolveToolPermissionRuntime(runtime, "allow");
       },
