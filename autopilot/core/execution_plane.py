@@ -58,9 +58,9 @@ from autopilot.core.control_plane_issues import create_issue, link_issue_approva
 from autopilot.core.tool_contracts import ToolResult, ToolUseContext, build_tool
 from autopilot.core.tool_permissions import (
     PermissionRuleValue,
-    has_permissions_to_use_tool,
     load_tool_permission_context,
     permission_rule_value_to_string,
+    resolve_tool_permission_decision,
 )
 from autopilot.core.tool_runner import run_tool_use
 from autopilot.core.orchestrator_control_passes import (
@@ -428,6 +428,7 @@ def evaluate_execution_command_policy(
     project_id: str,
     command: str,
     payload: dict[str, Any] | None = None,
+    record_denial: bool = False,
 ) -> dict[str, Any]:
     """Evaluate whether a command should require approval under project policy."""
 
@@ -439,7 +440,14 @@ def evaluate_execution_command_policy(
         command=command,
         payload=payload,
     )
-    decision = has_permissions_to_use_tool(tool, payload or {}, permission_context)
+    decision = resolve_tool_permission_decision(
+        tool,
+        payload or {},
+        permission_context,
+        config=config,
+        project_id=project_id,
+        record_denial=record_denial,
+    )
     reasons = list(decision.reasons)
     if decision.behavior == "deny" and not reasons and decision.message:
         reasons = [decision.message]

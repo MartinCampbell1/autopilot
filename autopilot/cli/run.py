@@ -342,6 +342,9 @@ def _serialize_gate_results(gate_results: list[Any]) -> list[dict[str, Any]]:
             "output": gate_result.output,
             "required": gate_result.required,
             "elapsed_sec": gate_result.elapsed_sec,
+            "exit_code": getattr(gate_result, "exit_code", None),
+            "exit_semantics": getattr(gate_result, "exit_semantics", ""),
+            "exit_semantics_summary": getattr(gate_result, "exit_semantics_summary", ""),
             "baseline_passed": getattr(gate_result, "baseline_passed", None),
             "regression": getattr(gate_result, "regression", False),
         }

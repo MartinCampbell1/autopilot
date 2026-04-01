@@ -177,6 +177,55 @@ def test_headless_control_can_use_tool_respects_permission_mode(tmp_path: Path) 
     assert allow_response.response.response["permission_mode"] == "approved"
 
 
+def test_headless_control_repeated_denials_trigger_circuit_breaker(tmp_path: Path) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    project = _create_project(config, tmp_path / "project")
+    persist_permission_update(
+        config,
+        PermissionUpdate(
+            type="add_rules",
+            destination="project",
+            behavior="ask",
+            project_id=project["id"],
+            rules=[PermissionRuleValue(tool_name="execution.pause")],
+        ),
+    )
+    session = create_headless_control_session(config, project_entry=project, session_id="sess_headless")
+    session.handle_request(
+        {
+            "type": "control_request",
+            "request_id": "req_permission_mode",
+            "request": {"subtype": "set_permission_mode", "mode": "dont_ask"},
+            "session_id": "sess_headless",
+        }
+    )
+
+    responses = []
+    for index in range(1, 4):
+        response = session.handle_request(
+            {
+                "type": "control_request",
+                "request_id": f"req_can_use_tool_{index}",
+                "request": {
+                    "subtype": "can_use_tool",
+                    "tool_name": "execution.pause",
+                    "input": {},
+                    "tool_use_id": f"toolu_{index}",
+                },
+                "session_id": "sess_headless",
+            }
+        )
+        responses.append(response.response.response)
+
+    assert responses[0]["behavior"] == "deny"
+    assert responses[0]["denial_count"] == 1
+    assert responses[1]["behavior"] == "deny"
+    assert responses[1]["denial_count"] == 2
+    assert responses[2]["behavior"] == "ask"
+    assert responses[2]["denial_count"] == 3
+    assert responses[2]["escalation_required"] is True
+
+
 def test_headless_control_interrupt_tracks_pending_request(tmp_path: Path) -> None:
     config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
     project = _create_project(config, tmp_path / "project")

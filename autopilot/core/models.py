@@ -81,6 +81,9 @@ class GateResult:
     output: str
     required: bool = True
     elapsed_sec: float = 0.0
+    exit_code: int | None = None
+    exit_semantics: str = ""
+    exit_semantics_summary: str = ""
     baseline_passed: bool | None = None
     regression: bool = False
 

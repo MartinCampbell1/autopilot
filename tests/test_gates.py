@@ -23,6 +23,28 @@ class TestRunSingleGate:
         result = run_single_gate("build", "npm run build", Path("/tmp"), required=True)
         assert result.passed is False
         assert "build failed" in result.output
+        assert result.exit_code == 1
+        assert result.exit_semantics == "error"
+
+    @patch("autopilot.core.gates.subprocess.run")
+    def test_gate_treats_grep_no_match_as_semantic_success(self, mock_run: MagicMock) -> None:
+        mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="")
+
+        result = run_single_gate("grep-check", "grep needle README.md", Path("/tmp"), required=True)
+
+        assert result.passed is True
+        assert "no matches were found" in result.output.lower()
+        assert result.exit_semantics == "no_match"
+
+    @patch("autopilot.core.gates.subprocess.run")
+    def test_gate_treats_diff_changes_as_semantic_success(self, mock_run: MagicMock) -> None:
+        mock_run.return_value = MagicMock(returncode=1, stdout="1c1", stderr="")
+
+        result = run_single_gate("diff-check", "diff -u old.txt new.txt", Path("/tmp"), required=True)
+
+        assert result.passed is True
+        assert "differences were found" in result.output.lower()
+        assert result.exit_semantics == "difference"
 
     @patch("autopilot.core.gates.subprocess.run")
     def test_gate_timeout(self, mock_run: MagicMock) -> None:
@@ -43,6 +65,26 @@ class TestRunSingleGate:
 
         assert result.passed is True
         assert marker.exists()
+
+    @patch("autopilot.core.gates.subprocess.run")
+    def test_gate_reports_grep_no_match_semantics(self, mock_run: MagicMock) -> None:
+        mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="")
+
+        result = run_single_gate("probe", "grep needle README.md", Path("/tmp"), required=False)
+
+        assert result.passed is True
+        assert result.exit_semantics == "no_match"
+        assert "no matches were found" in result.output.lower()
+
+    @patch("autopilot.core.gates.subprocess.run")
+    def test_gate_reports_diff_semantics(self, mock_run: MagicMock) -> None:
+        mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="")
+
+        result = run_single_gate("diff", "diff a.txt b.txt", Path("/tmp"), required=False)
+
+        assert result.passed is True
+        assert result.exit_semantics == "difference"
+        assert "differences were found" in result.output.lower()
 
 
 class TestRunGates:
