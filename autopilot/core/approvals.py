@@ -22,7 +22,7 @@ def _utcnow_iso() -> str:
 
 def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    temp_path = path.with_suffix(f"{path.suffix}.tmp")
+    temp_path = path.with_suffix(f"{path.suffix}.{uuid.uuid4().hex}.tmp")
     temp_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False))
     temp_path.replace(path)
 
