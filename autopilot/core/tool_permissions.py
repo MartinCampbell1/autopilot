@@ -9,7 +9,11 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
-from autopilot.core.command_permissions import sanitize_permission_context_for_mode
+from autopilot.core.command_permissions import (
+    check_projected_command_permission,
+    command_rule_matches,
+    sanitize_permission_context_for_mode,
+)
 from autopilot.core.config import AutopilotConfig
 from autopilot.core.tool_contracts import ToolDef, ToolPermissionContext, get_empty_tool_permission_context
 
@@ -493,7 +497,7 @@ def _rule_reasons(
     return []
 
 
-def _tool_matches_rule(tool: ToolDef, rule: PermissionRule) -> bool:
+def _tool_matches_rule(tool: ToolDef, tool_input: dict[str, Any] | None, rule: PermissionRule) -> bool:
     pattern = str(rule.rule_value.tool_name or "").strip()
     if not pattern:
         return False
@@ -506,6 +510,8 @@ def _tool_matches_rule(tool: ToolDef, rule: PermissionRule) -> bool:
     rule_content = str(rule.rule_value.rule_content or "").strip()
     if not rule_content:
         return True
+    if command_rule_matches(rule_content, tool=tool, tool_input=tool_input):
+        return True
     candidates = {
         str(tool.metadata.get("command") or "").strip(),
         str(tool.metadata.get("project_id") or "").strip(),
@@ -516,13 +522,14 @@ def _tool_matches_rule(tool: ToolDef, rule: PermissionRule) -> bool:
 
 def check_rule_based_permissions(
     tool: ToolDef,
+    tool_input: dict[str, Any] | None,
     permission_context: ToolPermissionContext,
 ) -> PermissionDecision | None:
     """Evaluate explicit rule-based allow, ask, and deny decisions."""
 
     deny_rules = _rules_for_behavior(permission_context, "deny")
     for rule in deny_rules:
-        if _tool_matches_rule(tool, rule):
+        if _tool_matches_rule(tool, tool_input, rule):
             serialized = permission_rule_value_to_string(rule.rule_value)
             reasons = _rule_reasons(permission_context, tool_name=tool.name, matched_rule=serialized)
             if not reasons:
@@ -535,9 +542,21 @@ def check_rule_based_permissions(
                 matched_rule=serialized,
             )
 
+    projected_command_decision = check_projected_command_permission(tool, tool_input)
+    if projected_command_decision is not None:
+        matched_rule = f"{tool.name}(dangerous_pattern:{projected_command_decision.pattern_id})"
+        reasons = list(projected_command_decision.reasons) or [projected_command_decision.message]
+        return PermissionDecision(
+            behavior=projected_command_decision.behavior,
+            message=projected_command_decision.message,
+            reasons=reasons,
+            rule_source="workspace_policy",
+            matched_rule=matched_rule,
+        )
+
     ask_rules = _rules_for_behavior(permission_context, "ask")
     for rule in ask_rules:
-        if _tool_matches_rule(tool, rule):
+        if _tool_matches_rule(tool, tool_input, rule):
             serialized = permission_rule_value_to_string(rule.rule_value)
             reasons = _rule_reasons(permission_context, tool_name=tool.name, matched_rule=serialized)
             return PermissionDecision(
@@ -550,7 +569,7 @@ def check_rule_based_permissions(
 
     allow_rules = _rules_for_behavior(permission_context, "allow")
     for rule in allow_rules:
-        if _tool_matches_rule(tool, rule):
+        if _tool_matches_rule(tool, tool_input, rule):
             serialized = permission_rule_value_to_string(rule.rule_value)
             return PermissionDecision(
                 behavior="allow",
@@ -566,14 +585,12 @@ def has_permissions_to_use_tool(
     permission_context: ToolPermissionContext,
 ) -> PermissionDecision:
     """Resolve the final permission decision for one tool use."""
-
-    del tool_input
     permission_context = sanitize_permission_context_for_mode(permission_context)
 
     if permission_context.mode == "bypass_permissions":
         return PermissionDecision(behavior="allow")
 
-    rule_decision = check_rule_based_permissions(tool, permission_context)
+    rule_decision = check_rule_based_permissions(tool, tool_input, permission_context)
     if rule_decision is not None:
         if rule_decision.behavior == "ask" and permission_context.mode == "approved":
             return PermissionDecision(behavior="allow", reasons=rule_decision.reasons)
