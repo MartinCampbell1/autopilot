@@ -5,7 +5,7 @@ import { useEffect, useRef } from "react";
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8420/api";
 const DEFAULT_RECONNECT_DELAY_MS = 3000;
 const DEFAULT_MAX_TRACKED_EVENT_IDS = 512;
-const STRUCTURED_REPLAYABLE_EVENT_TYPES = [
+export const STRUCTURED_REPLAYABLE_EVENT_TYPES = [
   "project_created",
   "run_started",
   "story_started",
@@ -32,6 +32,12 @@ const STRUCTURED_REPLAYABLE_EVENT_TYPES = [
   "execution_plane_agent_action_pending_approval",
   "execution_plane_agent_action_executed",
   "execution_plane_agent_action_run_recorded",
+  "execution_plane_agent_action_run_pending_async",
+  "execution_plane_agent_action_run_async_settled",
+  "execution_plane_runtime_agent_task_started",
+  "execution_plane_runtime_agent_task_completed",
+  "execution_plane_runtime_agent_task_failed",
+  "execution_plane_runtime_agent_task_cancelled",
   "tool_permission_runtime_pending",
   "tool_permission_runtime_resolved",
   "control_request",

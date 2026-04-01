@@ -21,11 +21,23 @@ import type {
   OrchestratorSessionDetail,
   OrchestratorSessionRecord,
   OrchestratorSessionSummary,
+  ExecutionRuntimeAgentDetail,
   ProjectSummary,
 } from "@/lib/types";
 
+const AGENT_ASYNC_REFRESH_EVENTS = new Set([
+  "execution_plane_agent_action_run_recorded",
+  "execution_plane_agent_action_run_pending_async",
+  "execution_plane_agent_action_run_async_settled",
+  "execution_plane_runtime_agent_task_started",
+  "execution_plane_runtime_agent_task_completed",
+  "execution_plane_runtime_agent_task_failed",
+  "execution_plane_runtime_agent_task_cancelled",
+]);
+
 type UseControlPlaneDataLoaderArgs = {
   selectedSessionId: string;
+  selectedAgentId: string;
   setHealth: Dispatch<SetStateAction<AccountHealth | null>>;
   setProjects: Dispatch<SetStateAction<ProjectSummary[]>>;
   setControlPasses: Dispatch<SetStateAction<OrchestratorControlPassRecord[]>>;
@@ -35,12 +47,14 @@ type UseControlPlaneDataLoaderArgs = {
   setControlProfiles: Dispatch<SetStateAction<OrchestratorSessionControlProfile[]>>;
   setErrorMessage: Dispatch<SetStateAction<string>>;
   setSelectedSession: Dispatch<SetStateAction<OrchestratorSessionDetail | null>>;
+  setSelectedAgent: Dispatch<SetStateAction<ExecutionRuntimeAgentDetail | null>>;
   setSelectedRunId: Dispatch<SetStateAction<string>>;
   setSelectedPassId: Dispatch<SetStateAction<string>>;
 };
 
 export function useControlPlaneDataLoader({
   selectedSessionId,
+  selectedAgentId,
   setHealth,
   setProjects,
   setControlPasses,
@@ -50,6 +64,7 @@ export function useControlPlaneDataLoader({
   setControlProfiles,
   setErrorMessage,
   setSelectedSession,
+  setSelectedAgent,
   setSelectedRunId,
   setSelectedPassId,
 }: UseControlPlaneDataLoaderArgs) {
@@ -133,14 +148,30 @@ export function useControlPlaneDataLoader({
   }, [loadOverview]);
 
   useSSE(
-    useCallback(() => {
+    useCallback((event) => {
       void loadOverview();
       if (selectedSessionId) {
         void loadSessionDetail(selectedSessionId).catch(() => {
           // Keep current detail state on transient SSE fetch failures.
         });
       }
-    }, [loadOverview, loadSessionDetail, selectedSessionId])
+      if (selectedAgentId && AGENT_ASYNC_REFRESH_EVENTS.has(event)) {
+        void loadAgentDetail(selectedAgentId)
+          .then((detail) => {
+            setSelectedAgent(detail);
+          })
+          .catch(() => {
+            // Keep current agent state on transient SSE fetch failures.
+          });
+      }
+    }, [
+      loadAgentDetail,
+      loadOverview,
+      loadSessionDetail,
+      selectedAgentId,
+      selectedSessionId,
+      setSelectedAgent,
+    ])
   );
 
   return {
