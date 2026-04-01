@@ -196,6 +196,28 @@ export async function fetchExecutionPlaneAgentDetail(
   );
 }
 
+export async function fetchExecutionPlaneAgentActionRun(
+  runId: string,
+  options?: {
+    waitForAsyncSettlement?: boolean;
+    runtimeAgentId?: string | null;
+    waitTimeoutMs?: number;
+  }
+): Promise<ExecutionAgentActionRunRecord> {
+  const query = buildQuery({
+    wait_for_async_settlement: options?.waitForAsyncSettlement ?? false,
+    runtime_agent_id: options?.runtimeAgentId ?? null,
+    wait_timeout_ms: options?.waitTimeoutMs ?? null,
+  });
+  const res = await fetch(
+    `${API_BASE}/execution-plane/agents/action-runs/${encodeURIComponent(runId)}${query}`
+  );
+  return jsonOrThrow<ExecutionAgentActionRunRecord>(
+    res,
+    `Failed to fetch runtime agent action run: ${res.status}`
+  );
+}
+
 export async function fetchExecutionPlaneRuntimeAgentTaskOutput(
   taskId: string
 ): Promise<ExecutionRuntimeAgentTaskOutputArtifact> {
