@@ -35,6 +35,7 @@ from autopilot.core.capability_store import (
 )
 from autopilot.core.config import AutopilotConfig
 from autopilot.core.cost_accounting import default_cost_usage, ensure_cost_state
+from autopilot.core.exact_edit import append_with_fresh_snapshot
 from autopilot.core.execution_brief import TaskSource
 from autopilot.core.github_prs import normalize_story_github_pr
 from autopilot.core.loop_runner import apply_autopilot_ralph_overrides, check_ralph_installed, init_ralph_project
@@ -1948,8 +1949,11 @@ def append_guidance(config: AutopilotConfig, project_id: str, payload: str, stor
     ralph_dir = Path(project["path"]) / ".ralph"
     ralph_dir.mkdir(parents=True, exist_ok=True)
     guardrails = ralph_dir / "guardrails.md"
-    existing = guardrails.read_text() if guardrails.exists() else "# Guardrails\n\nDo not repeat these mistakes:\n\n"
-    guardrails.write_text(f"{existing}\n- [HUMAN]: {payload}\n")
+    append_with_fresh_snapshot(
+        guardrails,
+        initial_content="# Guardrails\n\nDo not repeat these mistakes:\n\n",
+        build_suffix=lambda existing: f"{'' if not existing or existing.endswith('\n') else '\n'}- [HUMAN]: {payload}\n",
+    )
     emit_project_event(
         config,
         project_id,

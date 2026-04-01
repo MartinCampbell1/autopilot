@@ -11,6 +11,8 @@ from pathlib import Path
 from typing import Callable
 
 from autopilot.core.adapters import AdapterExecutionRequest, AdapterMode, get_adapter
+from autopilot.core.exact_edit import ExactEditError, append_with_fresh_snapshot, apply_exact_edit
+from autopilot.core.file_snapshot_store import FileSnapshotError, capture_file_snapshot
 from autopilot.core.models import GateResult, Profile, is_rate_limited
 
 IGNORED_PREFIXES = (".agents/", ".ralph/")
@@ -63,6 +65,19 @@ def check_ralph_installed() -> bool:
     return shutil.which("ralph") is not None
 
 
+def _build_autopilot_config_suffix(existing: str) -> str:
+    if AUTOPILOT_CONFIG_MARKER in existing:
+        return ""
+    if not existing.rstrip():
+        return AUTOPILOT_CONFIG_BLOCK
+    return f"{'' if existing.endswith('\n') else '\n'}\n{AUTOPILOT_CONFIG_BLOCK}"
+
+
+def _build_bullet_suffix(existing: str, entry: str) -> str:
+    prefix = "" if not existing or existing.endswith("\n") else "\n"
+    return f"{prefix}{entry}\n"
+
+
 def apply_autopilot_ralph_overrides(project_path: Path) -> None:
     """Install Autopilot-specific Ralph prompt and support files into a project."""
     agents_dir = project_path / ".agents" / "ralph"
@@ -73,15 +88,28 @@ def apply_autopilot_ralph_overrides(project_path: Path) -> None:
 
     loop_script = agents_dir / "loop.sh"
     if loop_script.exists():
-        loop_contents = loop_script.read_text()
+        loop_snapshot = capture_file_snapshot(loop_script)
+        loop_contents = loop_snapshot.content
         if RALPH_LOOP_REPLACE_OLD in loop_contents and RALPH_LOOP_REPLACE_NEW not in loop_contents:
-            loop_script.write_text(loop_contents.replace(RALPH_LOOP_REPLACE_OLD, RALPH_LOOP_REPLACE_NEW))
+            try:
+                apply_exact_edit(
+                    loop_script,
+                    loop_snapshot,
+                    old_string=RALPH_LOOP_REPLACE_OLD,
+                    new_string=RALPH_LOOP_REPLACE_NEW,
+                )
+            except (ExactEditError, FileSnapshotError):
+                pass
 
     config_script = agents_dir / "config.sh"
     if config_script.exists():
-        config_contents = config_script.read_text()
-        if AUTOPILOT_CONFIG_MARKER not in config_contents:
-            config_script.write_text(f"{config_contents.rstrip()}\n\n{AUTOPILOT_CONFIG_BLOCK}")
+        try:
+            append_with_fresh_snapshot(
+                config_script,
+                build_suffix=_build_autopilot_config_suffix,
+            )
+        except FileSnapshotError:
+            pass
 
     agents_doc = project_path / "AGENTS.md"
     if not agents_doc.exists():
@@ -456,8 +484,11 @@ def append_guardrail(project_path: Path, guardrail: str) -> None:
     ralph_dir = project_path / ".ralph"
     ralph_dir.mkdir(exist_ok=True)
     guardrails_file = ralph_dir / "guardrails.md"
-    existing = guardrails_file.read_text() if guardrails_file.exists() else ""
-    guardrails_file.write_text(f"{existing}\n- {guardrail}\n")
+    append_with_fresh_snapshot(
+        guardrails_file,
+        initial_content=DEFAULT_STATE_FILES["guardrails.md"],
+        build_suffix=lambda existing: _build_bullet_suffix(existing, f"- {guardrail}"),
+    )
 
 
 def _run_capture(project_path: Path, args: list[str], timeout: int = 30) -> tuple[int, str]:

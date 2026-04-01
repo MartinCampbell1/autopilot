@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 
 from autopilot.core.loop_runner import (
     apply_autopilot_ralph_overrides,
+    append_guardrail,
     build_primary_prompt,
     build_retry_prompt,
     check_git_diff_empty,
@@ -20,6 +21,7 @@ from autopilot.core.loop_runner import (
     update_quality_ratchet,
     write_critic_feedback,
 )
+from autopilot.core.file_snapshot_store import FileSnapshotStaleError
 from autopilot.core.models import GateResult
 
 
@@ -69,6 +71,35 @@ class TestLoopRunner:
         assert "Do not peek at unfinished sub-work" in prompt
         assert 'str(v)' in loop_script.read_text()
         assert 'ACTIVITY_CMD=".agents/ralph/log-activity.sh"' in config_script.read_text()
+
+    def test_apply_autopilot_ralph_overrides_ignores_stale_safe_edit_failures(self, tmp_path: Path) -> None:
+        agents_doc = tmp_path / "AGENTS.md"
+        agents_doc.write_text("custom")
+        loop_script = tmp_path / ".agents" / "ralph" / "loop.sh"
+        loop_script.parent.mkdir(parents=True, exist_ok=True)
+        loop_script.write_text('for k, v in repl.items():\n    src = src.replace("{{" + k + "}}", v)\n')
+        config_script = tmp_path / ".agents" / "ralph" / "config.sh"
+        config_script.write_text("# config\n")
+
+        with (
+            patch("autopilot.core.loop_runner.apply_exact_edit", side_effect=FileSnapshotStaleError("stale")),
+            patch("autopilot.core.loop_runner.append_with_fresh_snapshot", side_effect=FileSnapshotStaleError("stale")),
+        ):
+            apply_autopilot_ralph_overrides(tmp_path)
+
+        assert agents_doc.read_text() == "custom"
+        assert 'str(v)' not in loop_script.read_text()
+        assert 'ACTIVITY_CMD=".agents/ralph/log-activity.sh"' not in config_script.read_text()
+
+    def test_append_guardrail_appends_entries_without_clobbering_existing_lines(self, tmp_path: Path) -> None:
+        append_guardrail(tmp_path, "Run tests first.")
+        append_guardrail(tmp_path, "Keep diffs narrow.")
+
+        guardrails = (tmp_path / ".ralph" / "guardrails.md").read_text()
+
+        assert guardrails.startswith("# Guardrails\n\nDo not repeat these mistakes:\n\n")
+        assert "- Run tests first." in guardrails
+        assert guardrails.rstrip().endswith("- Keep diffs narrow.")
 
     def test_write_and_read_critic_feedback(self, tmp_path: Path) -> None:
         ralph_dir = tmp_path / ".ralph"
