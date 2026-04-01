@@ -105,6 +105,71 @@ def test_load_tool_permission_context_normalizes_legacy_colon_rule_strings(tmp_p
     assert context.always_ask_rules["user"] == ["shell_exec(git status)"]
 
 
+def test_load_tool_permission_context_includes_managed_fragments(tmp_path: Path) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    config.managed_settings_fragments_dir.mkdir(parents=True, exist_ok=True)
+    (config.managed_settings_fragments_dir / "20-ops.json").write_text(
+        json.dumps(
+            {
+                "tool_permissions": {
+                    "ask_rules": ["execution.pause"],
+                    "tool_reasons": {"execution.pause": ["Ops policy requires approval."]},
+                }
+            }
+        )
+    )
+    (config.managed_settings_fragments_dir / "10-base.json").write_text(
+        json.dumps(
+            {
+                "permissions": {
+                    "deny_rules": ["shell_exec(kubectl apply*)"],
+                }
+            }
+        )
+    )
+
+    context = load_tool_permission_context(config, project_id="proj_123")
+
+    assert context.always_ask_rules["managed"] == ["execution.pause"]
+    assert context.always_deny_rules["managed"] == ["shell_exec(kubectl apply*)"]
+    assert context.tool_reasons["execution.pause"] == ["Ops policy requires approval."]
+    assert context.metadata["loader_sources"]["managed"]["files"] == ["10-base.json", "20-ops.json"]
+
+
+def test_load_tool_permission_context_includes_env_fragment_and_uses_env_source(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    monkeypatch.setenv(
+        "AUTOPILOT_PERMISSION_RULES_JSON",
+        json.dumps(
+            {
+                "permissions": {
+                    "deny_rules": ["execution.pause"],
+                    "tool_reasons": {"execution.pause": ["Environment policy blocked pause."]},
+                }
+            }
+        ),
+    )
+    tool = build_tool(
+        name="execution.pause",
+        description="Pause execution.",
+        approval_policy="policy",
+        execute=lambda tool_input, _: ToolResult(status="ok", payload=tool_input),
+    )
+
+    context = load_tool_permission_context(config, project_id="proj_123")
+    decision = has_permissions_to_use_tool(tool, {}, context)
+
+    assert context.always_deny_rules["env"] == ["execution.pause"]
+    assert context.metadata["loader_sources"]["env"]["loaded"] is True
+    assert decision.behavior == "deny"
+    assert decision.rule_source == "env"
+    assert decision.matched_rule == "execution.pause"
+    assert decision.message == "Environment policy blocked pause."
+
+
 def test_permission_rule_string_round_trip_canonicalizes_shell_grammar() -> None:
     rule_value = permission_rule_value_from_string("shell_exec: FOO=1 env git status --short")
 

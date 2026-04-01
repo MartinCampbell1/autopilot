@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
@@ -24,7 +25,7 @@ from autopilot.core.tool_contracts import ToolDef, ToolPermissionContext, get_em
 
 PermissionMode = Literal["default", "approved", "bypass_permissions", "dont_ask", "plan"]
 PermissionBehavior = Literal["allow", "deny", "ask"]
-PermissionRuleSource = Literal["command", "session", "project", "user", "project_policy", "workspace_policy"]
+PermissionRuleSource = Literal["command", "session", "project", "user", "managed", "env", "project_policy", "workspace_policy"]
 PermissionUpdateDestination = Literal["session", "user", "project"]
 
 RULE_SOURCE_ORDER: tuple[PermissionRuleSource, ...] = (
@@ -32,11 +33,14 @@ RULE_SOURCE_ORDER: tuple[PermissionRuleSource, ...] = (
     "session",
     "project",
     "user",
+    "managed",
+    "env",
     "project_policy",
     "workspace_policy",
 )
 DENIAL_BREAKER_THRESHOLD = 3
 VALID_PERMISSION_RULE_SOURCES = set(RULE_SOURCE_ORDER)
+ENV_PERMISSION_RULES_JSON = "AUTOPILOT_PERMISSION_RULES_JSON"
 
 
 class PermissionRuleValue(BaseModel):
@@ -185,6 +189,92 @@ def _merge_tool_reasons(
         if current:
             merged[key] = current
     return merged
+
+
+def _merge_permission_overlay(
+    existing: PermissionContextOverlay | None,
+    incoming: PermissionContextOverlay,
+) -> PermissionContextOverlay:
+    existing_overlay = existing or PermissionContextOverlay()
+    return PermissionContextOverlay(
+        mode=incoming.mode or existing_overlay.mode,
+        allow_rules=_merge_serialized_rules(existing_overlay.allow_rules, incoming.allow_rules),
+        deny_rules=_merge_serialized_rules(existing_overlay.deny_rules, incoming.deny_rules),
+        ask_rules=_merge_serialized_rules(existing_overlay.ask_rules, incoming.ask_rules),
+        tool_reasons=_merge_tool_reasons(existing_overlay.tool_reasons, incoming.tool_reasons),
+    )
+
+
+def _permission_overlay_from_payload(payload: Any) -> PermissionContextOverlay | None:
+    if not isinstance(payload, dict):
+        return None
+    for key in ("tool_permissions", "permissions"):
+        nested = payload.get(key)
+        if isinstance(nested, dict):
+            payload = nested
+            break
+    normalized_payload: dict[str, Any] = {}
+    for field_name in ("mode", "allow_rules", "deny_rules", "ask_rules", "tool_reasons"):
+        if field_name in payload:
+            normalized_payload[field_name] = payload[field_name]
+    if not normalized_payload:
+        return None
+    try:
+        overlay = PermissionContextOverlay.model_validate(normalized_payload)
+    except Exception:
+        return None
+    return overlay
+
+
+def _load_managed_permission_overlay(config: AutopilotConfig) -> tuple[PermissionContextOverlay | None, dict[str, Any]]:
+    directory = config.managed_settings_fragments_dir
+    metadata = {
+        "directory": str(directory),
+        "files": [],
+        "warnings": [],
+    }
+    if not directory.exists():
+        return None, metadata
+
+    overlay = PermissionContextOverlay()
+    for path in sorted(directory.glob("*.json")):
+        metadata["files"].append(path.name)
+        try:
+            payload = json.loads(path.read_text())
+        except Exception:
+            metadata["warnings"].append(f"Failed to parse managed permission fragment `{path.name}`.")
+            continue
+        fragment = _permission_overlay_from_payload(payload)
+        if fragment is None:
+            metadata["warnings"].append(f"Managed permission fragment `{path.name}` did not contain a valid permission payload.")
+            continue
+        overlay = _merge_permission_overlay(overlay, fragment)
+
+    if not any((overlay.allow_rules, overlay.deny_rules, overlay.ask_rules, overlay.tool_reasons, overlay.mode)):
+        return None, metadata
+    return overlay, metadata
+
+
+def _load_env_permission_overlay() -> tuple[PermissionContextOverlay | None, dict[str, Any]]:
+    metadata = {
+        "env_var": ENV_PERMISSION_RULES_JSON,
+        "loaded": False,
+        "warnings": [],
+    }
+    raw_value = str(os.getenv(ENV_PERMISSION_RULES_JSON) or "").strip()
+    if not raw_value:
+        return None, metadata
+    try:
+        payload = json.loads(raw_value)
+    except Exception:
+        metadata["warnings"].append(f"Failed to parse `{ENV_PERMISSION_RULES_JSON}` as JSON.")
+        return None, metadata
+    overlay = _permission_overlay_from_payload(payload)
+    if overlay is None:
+        metadata["warnings"].append(f"`{ENV_PERMISSION_RULES_JSON}` did not contain a valid permission payload.")
+        return None, metadata
+    metadata["loaded"] = True
+    return overlay, metadata
 
 
 def _resolve_loaded_permission_mode(
@@ -488,10 +578,17 @@ def load_tool_permission_context(
     """Load the merged tool permission context for one project scope."""
 
     state = _load_persisted_state(config)
+    managed_overlay, managed_metadata = _load_managed_permission_overlay(config)
+    env_overlay, env_metadata = _load_env_permission_overlay()
     always_allow_rules = {"user": normalize_serialized_permission_rules(list(state.user.allow_rules))}
     always_deny_rules = {"user": normalize_serialized_permission_rules(list(state.user.deny_rules))}
     always_ask_rules = {"user": normalize_serialized_permission_rules(list(state.user.ask_rules))}
-    metadata: dict[str, Any] = {}
+    metadata: dict[str, Any] = {
+        "loader_sources": {
+            "managed": managed_metadata,
+            "env": env_metadata,
+        }
+    }
     project_mode = "default"
 
     normalized_project_id = str(project_id or "").strip()
@@ -502,7 +599,13 @@ def load_tool_permission_context(
         always_ask_rules["project"] = normalize_serialized_permission_rules(list(scope.ask_rules))
         project_mode = scope.mode
 
-    normalized_overlays = dict(overlays or {})
+    normalized_overlays: dict[str, PermissionContextOverlay] = {}
+    if managed_overlay is not None:
+        normalized_overlays["managed"] = managed_overlay
+    if env_overlay is not None:
+        normalized_overlays["env"] = env_overlay
+    for source, overlay in dict(overlays or {}).items():
+        normalized_overlays[source] = _merge_permission_overlay(normalized_overlays.get(source), overlay)
     for source in normalized_overlays:
         if source not in VALID_PERMISSION_RULE_SOURCES:
             raise ValueError(f"Unsupported permission overlay source `{source}`.")
