@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 
 from autopilot.core.agent_mailbox import list_agent_mailbox_messages
-from autopilot.core.approval_runtime import get_approval_runtime
+from autopilot.core.approval_runtime import annotate_approval_runtime, create_or_reuse_approval_runtime, get_approval_runtime
 from autopilot.core.config import AutopilotConfig
 from autopilot.core.headless_control import (
     attach_headless_control_handlers,
@@ -593,3 +593,102 @@ def test_headless_control_can_return_pending_user_runtime(tmp_path: Path) -> Non
     assert runtime.metadata["pending"]["stage"] == "pending_user"
     assert len(generic_mailbox) == 1
     assert len(user_mailbox) == 1
+
+
+def test_headless_control_can_list_get_and_resolve_tool_permission_runtimes(tmp_path: Path) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    project = _create_project(config, tmp_path / "project")
+    session = create_headless_control_session(config, project_entry=project, session_id="sess_headless")
+    runtime = create_or_reuse_approval_runtime(
+        config,
+        key=f"tool-permission:{project['id']}:demo.pause:toolu_control_1",
+        project_id=str(project["id"]),
+        runtime_agent_ids=["proj_headless_runtime:1:worker:a"],
+        metadata={
+            "kind": "tool_permission_request",
+            "tool_name": "demo.pause",
+            "tool_use_id": "toolu_control_1",
+        },
+        publish_pending=True,
+        pending_message_type="tool_permission_pending",
+        pending_payload={
+            "tool_name": "demo.pause",
+            "tool_use_id": "toolu_control_1",
+            "message": "Need explicit approval.",
+            "behavior": "pending_user",
+        },
+    )
+    annotate_approval_runtime(
+        config,
+        approval_runtime_id=runtime.id,
+        metadata_updates={
+            "pending": {
+                "stage": "pending_user",
+                "tool_name": "demo.pause",
+                "tool_use_id": "toolu_control_1",
+            }
+        },
+        payload_updates={
+            "pending_user": {
+                "message": "Need explicit approval.",
+                "tool_name": "demo.pause",
+                "tool_use_id": "toolu_control_1",
+            }
+        },
+        mailbox_message_type="tool_permission_user_pending",
+        mailbox_payload={"tool_name": "demo.pause", "tool_use_id": "toolu_control_1"},
+    )
+
+    list_response = session.handle_request(
+        {
+            "type": "control_request",
+            "request_id": "req_list_tool_permission_runtimes",
+            "request": {
+                "subtype": "list_tool_permission_runtimes",
+                "runtime_agent_id": "proj_headless_runtime:1:worker:a",
+                "pending_stage": "pending_user",
+            },
+            "session_id": "sess_headless",
+        }
+    )
+    list_payload = list_response.response.response
+    assert list_payload["summary"]["count"] == 1
+    assert list_payload["summary"]["pending_count"] == 1
+    assert list_payload["runtimes"][0]["id"] == runtime.id
+
+    get_response = session.handle_request(
+        {
+            "type": "control_request",
+            "request_id": "req_get_tool_permission_runtime",
+            "request": {
+                "subtype": "get_tool_permission_runtime",
+                "approval_runtime_id": runtime.id,
+            },
+            "session_id": "sess_headless",
+        }
+    )
+    assert get_response.response.response["runtime"]["pending_stage"] == "pending_user"
+
+    resolve_response = session.handle_request(
+        {
+            "type": "control_request",
+            "request_id": "req_resolve_tool_permission_runtime",
+            "request": {
+                "subtype": "resolve_tool_permission_runtime",
+                "approval_runtime_id": runtime.id,
+                "outcome": "allow",
+                "actor": "founderos",
+                "note": "Proceed with the tool.",
+                "source": "user",
+            },
+            "session_id": "sess_headless",
+        }
+    )
+    resolve_payload = resolve_response.response.response["runtime"]
+    mailbox = list_agent_mailbox_messages(config, approval_runtime_id=runtime.id)
+
+    assert resolve_payload["status"] == "resolved"
+    assert resolve_payload["resolved_behavior"] == "allow"
+    assert resolve_payload["resolved_by"] == "founderos"
+    assert any(message.message_type == "tool_permission_user_allow" for message in mailbox)
+    assert any(message.message_type == "approval_runtime_resolved" for message in mailbox)

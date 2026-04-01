@@ -116,6 +116,27 @@ class ControlGetContextUsageRequest(BaseModel):
     subtype: Literal["get_context_usage"]
 
 
+class ControlListToolPermissionRuntimesRequest(BaseModel):
+    subtype: Literal["list_tool_permission_runtimes"]
+    runtime_agent_id: str | None = None
+    status: str | None = None
+    pending_stage: str | None = None
+
+
+class ControlGetToolPermissionRuntimeRequest(BaseModel):
+    subtype: Literal["get_tool_permission_runtime"]
+    approval_runtime_id: str
+
+
+class ControlResolveToolPermissionRuntimeRequest(BaseModel):
+    subtype: Literal["resolve_tool_permission_runtime"]
+    approval_runtime_id: str
+    outcome: Literal["allow", "deny"]
+    actor: str = "human"
+    note: str = ""
+    source: Literal["user", "channel"] = "user"
+
+
 ControlRequestPayload = Annotated[
     ControlInitializeRequest
     | ControlInterruptRequest
@@ -125,7 +146,10 @@ ControlRequestPayload = Annotated[
     | ControlSetMaxThinkingTokensRequest
     | ControlMcpStatusRequest
     | ControlReloadPluginsRequest
-    | ControlGetContextUsageRequest,
+    | ControlGetContextUsageRequest
+    | ControlListToolPermissionRuntimesRequest
+    | ControlGetToolPermissionRuntimeRequest
+    | ControlResolveToolPermissionRuntimeRequest,
     Field(discriminator="subtype"),
 ]
 _CONTROL_REQUEST_ADAPTER = TypeAdapter(ControlRequestPayload)
