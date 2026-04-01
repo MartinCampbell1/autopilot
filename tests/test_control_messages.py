@@ -68,6 +68,32 @@ def test_parse_control_message_supports_reload_plugins_request() -> None:
     assert parsed.session_id == "sess_1"
 
 
+def test_parse_control_message_supports_tool_permission_runtime_resolution_request() -> None:
+    parsed = parse_control_message(
+        {
+            "type": "control_request",
+            "requestId": "req_tool_perm_runtime",
+            "request": {
+                "subtype": "resolve_tool_permission_runtime",
+                "approvalRuntimeId": "apprt_123",
+                "outcome": "allow",
+                "actor": "founderos",
+                "source": "user",
+                "note": "Proceed.",
+            },
+            "sessionId": "sess_1",
+        }
+    )
+
+    assert parsed is not None
+    assert parsed.type == "control_request"
+    assert parsed.request.subtype == "resolve_tool_permission_runtime"
+    assert parsed.request.approval_runtime_id == "apprt_123"
+    assert parsed.request.outcome == "allow"
+    assert parsed.request.actor == "founderos"
+    assert parsed.session_id == "sess_1"
+
+
 def test_build_structured_event_envelope_uses_sequence_when_no_explicit_id() -> None:
     event = {
         "event": "project_created",

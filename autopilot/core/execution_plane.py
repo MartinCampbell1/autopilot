@@ -59,6 +59,7 @@ from autopilot.core.tool_permission_runtime import (
     get_tool_permission_runtime,
     list_tool_permission_runtimes,
     resolve_tool_permission_runtime,
+    serialize_tool_permission_runtime,
 )
 from autopilot.core.agent_action_runs import (
     AgentActionBatchRunRecord,
@@ -1779,18 +1780,7 @@ def _decorate_runtime_agent(
 def _materialize_tool_permission_runtime_record(record: Any) -> dict[str, Any]:
     """Normalize one tool-permission runtime for execution-plane consumers."""
 
-    pending = dict(record.metadata.get("pending") or {})
-    resolution = dict(record.payload.get("resolution") or {})
-    return {
-        **record.model_dump(),
-        "kind": str(record.metadata.get("kind") or ""),
-        "pending_stage": str(pending.get("stage") or ""),
-        "tool_name": str(record.metadata.get("tool_name") or pending.get("tool_name") or ""),
-        "tool_use_id": str(record.metadata.get("tool_use_id") or pending.get("tool_use_id") or ""),
-        "resolved_behavior": str(pending.get("resolved_behavior") or record.outcome or ""),
-        "resolved_by": str(pending.get("resolved_by") or resolution.get("actor") or ""),
-        "resolved_source": str(pending.get("resolved_source") or resolution.get("source") or record.winner_source or ""),
-    }
+    return dict(serialize_tool_permission_runtime(record))
 
 
 def list_execution_plane_tool_permission_runtimes(

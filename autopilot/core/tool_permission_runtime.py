@@ -68,6 +68,23 @@ def list_tool_permission_runtimes(
     return filtered
 
 
+def serialize_tool_permission_runtime(record: ApprovalRuntimeRecord) -> dict[str, object]:
+    """Normalize one tool-permission runtime for control-plane consumers."""
+
+    pending = dict(record.metadata.get("pending") or {})
+    resolution = dict(record.payload.get("resolution") or {})
+    return {
+        **record.model_dump(),
+        "kind": str(record.metadata.get("kind") or ""),
+        "pending_stage": str(pending.get("stage") or ""),
+        "tool_name": str(record.metadata.get("tool_name") or pending.get("tool_name") or ""),
+        "tool_use_id": str(record.metadata.get("tool_use_id") or pending.get("tool_use_id") or ""),
+        "resolved_behavior": str(pending.get("resolved_behavior") or record.outcome or ""),
+        "resolved_by": str(pending.get("resolved_by") or resolution.get("actor") or ""),
+        "resolved_source": str(pending.get("resolved_source") or resolution.get("source") or record.winner_source or ""),
+    }
+
+
 def resolve_tool_permission_runtime(
     config: AutopilotConfig,
     approval_runtime_id: str,
@@ -140,5 +157,6 @@ __all__ = [
     "ToolPermissionResolutionSource",
     "get_tool_permission_runtime",
     "list_tool_permission_runtimes",
+    "serialize_tool_permission_runtime",
     "resolve_tool_permission_runtime",
 ]

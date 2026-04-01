@@ -31,6 +31,12 @@ from autopilot.core.plugin_storage import get_plugin_option_state
 from autopilot.core.project_store import build_project_summary
 from autopilot.core.structured_io import StructuredIO
 from autopilot.core.tool_contracts import ToolResult, build_tool
+from autopilot.core.tool_permission_runtime import (
+    get_tool_permission_runtime,
+    list_tool_permission_runtimes,
+    resolve_tool_permission_runtime,
+    serialize_tool_permission_runtime,
+)
 from autopilot.core.tool_permissions import (
     PermissionContextOverlay,
     load_tool_permission_context,
@@ -474,6 +480,51 @@ class HeadlessControlSession:
             **self.mcp_status_payload(),
         }
 
+    def list_tool_permission_runtimes_payload(self, request: Any) -> dict[str, Any]:
+        """List tool-permission runtimes scoped to the current headless project."""
+
+        runtimes = [
+            serialize_tool_permission_runtime(record)
+            for record in list_tool_permission_runtimes(
+                self.config,
+                project_id=self.project_id,
+                runtime_agent_id=str(request.runtime_agent_id or "").strip() or None,
+                status=str(request.status or "").strip() or None,
+                pending_stage=str(request.pending_stage or "").strip() or None,
+            )
+        ]
+        return {
+            "summary": {
+                "count": len(runtimes),
+                "pending_count": sum(1 for runtime in runtimes if str(runtime.get("status") or "") == "pending"),
+            },
+            "runtimes": runtimes,
+        }
+
+    def get_tool_permission_runtime_payload(self, request: Any) -> dict[str, Any]:
+        """Return one tool-permission runtime for the current headless project."""
+
+        runtime = get_tool_permission_runtime(self.config, str(request.approval_runtime_id or "").strip())
+        if runtime is None or runtime.project_id != self.project_id:
+            raise KeyError(str(request.approval_runtime_id or "").strip())
+        return {"runtime": serialize_tool_permission_runtime(runtime)}
+
+    def resolve_tool_permission_runtime_payload(self, request: Any) -> dict[str, Any]:
+        """Resolve one tool-permission runtime through the structured control channel."""
+
+        runtime = get_tool_permission_runtime(self.config, str(request.approval_runtime_id or "").strip())
+        if runtime is None or runtime.project_id != self.project_id:
+            raise KeyError(str(request.approval_runtime_id or "").strip())
+        resolved = resolve_tool_permission_runtime(
+            self.config,
+            runtime.id,
+            outcome=request.outcome,
+            actor=str(request.actor or "human"),
+            note=str(request.note or ""),
+            source=request.source,
+        )
+        return {"runtime": serialize_tool_permission_runtime(resolved)}
+
     def handle_request(self, request: ControlRequestEnvelope | dict[str, Any]) -> ControlResponseEnvelope:
         """Resolve one inbound control request for the headless runtime."""
 
@@ -549,6 +600,46 @@ class HeadlessControlSession:
             return make_control_success_response(
                 request.request_id,
                 response=self.reload_plugins_payload(),
+                session_id=self.session_id,
+            )
+        if subtype == "list_tool_permission_runtimes":
+            return make_control_success_response(
+                request.request_id,
+                response=self.list_tool_permission_runtimes_payload(request.request),
+                session_id=self.session_id,
+            )
+        if subtype == "get_tool_permission_runtime":
+            try:
+                payload = self.get_tool_permission_runtime_payload(request.request)
+            except KeyError:
+                return make_control_error_response(
+                    request.request_id,
+                    error=f"Tool-permission runtime `{request.request.approval_runtime_id}` was not found in this session.",
+                    session_id=self.session_id,
+                )
+            return make_control_success_response(
+                request.request_id,
+                response=payload,
+                session_id=self.session_id,
+            )
+        if subtype == "resolve_tool_permission_runtime":
+            try:
+                payload = self.resolve_tool_permission_runtime_payload(request.request)
+            except KeyError:
+                return make_control_error_response(
+                    request.request_id,
+                    error=f"Tool-permission runtime `{request.request.approval_runtime_id}` was not found in this session.",
+                    session_id=self.session_id,
+                )
+            except RuntimeError as exc:
+                return make_control_error_response(
+                    request.request_id,
+                    error=str(exc),
+                    session_id=self.session_id,
+                )
+            return make_control_success_response(
+                request.request_id,
+                response=payload,
                 session_id=self.session_id,
             )
         return make_control_error_response(
