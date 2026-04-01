@@ -106,6 +106,11 @@ from autopilot.core.runtime_agent_tasks import (
 from autopilot.core.runtime_budgets import ensure_budget_state
 from autopilot.core.runtime_control import list_project_work_item_leases
 from autopilot.core.task_output import get_task_output, read_task_output_text
+from autopilot.core.task_transcript import (
+    get_task_transcript,
+    read_task_transcript_text,
+    task_transcript_id,
+)
 from autopilot.core.workspace_policy import inspect_project_workspace_policy
 
 EXECUTION_BRIEF_RELPATH = ".agents/tasks/execution-brief.json"
@@ -1248,15 +1253,36 @@ def _materialize_execution_plane_runtime_agent_task_record(
     record: RuntimeAgentTaskRecord,
 ) -> dict[str, Any]:
     payload = record.model_dump()
+    transcript_artifact_id = task_transcript_id("runtime_agent_task", record.id)
     payload["artifact_ref"] = f"/api/execution-plane/agents/tasks/{record.id}"
     payload["output_artifact_ref"] = (
         f"/api/execution-plane/agents/tasks/{record.id}/output"
         if str(record.output_artifact_id or "").strip()
         else ""
     )
+    payload["transcript_artifact_id"] = transcript_artifact_id
+    payload["transcript_artifact_ref"] = f"/api/execution-plane/agents/tasks/{record.id}/transcript"
     payload["output_available"] = bool(str(record.output_artifact_id or "").strip())
     payload["active"] = record.status in {"queued", "running"}
     payload["terminal"] = record.status in {"completed", "failed", "cancelled"}
+    payload["resume_contract"] = {
+        "task_id": record.id,
+        "project_id": record.project_id,
+        "command": record.command,
+        "status": record.status,
+        "orchestrator_session_id": record.orchestrator_session_id,
+        "agent_action_run_id": record.agent_action_run_id,
+        "approval_id": record.approval_id,
+        "issue_id": record.issue_id,
+        "runtime_agent_id": record.runtime_agent_id,
+        "runtime_agent_ids": list(record.runtime_agent_ids),
+        "output_artifact_id": str(record.output_artifact_id or "").strip(),
+        "output_artifact_ref": payload["output_artifact_ref"],
+        "transcript_artifact_id": transcript_artifact_id,
+        "transcript_artifact_ref": payload["transcript_artifact_ref"],
+        "active": payload["active"],
+        "terminal": payload["terminal"],
+    }
     return payload
 
 
@@ -2492,6 +2518,29 @@ def get_execution_plane_runtime_agent_task_output(
         "task_id": task.id,
         "artifact_ref": f"/api/execution-plane/agents/tasks/{task.id}/output",
         "content": read_task_output_text(config, output_artifact_id),
+    }
+
+
+def get_execution_plane_runtime_agent_task_transcript(
+    config: AutopilotConfig,
+    task_id: str,
+) -> dict[str, Any]:
+    """Load one durable transcript artifact for an async runtime-agent task."""
+
+    task = get_runtime_agent_task(config, task_id)
+    if task is None:
+        raise KeyError(task_id)
+    task = refresh_runtime_agent_task(config, task)
+    transcript_artifact_id = task_transcript_id("runtime_agent_task", task.id)
+    transcript_record = get_task_transcript(config, transcript_artifact_id)
+    if transcript_record is None:
+        raise FileNotFoundError(transcript_artifact_id)
+
+    return {
+        **transcript_record.model_dump(),
+        "task_id": task.id,
+        "artifact_ref": f"/api/execution-plane/agents/tasks/{task.id}/transcript",
+        "content": read_task_transcript_text(config, transcript_artifact_id),
     }
 
 

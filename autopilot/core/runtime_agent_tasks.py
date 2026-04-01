@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 from autopilot.core.config import AutopilotConfig
 from autopilot.core.project_store import emit_project_event, ensure_project_state, get_project_entry
 from autopilot.core.task_output import load_text_from_source, persist_task_output
+from autopilot.core.task_transcript import persist_task_transcript
 
 SUPPORTED_RUNTIME_AGENT_TASK_STATUSES = {
     "queued",
@@ -22,6 +23,7 @@ SUPPORTED_RUNTIME_AGENT_TASK_STATUSES = {
     "cancelled",
 }
 TERMINAL_RUNTIME_AGENT_TASK_STATUSES = {"completed", "failed", "cancelled"}
+TASK_HISTORY_LIMIT = 100
 
 
 def _utcnow_iso() -> str:
@@ -74,6 +76,7 @@ class RuntimeAgentTaskRecord(BaseModel):
     output_path: str = ""
     output_artifact_id: str = ""
     output_preview: str = ""
+    history: list[dict[str, Any]] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
     created_at: str
     updated_at: str
@@ -110,7 +113,109 @@ def save_runtime_agent_task(
 
     task.updated_at = _utcnow_iso()
     _atomic_write_json(runtime_agent_task_path(config, task.id), task.model_dump())
+    _persist_runtime_agent_task_transcript(config, task)
     return task
+
+
+def _append_task_history(
+    task: RuntimeAgentTaskRecord,
+    *,
+    event: str,
+    status: str,
+    message: str,
+    extra: dict[str, Any] | None = None,
+) -> RuntimeAgentTaskRecord:
+    entries = list(task.history or [])
+    entry = {
+        "timestamp": _utcnow_iso(),
+        "event": str(event or "").strip(),
+        "status": str(status or "").strip(),
+        "message": str(message or "").strip(),
+        "extra": dict(extra or {}),
+    }
+    last = entries[-1] if entries else None
+    if last and all(
+        last.get(key) == entry.get(key)
+        for key in ("event", "status", "message")
+    ) and dict(last.get("extra") or {}) == entry["extra"]:
+        return task
+    task.history = entries[-TASK_HISTORY_LIMIT + 1 :] + [entry]
+    return task
+
+
+def _render_runtime_agent_task_transcript(task: RuntimeAgentTaskRecord) -> str:
+    lines = [
+        "# Runtime Agent Task Transcript",
+        "",
+        f"Task ID: {task.id}",
+        f"Project ID: {task.project_id}",
+        f"Command: {task.command}",
+        f"Status: {task.status}",
+        f"Actor: {task.actor or '-'}",
+        f"Reason: {task.reason or '-'}",
+        f"Created At: {task.created_at}",
+        f"Started At: {task.started_at or '-'}",
+        f"Completed At: {task.completed_at or '-'}",
+        f"Orchestrator Session: {task.orchestrator_session_id or '-'}",
+        f"Agent Action Run: {task.agent_action_run_id or '-'}",
+        f"Approval ID: {task.approval_id or '-'}",
+        f"Issue ID: {task.issue_id or '-'}",
+        f"Runtime Agents: {', '.join(task.runtime_agent_ids) or '-'}",
+        f"Output Artifact ID: {task.output_artifact_id or '-'}",
+        f"Output Path: {task.output_path or '-'}",
+        "",
+        "## Result",
+        f"Summary: {task.result_summary or task.placeholder_result or '-'}",
+    ]
+    if task.result_payload:
+        lines.extend(
+            [
+                "",
+                "```json",
+                json.dumps(task.result_payload, indent=2, ensure_ascii=False),
+                "```",
+            ]
+        )
+    lines.extend(["", "## Timeline"])
+    if not task.history:
+        lines.append("- No lifecycle events recorded yet.")
+    else:
+        for item in task.history:
+            timestamp = str(item.get("timestamp") or "").strip() or "-"
+            status = str(item.get("status") or "").strip() or "unknown"
+            event = str(item.get("event") or "").strip() or "event"
+            message = str(item.get("message") or "").strip() or "-"
+            lines.append(f"- [{timestamp}] {status} {event}: {message}")
+            extra = dict(item.get("extra") or {})
+            if extra:
+                lines.extend(
+                    [
+                        "  ```json",
+                        json.dumps(extra, indent=2, ensure_ascii=False),
+                        "  ```",
+                    ]
+                )
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _persist_runtime_agent_task_transcript(
+    config: AutopilotConfig,
+    task: RuntimeAgentTaskRecord,
+) -> None:
+    persist_task_transcript(
+        config,
+        owner_kind="runtime_agent_task",
+        owner_id=task.id,
+        content=_render_runtime_agent_task_transcript(task),
+        metadata={
+            "project_id": task.project_id,
+            "command": task.command,
+            "status": task.status,
+            "orchestrator_session_id": task.orchestrator_session_id,
+            "agent_action_run_id": task.agent_action_run_id,
+            "output_artifact_id": task.output_artifact_id,
+        },
+    )
 
 
 def list_runtime_agent_tasks(
@@ -274,6 +379,12 @@ def create_or_reuse_runtime_agent_task(
                     changed = True
             existing.metadata = next_metadata
         if changed:
+            _append_task_history(
+                existing,
+                event="task_context_updated",
+                status=existing.status,
+                message="Task metadata was refreshed while background work was still in progress.",
+            )
             return save_runtime_agent_task(config, existing)
         return existing
 
@@ -297,6 +408,13 @@ def create_or_reuse_runtime_agent_task(
         created_at=created_at,
         updated_at=created_at,
         started_at=created_at,
+    )
+    _append_task_history(
+        task,
+        event="task_started",
+        status="running",
+        message=f"Background task `{task.id}` started for `{task.command}`.",
+        extra={"runtime_agent_ids": list(task.runtime_agent_ids)},
     )
     save_runtime_agent_task(config, task)
     _emit_runtime_agent_task_event(
@@ -323,6 +441,13 @@ def link_runtime_agent_task_run(
     normalized_run_id = str(agent_action_run_id or "").strip()
     if normalized_run_id and task.agent_action_run_id != normalized_run_id:
         task.agent_action_run_id = normalized_run_id
+        _append_task_history(
+            task,
+            event="linked_agent_action_run",
+            status=task.status,
+            message=f"Linked runtime-agent task to action run `{normalized_run_id}`.",
+            extra={"agent_action_run_id": normalized_run_id},
+        )
         return save_runtime_agent_task(config, task)
     return task
 
@@ -390,6 +515,17 @@ def _terminal_task_update(
     task.output_artifact_id = output_record.id
     task.output_preview = output_record.preview
     task.completed_at = str(project_state.get("finished_at") or "").strip() or _utcnow_iso()
+    _append_task_history(
+        task,
+        event=f"task_{status}",
+        status=status,
+        message=summary,
+        extra={
+            "output_artifact_id": output_record.id,
+            "output_source_path": output_source_path,
+            "project_status": str(project_state.get("status") or ""),
+        },
+    )
     return task
 
 

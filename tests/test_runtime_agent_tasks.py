@@ -15,10 +15,12 @@ from autopilot.core.project_store import (
 )
 from autopilot.core.runtime_agent_tasks import (
     create_or_reuse_runtime_agent_task,
+    link_runtime_agent_task_run,
     list_runtime_agent_tasks,
     refresh_runtime_agent_task,
 )
 from autopilot.core.task_output import get_task_output, read_task_output_text
+from autopilot.core.task_transcript import get_task_transcript, read_task_transcript_text, task_transcript_id
 
 
 def _seed_project(config: AutopilotConfig, project_path: Path) -> dict[str, object]:
@@ -107,3 +109,48 @@ def test_runtime_agent_task_transitions_to_completed_with_terminal_summary(tmp_p
     assert output_record.owner_kind == "runtime_agent_task"
     assert output_record.source_path == str(log_path)
     assert "worker finished cleanly" in read_task_output_text(config, refreshed.output_artifact_id)
+
+
+def test_runtime_agent_task_persists_transcript_history_and_run_link(tmp_path: Path) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    project = _seed_project(config, tmp_path / "async-task-transcript-project")
+    log_path = config.autopilot_home / "logs" / "launch.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path.write_text("launch started\nlaunch finished\n", encoding="utf-8")
+
+    task = create_or_reuse_runtime_agent_task(
+        config,
+        project_id=str(project["id"]),
+        command="launch",
+        actor="founderos",
+        reason="Launch background work.",
+        orchestrator_session_id="ors_async_transcript",
+        runtime_agent_ids=["proj:1:worker:a", "proj:1:critic:b"],
+        output_path=str(log_path),
+    )
+    linked = link_runtime_agent_task_run(config, task.id, agent_action_run_id="aar_transcript_1")
+
+    state = load_project_state(config, str(project["id"]))
+    state["status"] = "completed"
+    state["paused"] = False
+    state["finished_at"] = "2026-04-01T12:34:56+00:00"
+    state["log_path"] = str(log_path)
+    save_project_state(config, str(project["id"]), state)
+
+    refreshed = refresh_runtime_agent_task(config, task.id)
+    transcript_id = task_transcript_id("runtime_agent_task", task.id)
+    transcript_record = get_task_transcript(config, transcript_id)
+
+    assert linked.agent_action_run_id == "aar_transcript_1"
+    assert transcript_record is not None
+    assert transcript_record.owner_kind == "runtime_agent_task"
+    assert transcript_record.owner_id == task.id
+    assert transcript_record.metadata["agent_action_run_id"] == "aar_transcript_1"
+    transcript_text = read_task_transcript_text(config, transcript_id)
+    assert f"Task ID: {task.id}" in transcript_text
+    assert "Agent Action Run: aar_transcript_1" in transcript_text
+    assert "Background run completed." in transcript_text
+    assert "task_started" in transcript_text
+    assert "linked_agent_action_run" in transcript_text
+    assert "task_completed" in transcript_text
+    assert refreshed.history[-1]["event"] == "task_completed"
