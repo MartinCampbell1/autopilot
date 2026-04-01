@@ -5,6 +5,10 @@ import { requestProjectRuntimeControl } from "@/lib/api";
 import type {
   ControlRequestMessage,
   ControlResponseMessage,
+  ExecutionAgentActionRunRecord,
+  ExecutionRuntimeAgentTaskOutputArtifact,
+  ExecutionRuntimeAgentTaskRecord,
+  ExecutionRuntimeAgentTaskTranscriptArtifact,
   ProjectRuntimeControlExchangeRecord,
   ProjectRuntimeControlRequestResult,
   ProjectSummary,
@@ -132,6 +136,41 @@ function parseToolPermissionRuntimeListResponse(value: unknown): ToolPermissionR
     },
     runtimes,
   };
+}
+
+function parseExecutionAgentActionRunRecord(value: unknown): ExecutionAgentActionRunRecord | null {
+  if (!isRecord(value)) return null;
+  const id = stringValue(value.id);
+  if (!id) return null;
+  return value as unknown as ExecutionAgentActionRunRecord;
+}
+
+function parseExecutionRuntimeAgentTaskRecord(value: unknown): ExecutionRuntimeAgentTaskRecord | null {
+  if (!isRecord(value)) return null;
+  const id = stringValue(value.id);
+  const projectId = stringValue(value.project_id);
+  if (!id || !projectId) return null;
+  return value as unknown as ExecutionRuntimeAgentTaskRecord;
+}
+
+function parseExecutionRuntimeAgentTaskOutputArtifact(
+  value: unknown
+): ExecutionRuntimeAgentTaskOutputArtifact | null {
+  if (!isRecord(value)) return null;
+  const id = stringValue(value.id);
+  const taskId = stringValue(value.task_id);
+  if (!id || !taskId) return null;
+  return value as unknown as ExecutionRuntimeAgentTaskOutputArtifact;
+}
+
+function parseExecutionRuntimeAgentTaskTranscriptArtifact(
+  value: unknown
+): ExecutionRuntimeAgentTaskTranscriptArtifact | null {
+  if (!isRecord(value)) return null;
+  const id = stringValue(value.id);
+  const taskId = stringValue(value.task_id);
+  if (!id || !taskId) return null;
+  return value as unknown as ExecutionRuntimeAgentTaskTranscriptArtifact;
 }
 
 function extractToolPermissionRuntimeResponse(
@@ -654,6 +693,131 @@ export function useProjectRuntimeControlClient({
     [requestControl]
   );
 
+  const requestGetRuntimeAgentActionRun = useCallback(
+    async (
+      projectId: string,
+      runId: string,
+      options?: {
+        waitForAsyncSettlement?: boolean;
+        runtimeAgentId?: string | null;
+        waitTimeoutMs?: number;
+      }
+    ): Promise<ExecutionAgentActionRunRecord> => {
+      const message = await requestControlResponse(
+        projectId,
+        {
+          subtype: "get_runtime_agent_action_run",
+          run_id: runId,
+          wait_for_async_settlement: Boolean(options?.waitForAsyncSettlement),
+          runtime_agent_id: options?.runtimeAgentId ?? null,
+          wait_timeout_ms: options?.waitTimeoutMs ?? null,
+        },
+        { timeoutMs: options?.waitTimeoutMs }
+      );
+      if (message.response.subtype === "error") {
+        throw new Error(message.response.error);
+      }
+      if (!isRecord(message.response.response)) {
+        throw new Error("Runtime returned a malformed runtime-agent action run payload.");
+      }
+      const run = parseExecutionAgentActionRunRecord(message.response.response.run);
+      if (!run) {
+        throw new Error("Runtime returned a malformed runtime-agent action run payload.");
+      }
+      return run;
+    },
+    [requestControlResponse]
+  );
+
+  const requestGetRuntimeAgentTask = useCallback(
+    async (
+      projectId: string,
+      taskId: string,
+      options?: { timeoutMs?: number }
+    ): Promise<ExecutionRuntimeAgentTaskRecord> => {
+      const message = await requestControlResponse(
+        projectId,
+        {
+          subtype: "get_runtime_agent_task",
+          task_id: taskId,
+        },
+        { timeoutMs: options?.timeoutMs }
+      );
+      if (message.response.subtype === "error") {
+        throw new Error(message.response.error);
+      }
+      if (!isRecord(message.response.response)) {
+        throw new Error("Runtime returned a malformed runtime-agent task payload.");
+      }
+      const task = parseExecutionRuntimeAgentTaskRecord(message.response.response.task);
+      if (!task) {
+        throw new Error("Runtime returned a malformed runtime-agent task payload.");
+      }
+      return task;
+    },
+    [requestControlResponse]
+  );
+
+  const requestGetRuntimeAgentTaskOutput = useCallback(
+    async (
+      projectId: string,
+      taskId: string,
+      options?: { timeoutMs?: number }
+    ): Promise<ExecutionRuntimeAgentTaskOutputArtifact> => {
+      const message = await requestControlResponse(
+        projectId,
+        {
+          subtype: "get_runtime_agent_task_output",
+          task_id: taskId,
+        },
+        { timeoutMs: options?.timeoutMs }
+      );
+      if (message.response.subtype === "error") {
+        throw new Error(message.response.error);
+      }
+      if (!isRecord(message.response.response)) {
+        throw new Error("Runtime returned a malformed runtime-agent task output payload.");
+      }
+      const output = parseExecutionRuntimeAgentTaskOutputArtifact(message.response.response.output);
+      if (!output) {
+        throw new Error("Runtime returned a malformed runtime-agent task output payload.");
+      }
+      return output;
+    },
+    [requestControlResponse]
+  );
+
+  const requestGetRuntimeAgentTaskTranscript = useCallback(
+    async (
+      projectId: string,
+      taskId: string,
+      options?: { timeoutMs?: number }
+    ): Promise<ExecutionRuntimeAgentTaskTranscriptArtifact> => {
+      const message = await requestControlResponse(
+        projectId,
+        {
+          subtype: "get_runtime_agent_task_transcript",
+          task_id: taskId,
+        },
+        { timeoutMs: options?.timeoutMs }
+      );
+      if (message.response.subtype === "error") {
+        throw new Error(message.response.error);
+      }
+      if (!isRecord(message.response.response)) {
+        throw new Error("Runtime returned a malformed runtime-agent task transcript payload.");
+      }
+      const transcript = parseExecutionRuntimeAgentTaskTranscriptArtifact(
+        message.response.response.transcript
+      );
+      if (!transcript) {
+        throw new Error("Runtime returned a malformed runtime-agent task transcript payload.");
+      }
+      return transcript;
+    },
+    [requestControlResponse]
+  );
+
   const requestListToolPermissionRuntimes = useCallback(
     async (
       projectId: string,
@@ -826,6 +990,10 @@ export function useProjectRuntimeControlClient({
       requestReloadPlugins,
       requestSetModel,
       requestSetPermissionMode,
+      requestGetRuntimeAgentActionRun,
+      requestGetRuntimeAgentTask,
+      requestGetRuntimeAgentTaskOutput,
+      requestGetRuntimeAgentTaskTranscript,
       requestListToolPermissionRuntimes,
       requestGetToolPermissionRuntime,
       requestResolveToolPermissionRuntime,
@@ -844,6 +1012,10 @@ export function useProjectRuntimeControlClient({
       recordsByProject,
       requestContextUsage,
       requestControl,
+      requestGetRuntimeAgentActionRun,
+      requestGetRuntimeAgentTask,
+      requestGetRuntimeAgentTaskOutput,
+      requestGetRuntimeAgentTaskTranscript,
       requestGetToolPermissionRuntime,
       requestInitialize,
       requestInterrupt,
