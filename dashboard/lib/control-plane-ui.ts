@@ -45,6 +45,8 @@ export function controlStateClass(state: string): string {
       return "border-[#d6e9dc] bg-[#eef8f1] text-[#2b6e3f]";
     case "actionable":
       return "border-[#d3e5ef] bg-[#eef7fb] text-[#2a6690]";
+    case "waiting_async":
+      return "border-[#d3e5ef] bg-[#eef7fb] text-[#2a6690]";
     case "needs_approval":
       return "border-[#f4e0c4] bg-[#fff6e8] text-[#9a6700]";
     case "attention_required":
@@ -121,6 +123,7 @@ export function recommendationActionLabel(
   if (operationType === "session_action_batch" && operationMode === "preview") return "Create preview";
   if (operationType === "session_action_batch" && operationMode === "execute") return "Execute directly";
   if (operationType === "inspect_session_approvals") return "Inspect approvals";
+  if (operationType === "inspect_background_tasks") return "Inspect background tasks";
   if (operationType === "inspect_session_issues") return "Inspect issues";
   if (operationType === "session_status_update") return "Complete session";
   return "Apply";

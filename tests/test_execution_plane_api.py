@@ -1357,15 +1357,31 @@ def test_execution_plane_orchestrator_session_tracks_async_tasks_honestly(
     assert session_detail.status_code == 200
     detail = session_detail.json()
     assert detail["runtime_state"] == "running"
-    assert detail["pending_action"] is None
-    assert detail["control"]["state"] == "in_progress"
+    assert detail["pending_action"]["kind"] == "inspect_background_tasks"
+    assert detail["control"]["state"] == "waiting_async"
     assert detail["control"]["session_state"] == "running"
-    assert detail["control"]["pending_action"] is None
+    assert detail["control"]["pending_action"]["kind"] == "inspect_background_tasks"
     assert detail["summary"]["async_task_count"] == 1
     assert detail["summary"]["active_async_task_count"] == 1
     assert detail["async_tasks"][0]["id"] == task.id
     assert detail["async_tasks"][0]["status"] == "running"
     assert detail["summary"]["by_event"]["execution_plane_runtime_agent_task_started"] >= 1
+
+    apply_response = client.post(
+        f"/api/execution-plane/orchestrator-sessions/{session['id']}/control/apply",
+        json={
+            "recommendation_kind": "inspect_background_tasks",
+            "actor": "founderos",
+            "reason": "Inspect live async follow-through before closing the session.",
+        },
+    )
+    assert apply_response.status_code == 200
+    apply_payload = apply_response.json()
+    assert apply_payload["status"] == "ok"
+    assert apply_payload["recommendation"]["kind"] == "inspect_background_tasks"
+    assert apply_payload["result"]["counts"]["active_async_tasks"] == 1
+    assert apply_payload["result"]["counts"]["pending_async_runs"] == 0
+    assert apply_payload["result"]["active_async_tasks"][0]["id"] == task.id
 
     state = load_project_state(config, project_id)
     state["status"] = "completed"
@@ -1406,6 +1422,131 @@ def test_execution_plane_orchestrator_session_tracks_async_tasks_honestly(
     assert transcript_payload["artifact_ref"].endswith(f"/{task.id}/transcript")
     assert f"Task ID: {task.id}" in transcript_payload["content"]
     assert "Background run completed." in transcript_payload["content"]
+
+
+@patch("autopilot.core.execution_plane.generate_prd_from_spec")
+def test_execution_plane_agent_detail_surfaces_waiting_async_task_only(
+    mock_generate_prd_from_spec,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    client = _build_client(config, monkeypatch)
+    mock_generate_prd_from_spec.return_value = {
+        "title": "FounderOS Copilot",
+        "description": "Execution-ready FounderOS project.",
+        "stories": [{"id": 1, "title": "Bootstrap", "description": "Create the app shell"}],
+    }
+
+    created = _create_execution_project(client, tmp_path / "agent-waiting-async-project")
+    project_id = created["project"]["project_id"]
+
+    update_story_runtime(
+        config,
+        project_id,
+        1,
+        status="in_progress",
+        iteration=2,
+        agent="codex/worker-a",
+        critic="codex/critic-a",
+    )
+    update_project_runtime(
+        config,
+        project_id,
+        status="running",
+        paused=False,
+        current_story_id=1,
+        current_iteration=2,
+        active_worker="codex/worker-a",
+        active_critic="codex/critic-a",
+    )
+
+    agents_response = client.get(f"/api/execution-plane/projects/{project_id}/agents")
+    assert agents_response.status_code == 200
+    worker_agent_id = next(
+        agent["agent_id"]
+        for agent in agents_response.json()["agents"]
+        if agent["role"] == "worker" and agent["status"] == "active"
+    )
+
+    create_or_reuse_runtime_agent_task(
+        config,
+        project_id=project_id,
+        command="launch",
+        actor="founderos",
+        reason="Launch background follow-through.",
+        runtime_agent_ids=[worker_agent_id],
+        output_path=str(config.autopilot_home / "logs" / f"{project_id}.log"),
+    )
+
+    detail_response = client.get(f"/api/execution-plane/agents/{worker_agent_id}")
+    assert detail_response.status_code == 200
+    detail = detail_response.json()
+    assert detail["attention"]["state"] == "waiting_async"
+    assert detail["current"]["attention"]["state"] == "waiting_async"
+    assert detail["current"]["active_async_task_count"] == 1
+    assert detail["current"]["pending_async_run_count"] == 0
+    assert any(rec["kind"] == "inspect_async_follow_through" for rec in detail["recommendations"])
+
+    filtered_response = client.get(
+        "/api/execution-plane/agents",
+        params={"project_id": project_id, "attention_state": "waiting_async"},
+    )
+    assert filtered_response.status_code == 200
+    assert any(agent["agent_id"] == worker_agent_id for agent in filtered_response.json()["agents"])
+
+
+@patch("autopilot.core.execution_plane.generate_prd_from_spec")
+def test_execution_plane_orchestrator_session_control_can_inspect_background_tasks(
+    mock_generate_prd_from_spec,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    client = _build_client(config, monkeypatch)
+    mock_generate_prd_from_spec.return_value = {
+        "title": "FounderOS Copilot",
+        "description": "Execution-ready FounderOS project.",
+        "stories": [{"id": 1, "title": "Bootstrap", "description": "Create the app shell"}],
+    }
+
+    created = _create_execution_project(client, tmp_path / "inspect-async-session-project")
+    project_id = created["project"]["project_id"]
+    session = _create_orchestrator_session(
+        client,
+        project_ids=[project_id],
+        actor="founderos",
+        title="Inspect async follow-through",
+    )
+
+    task = create_or_reuse_runtime_agent_task(
+        config,
+        project_id=project_id,
+        command="launch",
+        actor="founderos",
+        reason="Launch background execution.",
+        orchestrator_session_id=session["id"],
+        runtime_agent_ids=["runtime-agent-1"],
+        output_path=str(config.autopilot_home / "logs" / f"{project_id}.log"),
+    )
+
+    apply_response = client.post(
+        f"/api/execution-plane/orchestrator-sessions/{session['id']}/control/apply",
+        json={
+            "recommendation_kind": "inspect_background_tasks",
+            "actor": "founderos",
+            "reason": "Inspect live async follow-through before declaring completion.",
+        },
+    )
+    assert apply_response.status_code == 200
+    payload = apply_response.json()
+    assert payload["status"] == "ok"
+    assert payload["recommendation"]["kind"] == "inspect_background_tasks"
+    assert payload["result"]["counts"]["async_tasks"] == 1
+    assert payload["result"]["counts"]["active_async_tasks"] == 1
+    assert payload["result"]["counts"]["pending_async_runs"] == 0
+    assert payload["result"]["async_tasks"][0]["id"] == task.id
+    assert payload["result"]["active_async_tasks"][0]["id"] == task.id
 
 
 @patch("autopilot.core.execution_plane.generate_prd_from_spec")
@@ -1815,6 +1956,95 @@ def test_execution_plane_agent_detail_surfaces_current_and_history(
         worker_agent_id in event.get("runtime_agent_ids", []) or event.get("runtime_agent_id") == worker_agent_id
         for event in detail["events"]
     )
+
+
+@patch("autopilot.core.execution_plane.generate_prd_from_spec")
+def test_execution_plane_agent_attention_surfaces_waiting_async_follow_through(
+    mock_generate_prd_from_spec,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    client = _build_client(config, monkeypatch)
+    mock_generate_prd_from_spec.return_value = {
+        "title": "FounderOS Copilot",
+        "description": "Execution-ready FounderOS project.",
+        "stories": [{"id": 1, "title": "Bootstrap", "description": "Create the app shell"}],
+    }
+
+    created = _create_execution_project(client, tmp_path / "waiting-async-agent-project")
+    project_id = created["project"]["project_id"]
+
+    update_story_runtime(
+        config,
+        project_id,
+        1,
+        status="in_progress",
+        iteration=2,
+        agent="codex/worker-a",
+        critic="codex/critic-a",
+    )
+    update_project_runtime(
+        config,
+        project_id,
+        status="running",
+        paused=False,
+        current_story_id=1,
+        current_iteration=2,
+        active_worker="codex/worker-a",
+        active_critic="codex/critic-a",
+    )
+
+    agents = client.get(f"/api/execution-plane/projects/{project_id}/agents").json()["agents"]
+    worker_agent_id = next(agent["agent_id"] for agent in agents if agent["role"] == "worker" and agent["status"] == "active")
+
+    task = create_or_reuse_runtime_agent_task(
+        config,
+        project_id=project_id,
+        command="launch",
+        actor="founderos",
+        reason="Launch background execution.",
+        runtime_agent_ids=[worker_agent_id],
+        output_path=str(config.autopilot_home / "logs" / f"{project_id}.log"),
+    )
+    create_agent_action_batch_run(
+        config,
+        run_kind="single_action",
+        actor="founderos",
+        mode="auto",
+        selection={"mode": "single_action", "project_id": project_id},
+        summary={"selected_count": 1, "processed_count": 1, "status_counts": {"ok": 1}},
+        results=[
+            {
+                "status": "ok",
+                "command_result": {"command": "launch"},
+                "async_task": {"id": task.id},
+            }
+        ],
+        status="ok",
+        project_ids=[project_id],
+        runtime_agent_ids=[worker_agent_id],
+    )
+
+    detail_response = client.get(f"/api/execution-plane/agents/{worker_agent_id}")
+    assert detail_response.status_code == 200
+    detail = detail_response.json()
+    assert detail["attention"]["state"] == "waiting_async"
+    assert detail["current"]["attention"]["state"] == "waiting_async"
+    async_recommendation = next(
+        rec for rec in detail["recommendations"] if rec["kind"] == "inspect_async_follow_through"
+    )
+    assert async_recommendation["counts"]["active_async_tasks"] == 1
+    assert async_recommendation["counts"]["pending_async_runs"] == 1
+    assert detail["history"]["active_async_task_count"] == 1
+    assert detail["history"]["pending_async_run_count"] == 1
+
+    waiting_agents = client.get(
+        "/api/execution-plane/agents",
+        params={"project_id": project_id, "attention_state": "waiting_async"},
+    )
+    assert waiting_agents.status_code == 200
+    assert any(agent["agent_id"] == worker_agent_id for agent in waiting_agents.json()["agents"])
 
 
 @patch("autopilot.core.execution_plane.generate_prd_from_spec")

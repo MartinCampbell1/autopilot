@@ -723,6 +723,64 @@ def _runtime_agent_budget_summary(
     }
 
 
+def _runtime_agent_ids_from_payload(payload: dict[str, Any]) -> list[str]:
+    """Extract stable runtime-agent ids from one execution-plane payload."""
+
+    agent_ids = {
+        str(item).strip()
+        for item in (payload.get("runtime_agent_ids") or [])
+        if str(item).strip()
+    }
+    primary_agent_id = str(payload.get("runtime_agent_id") or "").strip()
+    if primary_agent_id:
+        agent_ids.add(primary_agent_id)
+    return sorted(agent_ids)
+
+
+def _active_execution_plane_async_tasks(
+    async_tasks: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Return only queued/running async tasks from one payload list."""
+
+    return [
+        task
+        for task in async_tasks
+        if str(task.get("status") or "") in {"queued", "running"}
+    ]
+
+
+def _pending_execution_plane_async_runs(
+    runs: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Return only pending-async action runs from one payload list."""
+
+    return [
+        run
+        for run in runs
+        if str(run.get("completion_state") or "") == "pending_async"
+    ]
+
+
+def _group_runtime_agent_async_follow_through(
+    *,
+    async_tasks: list[dict[str, Any]],
+    pending_async_runs: list[dict[str, Any]],
+) -> tuple[dict[str, list[dict[str, Any]]], dict[str, list[dict[str, Any]]]]:
+    """Group active async follow-through payloads by runtime agent id."""
+
+    tasks_by_agent: dict[str, list[dict[str, Any]]] = {}
+    for task in _active_execution_plane_async_tasks(async_tasks):
+        for runtime_agent_id in _runtime_agent_ids_from_payload(task):
+            tasks_by_agent.setdefault(runtime_agent_id, []).append(task)
+
+    runs_by_agent: dict[str, list[dict[str, Any]]] = {}
+    for run in _pending_execution_plane_async_runs(pending_async_runs):
+        for runtime_agent_id in _runtime_agent_ids_from_payload(run):
+            runs_by_agent.setdefault(runtime_agent_id, []).append(run)
+
+    return tasks_by_agent, runs_by_agent
+
+
 def _runtime_agent_attention_summary(
     *,
     agent: dict[str, Any] | None,
@@ -731,7 +789,11 @@ def _runtime_agent_attention_summary(
     open_issues: list[dict[str, Any]],
     pending_approvals: list[dict[str, Any]],
     pending_tool_permission_runtimes: list[dict[str, Any]],
+    active_async_tasks: list[dict[str, Any]] | None = None,
+    pending_async_runs: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
+    active_async_tasks = list(active_async_tasks or [])
+    pending_async_runs = list(pending_async_runs or [])
     reasons: list[str] = []
     agent_status = str((agent or {}).get("status") or "")
 
@@ -753,6 +815,16 @@ def _runtime_agent_attention_summary(
                 for runtime in pending_tool_permission_runtimes[:2]
             )
         )
+    if active_async_tasks:
+        reasons.append(
+            f"{len(active_async_tasks)} active background task(s): "
+            + ", ".join(str(task.get("command") or task.get("id") or "task") for task in active_async_tasks[:2])
+        )
+    if pending_async_runs:
+        reasons.append(
+            f"{len(pending_async_runs)} pending async action run(s): "
+            + ", ".join(str(run.get("id") or "run") for run in pending_async_runs[:2])
+        )
     if budget.get("tracked") and budget.get("exhausted"):
         reasons.append("Agent budget is exhausted.")
     elif budget.get("tracked") and isinstance(budget.get("remaining"), int) and int(budget["remaining"]) <= 2:
@@ -773,6 +845,9 @@ def _runtime_agent_attention_summary(
             recommended_action = "Review and resolve pending tool-permission requests."
         else:
             recommended_action = "Review and apply or reject pending control-plane actions."
+    elif active_async_tasks or pending_async_runs:
+        state = "waiting_async"
+        recommended_action = "Async follow-through is still running; inspect linked background tasks before declaring this agent complete."
     elif budget.get("tracked") and budget.get("exhausted"):
         state = "budget_exhausted"
         recommended_action = "Increase the relevant budget or rotate to another account."
@@ -875,7 +950,11 @@ def _runtime_agent_recommendations(
     open_issues: list[dict[str, Any]],
     pending_approvals: list[dict[str, Any]],
     pending_tool_permission_runtimes: list[dict[str, Any]],
+    active_async_tasks: list[dict[str, Any]] | None = None,
+    pending_async_runs: list[dict[str, Any]] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    active_async_tasks = list(active_async_tasks or [])
+    pending_async_runs = list(pending_async_runs or [])
     recommendations: list[dict[str, Any]] = []
     suggested_commands: list[dict[str, Any]] = []
     role = str((agent or {}).get("role") or "")
@@ -922,6 +1001,29 @@ def _runtime_agent_recommendations(
                         if str(runtime.get("tool_name") or "").strip()
                     }
                 ),
+            }
+        )
+    if active_async_tasks or pending_async_runs:
+        recommendations.append(
+            {
+                "kind": "inspect_async_follow_through",
+                "priority": "medium",
+                "title": "Inspect async follow-through",
+                "reason": attention["recommended_action"],
+                "task_ids": [
+                    str(task.get("id") or "")
+                    for task in active_async_tasks
+                    if str(task.get("id") or "").strip()
+                ],
+                "run_ids": [
+                    str(run.get("id") or "")
+                    for run in pending_async_runs
+                    if str(run.get("id") or "").strip()
+                ],
+                "counts": {
+                    "active_async_tasks": len(active_async_tasks),
+                    "pending_async_runs": len(pending_async_runs),
+                },
             }
         )
 
@@ -1871,6 +1973,8 @@ def _decorate_runtime_agent(
     issues: list[dict[str, Any]],
     approvals: list[dict[str, Any]],
     tool_permission_runtimes: list[dict[str, Any]] | None = None,
+    active_async_tasks: list[dict[str, Any]] | None = None,
+    pending_async_runs: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     budget = _runtime_agent_budget_summary(state, agent, role=str(agent.get("role") or ""))
     open_issues = [issue for issue in issues if issue.get("status") == "open"]
@@ -1888,6 +1992,8 @@ def _decorate_runtime_agent(
         open_issues=open_issues,
         pending_approvals=pending_approvals,
         pending_tool_permission_runtimes=pending_tool_permission_runtimes,
+        active_async_tasks=list(active_async_tasks or []),
+        pending_async_runs=list(pending_async_runs or []),
     )
     recommendations, suggested_commands = _runtime_agent_recommendations(
         config,
@@ -1899,6 +2005,8 @@ def _decorate_runtime_agent(
         open_issues=open_issues,
         pending_approvals=pending_approvals,
         pending_tool_permission_runtimes=pending_tool_permission_runtimes,
+        active_async_tasks=list(active_async_tasks or []),
+        pending_async_runs=list(pending_async_runs or []),
     )
     return {
         **agent,
@@ -1906,6 +2014,8 @@ def _decorate_runtime_agent(
         "pending_approval_count": len(pending_approvals),
         "tool_permission_runtime_count": len(runtime_tool_permissions),
         "pending_tool_permission_runtime_count": len(pending_tool_permission_runtimes),
+        "active_async_task_count": len(list(active_async_tasks or [])),
+        "pending_async_run_count": len(list(pending_async_runs or [])),
         "budget": budget,
         "attention": attention,
         "recommendations": recommendations,
@@ -2044,6 +2154,20 @@ def build_execution_plane_project_detail(
     issues = [issue.model_dump() for issue in list_issues(config, project_id=project_id)]
     approvals = [approval.model_dump() for approval in list_approvals(config, project_id=project_id)]
     tool_permission_runtimes = list_execution_plane_tool_permission_runtimes(config, project_id=project_id)
+    project_async_tasks = list_execution_plane_runtime_agent_tasks(
+        config,
+        project_id=project_id,
+    )
+    project_pending_async_runs = _pending_execution_plane_async_runs(
+        list_execution_plane_agent_action_runs(
+            config,
+            project_id=project_id,
+        )
+    )
+    active_async_tasks_by_agent, pending_async_runs_by_agent = _group_runtime_agent_async_follow_through(
+        async_tasks=project_async_tasks,
+        pending_async_runs=project_pending_async_runs,
+    )
     task_source = TaskSource.model_validate(resolve_project_task_source(project))
     runtime_agents = [
         _decorate_runtime_agent(
@@ -2075,6 +2199,8 @@ def build_execution_plane_project_detail(
                 for runtime in tool_permission_runtimes
                 if str(agent["agent_id"]) in (runtime.get("runtime_agent_ids") or [])
             ],
+            active_async_tasks=active_async_tasks_by_agent.get(str(agent["agent_id"]), []),
+            pending_async_runs=pending_async_runs_by_agent.get(str(agent["agent_id"]), []),
         )
         for agent in build_execution_plane_runtime_agents(config, project, detail.get("stories") or [])
     ]
@@ -2219,6 +2345,20 @@ def list_execution_plane_agents(
 
         state = ensure_project_state(config, project, seed_mode="migrate")
         stories = merge_project_stories(config, project, state)
+        project_async_tasks = list_execution_plane_runtime_agent_tasks(
+            config,
+            project_id=str(project["id"]),
+        )
+        project_pending_async_runs = _pending_execution_plane_async_runs(
+            list_execution_plane_agent_action_runs(
+                config,
+                project_id=str(project["id"]),
+            )
+        )
+        active_async_tasks_by_agent, pending_async_runs_by_agent = _group_runtime_agent_async_follow_through(
+            async_tasks=project_async_tasks,
+            pending_async_runs=project_pending_async_runs,
+        )
         for agent in build_execution_plane_runtime_agents(config, project, stories):
             if status and agent.get("status") != status:
                 continue
@@ -2232,6 +2372,8 @@ def list_execution_plane_agents(
                 issues=issues_by_agent.get(str(agent["agent_id"]), []),
                 approvals=approvals_by_agent.get(str(agent["agent_id"]), []),
                 tool_permission_runtimes=tool_permission_runtimes_by_agent.get(str(agent["agent_id"]), []),
+                active_async_tasks=active_async_tasks_by_agent.get(str(agent["agent_id"]), []),
+                pending_async_runs=pending_async_runs_by_agent.get(str(agent["agent_id"]), []),
             )
             if attention_state and decorated["attention"]["state"] != attention_state:
                 continue
@@ -2264,7 +2406,7 @@ def list_execution_plane_agents(
 
     agents.sort(
         key=lambda item: (
-            item["attention"]["state"] not in {"blocked", "needs_approval", "budget_exhausted", "budget_risk"},
+            item["attention"]["state"] not in {"blocked", "needs_approval", "waiting_async", "budget_exhausted", "budget_risk"},
             item["status"] != "active",
             item["open_issue_count"] == 0,
             item["project_name"].lower(),
@@ -2341,6 +2483,7 @@ def summarize_execution_plane_agents(
             "active": sum(1 for agent in agents if agent.get("status") == "active"),
             "blocked": sum(1 for agent in agents if agent.get("attention", {}).get("state") == "blocked"),
             "needs_approval": sum(1 for agent in agents if agent.get("attention", {}).get("state") == "needs_approval"),
+            "waiting_async": sum(1 for agent in agents if agent.get("attention", {}).get("state") == "waiting_async"),
             "budget_risk": sum(1 for agent in agents if agent.get("attention", {}).get("state") == "budget_risk"),
             "budget_exhausted": sum(
                 1 for agent in agents if agent.get("attention", {}).get("state") == "budget_exhausted"
@@ -2393,11 +2536,12 @@ def list_execution_plane_agent_actions(
     attention_order = {
         "blocked": 0,
         "needs_approval": 1,
-        "budget_exhausted": 2,
-        "budget_risk": 3,
-        "paused": 4,
-        "active": 5,
-        "healthy": 6,
+        "waiting_async": 2,
+        "budget_exhausted": 3,
+        "budget_risk": 4,
+        "paused": 5,
+        "active": 6,
+        "healthy": 7,
     }
 
     actions: list[dict[str, Any]] = []
@@ -2967,11 +3111,12 @@ ORCHESTRATOR_SESSION_CONTROL_PROFILES: dict[str, dict[str, Any]] = {
     "safe_progress": {
         "description": (
             "Inspect blocking approvals, execute safe session actions, preview approval-gated actions, "
-            "triage linked issues, and close the session once it becomes healthy."
+            "inspect active background follow-through, triage linked issues, and close the session once it becomes healthy."
         ),
         "recommendation_kinds": [
             "review_pending_approvals",
             "review_pending_tool_permissions",
+            "inspect_background_tasks",
             "execute_safe_actions",
             "preview_approval_gated_actions",
             "triage_open_issues",
@@ -2981,11 +3126,12 @@ ORCHESTRATOR_SESSION_CONTROL_PROFILES: dict[str, dict[str, Any]] = {
     },
     "review_only": {
         "description": (
-            "Inspect approvals and issues, preview session actions, but do not apply mutating session actions."
+            "Inspect approvals, issues, and background follow-through, preview session actions, but do not apply mutating session actions."
         ),
         "recommendation_kinds": [
             "review_pending_approvals",
             "review_pending_tool_permissions",
+            "inspect_background_tasks",
             "preview_safe_actions",
             "preview_approval_gated_actions",
             "triage_open_issues",
@@ -3112,8 +3258,15 @@ def _derive_orchestrator_session_runtime_state(
 
     if str(session.status) != "open":
         return "idle", None
-    if str(control.get("state") or "") == "in_progress":
+    control_state = str(control.get("state") or "")
+    if control_state == "in_progress":
         return "running", None
+    if control_state == "waiting_async":
+        pending_action = _build_orchestrator_session_pending_action(
+            str(session.id),
+            list(control.get("recommendations") or []),
+        )
+        return "running", pending_action
     pending_action = _build_orchestrator_session_pending_action(
         str(session.id),
         list(control.get("recommendations") or []),
@@ -3151,17 +3304,19 @@ def build_execution_plane_orchestrator_session_control(
         config,
         orchestrator_session_id=session_id,
     )
+    pending_async_runs = _pending_execution_plane_async_runs(
+        list_execution_plane_agent_action_runs(
+            config,
+            orchestrator_session_id=session_id,
+        )
+    )
 
     pending_approvals = [approval for approval in approvals if approval.get("status") == "pending"]
     pending_tool_permission_runtimes = [
         runtime for runtime in tool_permission_runtimes if str(runtime.get("status") or "") == "pending"
     ]
     open_issues = [issue for issue in issues if issue.get("status") == "open"]
-    active_async_tasks = [
-        task
-        for task in async_tasks
-        if str(task.get("status") or "") in {"queued", "running"}
-    ]
+    active_async_tasks = _active_execution_plane_async_tasks(async_tasks)
     safe_actions = [
         action
         for action in actions
@@ -3178,8 +3333,8 @@ def build_execution_plane_orchestrator_session_control(
         state = "closed"
     elif pending_approvals or pending_tool_permission_runtimes:
         state = "needs_approval"
-    elif active_async_tasks:
-        state = "in_progress"
+    elif active_async_tasks or pending_async_runs:
+        state = "waiting_async"
     elif safe_actions or approval_actions or recommendation_actions:
         state = "actionable"
     elif open_issues:
@@ -3225,18 +3380,24 @@ def build_execution_plane_orchestrator_session_control(
                 },
             }
         )
-    if active_async_tasks:
+    if active_async_tasks or pending_async_runs:
         recommendations.append(
             {
                 "kind": "inspect_background_tasks",
                 "priority": "high",
-                "title": "Inspect background tasks",
-                "reason": f"{len(active_async_tasks)} background task(s) are still running; do not treat the session as complete yet.",
-                "counts": {"active_async_tasks": len(active_async_tasks)},
+                "title": "Inspect async follow-through",
+                "reason": (
+                    f"{len(active_async_tasks)} background task(s) and {len(pending_async_runs)} "
+                    "pending async action run(s) are still active; do not treat the session as complete yet."
+                ),
+                "counts": {
+                    "active_async_tasks": len(active_async_tasks),
+                    "pending_async_runs": len(pending_async_runs),
+                },
                 "operation": {
                     "type": "inspect_background_tasks",
                     "session_id": session_id,
-                    "endpoint": f"/api/execution-plane/agents/tasks?orchestrator_session_id={session_id}&status=running",
+                    "endpoint": f"/api/execution-plane/orchestrator-sessions/{session_id}/control/apply",
                 },
             }
         )
@@ -3362,6 +3523,7 @@ def build_execution_plane_orchestrator_session_control(
             "pending_tool_permission_runtimes": len(pending_tool_permission_runtimes),
             "open_issues": len(open_issues),
             "active_async_tasks": len(active_async_tasks),
+            "pending_async_runs": len(pending_async_runs),
             "safe_actions": len(safe_actions),
             "approval_required_actions": len(approval_actions),
             "recommendation_actions": len(recommendation_actions),
@@ -3505,6 +3667,29 @@ def apply_execution_plane_orchestrator_session_recommendation(
             "counts": {
                 "issues": len(issues),
                 "open_issues": len(open_issues),
+            },
+        }
+    elif operation_type == "inspect_background_tasks":
+        async_tasks = list_execution_plane_runtime_agent_tasks(
+            config,
+            orchestrator_session_id=session_id,
+        )
+        active_async_tasks = _active_execution_plane_async_tasks(async_tasks)
+        pending_async_runs = _pending_execution_plane_async_runs(
+            list_execution_plane_agent_action_runs(
+                config,
+                orchestrator_session_id=session_id,
+            )
+        )
+        result = {
+            "status": "ok",
+            "async_tasks": async_tasks,
+            "active_async_tasks": active_async_tasks,
+            "pending_async_runs": pending_async_runs,
+            "counts": {
+                "async_tasks": len(async_tasks),
+                "active_async_tasks": len(active_async_tasks),
+                "pending_async_runs": len(pending_async_runs),
             },
         }
     else:
@@ -4216,6 +4401,17 @@ def get_execution_plane_agent_detail(
         project_id=parsed.project_id,
         runtime_agent_id=runtime_agent_id,
     )
+    active_async_tasks = _active_execution_plane_async_tasks(async_tasks)
+    pending_async_runs = _pending_execution_plane_async_runs(
+        [
+            run
+            for run in list_execution_plane_agent_action_runs(
+                config,
+                project_id=parsed.project_id,
+            )
+            if runtime_agent_id in _runtime_agent_ids_from_payload(run)
+        ]
+    )
     events = list_execution_plane_events(
         config,
         project_id=parsed.project_id,
@@ -4253,6 +4449,8 @@ def get_execution_plane_agent_detail(
         pending_tool_permission_runtimes=[
             runtime for runtime in tool_permission_runtimes if str(runtime.get("status") or "") == "pending"
         ],
+        active_async_tasks=active_async_tasks,
+        pending_async_runs=pending_async_runs,
     )
     recommendations, suggested_commands = _runtime_agent_recommendations(
         config,
@@ -4266,6 +4464,8 @@ def get_execution_plane_agent_detail(
         pending_tool_permission_runtimes=[
             runtime for runtime in tool_permission_runtimes if str(runtime.get("status") or "") == "pending"
         ],
+        active_async_tasks=active_async_tasks,
+        pending_async_runs=pending_async_runs,
     )
     if current_agent is not None:
         current_agent = _decorate_runtime_agent(
@@ -4276,6 +4476,8 @@ def get_execution_plane_agent_detail(
             issues=issues,
             approvals=approvals,
             tool_permission_runtimes=tool_permission_runtimes,
+            active_async_tasks=active_async_tasks,
+            pending_async_runs=pending_async_runs,
         )
 
     return {
@@ -4329,9 +4531,8 @@ def get_execution_plane_agent_detail(
                 1 for runtime in tool_permission_runtimes if str(runtime.get("status") or "") == "pending"
             ),
             "async_task_count": len(async_tasks),
-            "active_async_task_count": sum(
-                1 for task in async_tasks if str(task.get("status") or "") in {"queued", "running"}
-            ),
+            "active_async_task_count": len(active_async_tasks),
+            "pending_async_run_count": len(pending_async_runs),
             "event_count": len(events),
             "last_event_at": events[-1].get("timestamp") if events else None,
         },
