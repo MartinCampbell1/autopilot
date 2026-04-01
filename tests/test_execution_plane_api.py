@@ -10,7 +10,9 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from autopilot.api.routes import execution_plane as execution_plane_routes
+from autopilot.core.agent_mailbox import list_agent_mailbox_messages
 from autopilot.core.agent_action_runs import create_agent_action_batch_run
+from autopilot.core.approval_runtime import annotate_approval_runtime, create_or_reuse_approval_runtime
 from autopilot.core.config import AutopilotConfig
 from autopilot.core.project_store import (
     emit_project_event,
@@ -119,6 +121,65 @@ def test_execution_plane_brief_schema_route_exposes_extended_context(tmp_path: P
     assert payload["title"] == "ExecutionBrief"
     assert "initiative" in payload["properties"]
     assert "orchestration" in payload["properties"]
+
+
+def test_execution_plane_tool_permission_runtime_routes_get_and_resolve(tmp_path: Path, monkeypatch) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    client = _build_client(config, monkeypatch)
+    runtime = create_or_reuse_approval_runtime(
+        config,
+        key="tool-permission:proj_runtime_api:demo.pause:toolu_api_1",
+        project_id="proj_runtime_api",
+        runtime_agent_ids=["proj_runtime_api:1:worker:a"],
+        metadata={
+            "kind": "tool_permission_request",
+            "tool_name": "demo.pause",
+            "tool_use_id": "toolu_api_1",
+        },
+        publish_pending=True,
+        pending_message_type="tool_permission_pending",
+        pending_payload={
+            "tool_name": "demo.pause",
+            "tool_use_id": "toolu_api_1",
+            "message": "Need explicit approval.",
+            "behavior": "pending_user",
+        },
+    )
+    annotate_approval_runtime(
+        config,
+        approval_runtime_id=runtime.id,
+        metadata_updates={"pending": {"stage": "pending_user", "tool_name": "demo.pause", "tool_use_id": "toolu_api_1"}},
+        payload_updates={"pending_user": {"message": "Need explicit approval.", "tool_name": "demo.pause", "tool_use_id": "toolu_api_1"}},
+        mailbox_message_type="tool_permission_user_pending",
+        mailbox_payload={"tool_name": "demo.pause", "tool_use_id": "toolu_api_1"},
+    )
+
+    detail_response = client.get(f"/api/execution-plane/tool-permission-runtimes/{runtime.id}")
+    assert detail_response.status_code == 200
+    detail_payload = detail_response.json()["runtime"]
+    assert detail_payload["id"] == runtime.id
+    assert detail_payload["metadata"]["pending"]["stage"] == "pending_user"
+
+    allow_response = client.post(
+        f"/api/execution-plane/tool-permission-runtimes/{runtime.id}/allow",
+        json={"actor": "founderos", "note": "Proceed with the tool.", "source": "user"},
+    )
+    assert allow_response.status_code == 200
+    runtime_payload = allow_response.json()["runtime"]
+    mailbox = list_agent_mailbox_messages(config, approval_runtime_id=runtime.id)
+
+    assert runtime_payload["status"] == "resolved"
+    assert runtime_payload["winner_source"] == "user"
+    assert runtime_payload["outcome"] == "allow"
+    assert runtime_payload["payload"]["resolution"]["actor"] == "founderos"
+    assert any(message.message_type == "tool_permission_user_allow" for message in mailbox)
+    assert any(message.message_type == "approval_runtime_resolved" for message in mailbox)
+
+    repeat_response = client.post(
+        f"/api/execution-plane/tool-permission-runtimes/{runtime.id}/deny",
+        json={"actor": "founderos", "note": "Too late.", "source": "user"},
+    )
+    assert repeat_response.status_code == 409
 
 
 @patch("autopilot.core.execution_plane.generate_prd_from_spec")
