@@ -1342,6 +1342,8 @@ export function useControlPlanePageController(
           setSelectedRunResultIndex(0);
         }
       },
+      refreshAsyncTask,
+      waitForAsyncTaskSettlement,
       onAllowToolPermissionRuntime: (runtime) => {
         void resolveToolPermissionRuntime(runtime, "allow");
       },
