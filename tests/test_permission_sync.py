@@ -9,7 +9,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import autopilot.core.permission_sync as permission_sync_module
-from autopilot.core.approvals import decide_approval, list_approvals
+from autopilot.core.approvals import decide_approval, list_approvals, mark_approval_applied
 from autopilot.core.config import AutopilotConfig
 from autopilot.core.control_plane_issues import list_issues, resolve_issue
 from autopilot.core.execution_plane import create_execution_command_approval, create_execution_command_issue
@@ -327,6 +327,32 @@ def test_execution_command_issue_sync_creates_fresh_issue_after_resolution(tmp_p
     assert len(all_issues) == 2
 
 
+def test_execution_command_issue_sync_publishes_resolution_settlement(tmp_path: Path) -> None:
+    clear_permission_sync_mailbox()
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    project = _create_project(config, tmp_path / "project")
+
+    issue = create_execution_command_issue(
+        config,
+        project_id=str(project["id"]),
+        command="pause",
+        requested_by="founderos",
+        reason="Pause until operator review.",
+        policy_reasons=["Parallel work needs explicit approval."],
+        runtime_agent_ids=["agt_1"],
+    )
+    sync_key = str(issue["permission_sync_key"])
+    created_record = get_permission_sync(config, sync_key)
+    resolve_issue(config, issue["id"], actor="founderos", note="Closed for settlement test.")
+    resolved_record = get_permission_sync(config, sync_key)
+
+    assert created_record is not None
+    assert created_record.metadata["settlement"]["stage"] == "issue_open"
+    assert resolved_record is not None
+    assert resolved_record.metadata["settlement"]["stage"] == "issue_resolved"
+    assert resolved_record.metadata["settlement"]["actor"] == "founderos"
+
+
 def test_execution_command_approval_sync_reuses_single_pending_approval_for_concurrent_agents(tmp_path: Path) -> None:
     clear_permission_sync_mailbox()
     config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
@@ -413,3 +439,45 @@ def test_execution_command_approval_sync_creates_fresh_pending_approval_after_de
     assert len(pending) == 1
     assert pending[0].id == second["id"]
     assert len(all_approvals) == 2
+
+
+def test_execution_command_approval_sync_publishes_decision_and_apply_settlement(tmp_path: Path) -> None:
+    clear_permission_sync_mailbox()
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    project = _create_project(config, tmp_path / "project")
+    issue = create_execution_command_issue(
+        config,
+        project_id=str(project["id"]),
+        command="pause",
+        requested_by="founderos",
+        reason="Pause until operator review.",
+        policy_reasons=["Parallel work needs explicit approval."],
+        runtime_agent_ids=["agt_0"],
+    )
+    approval = create_execution_command_approval(
+        config,
+        project_id=str(project["id"]),
+        command="pause",
+        payload={},
+        requested_by="founderos",
+        reason="Pause until operator review.",
+        issue_id=str(issue["id"]),
+        runtime_agent_ids=["agt_1"],
+        policy_reasons=["Parallel work needs explicit approval."],
+    )
+    sync_key = str(approval["permission_sync_key"])
+
+    pending_record = get_permission_sync(config, sync_key)
+    decided = decide_approval(config, approval["id"], decision="approved", actor="founderos", note="Approved.")
+    decided_record = get_permission_sync(config, sync_key)
+    applied = mark_approval_applied(config, decided.id, actor="founderos")
+    applied_record = get_permission_sync(config, sync_key)
+
+    assert pending_record is not None
+    assert pending_record.metadata["settlement"]["stage"] == "pending"
+    assert decided_record is not None
+    assert decided_record.metadata["settlement"]["stage"] == "approved"
+    assert decided_record.metadata["settlement"]["note"] == "Approved."
+    assert applied.status == "applied"
+    assert applied_record is not None
+    assert applied_record.metadata["settlement"]["stage"] == "applied"

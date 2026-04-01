@@ -69,7 +69,7 @@ from autopilot.core.control_plane_issues import (
     resolve_issue,
     save_issue,
 )
-from autopilot.core.permission_sync import resolve_permission_sync
+from autopilot.core.permission_sync import annotate_permission_sync, resolve_permission_sync
 from autopilot.core.tool_contracts import ToolResult, ToolUseContext, build_tool
 from autopilot.core.tool_permissions import (
     PermissionContextOverlay,
@@ -511,6 +511,7 @@ def create_execution_command_issue(
 
     root_cause = policy_reasons[0] if policy_reasons else (reason.strip() or f"Approval requested for `{command}`.")
     dedupe_key = f"{project_id}:{command}:approval"
+    issue_sync_key = f"execution-command-issue:{dedupe_key}"
     request_id = f"issreq_{uuid.uuid4().hex[:12]}"
 
     def _can_reuse_issue_sync(record: Any) -> bool:
@@ -523,7 +524,7 @@ def create_execution_command_issue(
 
     sync_record = resolve_permission_sync(
         config,
-        sync_key=f"execution-command-issue:{dedupe_key}",
+        sync_key=issue_sync_key,
         request_id=request_id,
         metadata={"project_id": project_id, "command": command, "kind": "issue"},
         reuse_checker=_can_reuse_issue_sync,
@@ -540,6 +541,7 @@ def create_execution_command_issue(
                 related_command=command,
                 runtime_agent_id=runtime_agent_ids[0] if len(runtime_agent_ids) == 1 else "",
                 runtime_agent_ids=runtime_agent_ids,
+                permission_sync_key=issue_sync_key,
                 dedupe_key=dedupe_key,
                 context={
                     "project": {
@@ -561,6 +563,19 @@ def create_execution_command_issue(
     )
     issue_payload = dict(sync_record.payload.get("issue") or {})
     issue_id = str(issue_payload.get("id") or "").strip()
+    if issue_id:
+        annotate_permission_sync(
+            config,
+            issue_sync_key,
+            metadata_updates={
+                "settlement": {
+                    "stage": "issue_open",
+                    "issue_id": issue_id,
+                    "approval_id": str(issue_payload.get("approval_id") or ""),
+                    "updated_at": str(issue_payload.get("updated_at") or ""),
+                }
+            },
+        )
     if issue_id:
         issue_record = get_issue(config, issue_id)
         if issue_record is not None:
@@ -3992,6 +4007,7 @@ def create_execution_command_approval(
                 requested_by=requested_by,
                 reason=reason,
                 issue_id=normalized_issue_id,
+                permission_sync_key=sync_key,
                 runtime_agent_ids=runtime_agent_ids,
                 policy_reasons=policy_reasons,
             )
@@ -4015,6 +4031,19 @@ def create_execution_command_approval(
     )
     approval_payload = dict(sync_record.payload.get("approval") or {})
     approval_id = str(approval_payload.get("id") or "").strip()
+    if approval_id:
+        annotate_permission_sync(
+            config,
+            sync_key,
+            metadata_updates={
+                "settlement": {
+                    "stage": "pending",
+                    "approval_id": approval_id,
+                    "issue_id": str(approval_payload.get("issue_id") or normalized_issue_id),
+                    "updated_at": str(approval_payload.get("updated_at") or ""),
+                }
+            },
+        )
     if approval_id:
         approval_record = get_approval(config, approval_id)
         if approval_record is not None:

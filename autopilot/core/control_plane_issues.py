@@ -12,6 +12,7 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from autopilot.core.config import AutopilotConfig
+from autopilot.core.permission_sync import annotate_permission_sync
 from autopilot.core.project_store import emit_project_event, load_project_prd, load_project_state
 from autopilot.core.runtime_agents import build_runtime_agents, resolve_story_runtime_agent_id
 
@@ -45,6 +46,7 @@ class ExecutionIssueRecord(BaseModel):
     runtime_agent_id: str = ""
     runtime_agent_ids: list[str] = Field(default_factory=list)
     approval_id: str = ""
+    permission_sync_key: str = ""
     dedupe_key: str = ""
     initiative_id: str = ""
     orchestrator: str = ""
@@ -152,6 +154,7 @@ def create_issue(
     runtime_agent_id: str = "",
     runtime_agent_ids: list[str] | None = None,
     approval_id: str = "",
+    permission_sync_key: str = "",
     dedupe_key: str = "",
     context: dict[str, Any] | None = None,
 ) -> ExecutionIssueRecord:
@@ -171,6 +174,8 @@ def create_issue(
                 existing.runtime_agent_id = runtime_agent_id
                 existing.runtime_agent_ids = list(runtime_agent_ids or [])
                 existing.context = deepcopy(context or {})
+                if permission_sync_key:
+                    existing.permission_sync_key = permission_sync_key
                 if approval_id and not existing.approval_id:
                     existing.approval_id = approval_id
                 save_issue(config, existing)
@@ -193,6 +198,7 @@ def create_issue(
         runtime_agent_id=runtime_agent_id,
         runtime_agent_ids=list(runtime_agent_ids or []),
         approval_id=approval_id,
+        permission_sync_key=permission_sync_key,
         dedupe_key=dedupe_key,
         initiative_id=initiative_id,
         orchestrator=orchestrator,
@@ -217,6 +223,19 @@ def create_issue(
             "runtime_agent_ids": list(runtime_agent_ids or []),
         },
     )
+    if issue.permission_sync_key:
+        annotate_permission_sync(
+            config,
+            issue.permission_sync_key,
+            metadata_updates={
+                "settlement": {
+                    "stage": "issue_open",
+                    "issue_id": issue.id,
+                    "approval_id": issue.approval_id,
+                    "updated_at": issue.updated_at,
+                }
+            },
+        )
     return issue
 
 
@@ -255,7 +274,21 @@ def link_issue_approval(
     if issue is None:
         raise KeyError(issue_id)
     issue.approval_id = approval_id
-    return save_issue(config, issue)
+    issue = save_issue(config, issue)
+    if issue.permission_sync_key:
+        annotate_permission_sync(
+            config,
+            issue.permission_sync_key,
+            metadata_updates={
+                "settlement": {
+                    "stage": "issue_linked",
+                    "issue_id": issue.id,
+                    "approval_id": approval_id,
+                    "updated_at": issue.updated_at,
+                }
+            },
+        )
+    return issue
 
 
 def resolve_issue(
@@ -291,6 +324,21 @@ def resolve_issue(
             "actor": actor,
         },
     )
+    if issue.permission_sync_key:
+        annotate_permission_sync(
+            config,
+            issue.permission_sync_key,
+            metadata_updates={
+                "settlement": {
+                    "stage": "issue_resolved",
+                    "issue_id": issue.id,
+                    "approval_id": issue.approval_id,
+                    "actor": actor,
+                    "note": note,
+                    "updated_at": issue.updated_at,
+                }
+            },
+        )
     return issue
 
 

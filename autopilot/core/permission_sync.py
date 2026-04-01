@@ -40,7 +40,7 @@ def _new_sync_token(prefix: str) -> str:
 
 def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    temp_path = path.with_suffix(f"{path.suffix}.tmp")
+    temp_path = path.with_suffix(f"{path.suffix}.{uuid.uuid4().hex}.tmp")
     temp_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False))
     temp_path.replace(path)
 
@@ -113,6 +113,37 @@ def clear_permission_sync(config: AutopilotConfig, sync_key: str) -> None:
         event = _MAILBOX_EVENTS.get(sync_key)
     if event is not None:
         event.clear()
+
+
+def annotate_permission_sync(
+    config: AutopilotConfig,
+    sync_key: str,
+    *,
+    metadata_updates: dict[str, Any] | None = None,
+    payload_updates: dict[str, Any] | None = None,
+) -> PermissionSyncRecord | None:
+    """Update one existing sync record and republish it through the mailbox."""
+
+    record = get_permission_sync(config, sync_key)
+    if record is None:
+        return None
+
+    metadata = dict(record.metadata)
+    for key, value in (metadata_updates or {}).items():
+        if isinstance(value, dict) and isinstance(metadata.get(key), dict):
+            metadata[key] = {**dict(metadata.get(key) or {}), **value}
+        else:
+            metadata[key] = value
+
+    payload = dict(record.payload)
+    for key, value in (payload_updates or {}).items():
+        if isinstance(value, dict) and isinstance(payload.get(key), dict):
+            payload[key] = {**dict(payload.get(key) or {}), **value}
+        else:
+            payload[key] = value
+
+    updated = record.model_copy(update={"metadata": metadata, "payload": payload})
+    return save_permission_sync(config, updated)
 
 
 def save_permission_sync(config: AutopilotConfig, record: PermissionSyncRecord) -> PermissionSyncRecord:
@@ -407,6 +438,7 @@ def resolve_permission_sync(
 
 
 __all__ = [
+    "annotate_permission_sync",
     "PermissionSyncClaim",
     "PermissionSyncRecord",
     "clear_permission_sync",

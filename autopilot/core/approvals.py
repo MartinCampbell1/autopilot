@@ -11,6 +11,7 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from autopilot.core.config import AutopilotConfig
+from autopilot.core.permission_sync import annotate_permission_sync
 from autopilot.core.project_store import emit_project_event
 
 
@@ -40,6 +41,7 @@ class ApprovalRecord(BaseModel):
     orchestrator: str = ""
     orchestration_run_id: str = ""
     issue_id: str = ""
+    permission_sync_key: str = ""
     runtime_agent_ids: list[str] = Field(default_factory=list)
     policy_reasons: list[str] = Field(default_factory=list)
     created_at: str
@@ -97,6 +99,7 @@ def create_approval(
     requested_by: str = "",
     reason: str = "",
     issue_id: str = "",
+    permission_sync_key: str = "",
     runtime_agent_ids: list[str] | None = None,
     policy_reasons: list[str] | None = None,
 ) -> ApprovalRecord:
@@ -117,6 +120,7 @@ def create_approval(
         orchestrator=orchestrator,
         orchestration_run_id=orchestration_run_id,
         issue_id=issue_id,
+        permission_sync_key=permission_sync_key,
         runtime_agent_ids=list(runtime_agent_ids or []),
         policy_reasons=list(policy_reasons or []),
         created_at=created_at,
@@ -137,6 +141,19 @@ def create_approval(
             "runtime_agent_ids": approval.runtime_agent_ids,
         },
     )
+    if approval.permission_sync_key:
+        annotate_permission_sync(
+            config,
+            approval.permission_sync_key,
+            metadata_updates={
+                "settlement": {
+                    "stage": "pending",
+                    "approval_id": approval.id,
+                    "issue_id": approval.issue_id,
+                    "updated_at": approval.updated_at,
+                }
+            },
+        )
     return approval
 
 
@@ -219,6 +236,21 @@ def decide_approval(
             "runtime_agent_ids": approval.runtime_agent_ids,
         },
     )
+    if approval.permission_sync_key:
+        annotate_permission_sync(
+            config,
+            approval.permission_sync_key,
+            metadata_updates={
+                "settlement": {
+                    "stage": approval.status,
+                    "approval_id": approval.id,
+                    "issue_id": approval.issue_id,
+                    "actor": actor,
+                    "note": note,
+                    "updated_at": approval.updated_at,
+                }
+            },
+        )
     return approval
 
 
@@ -255,4 +287,18 @@ def mark_approval_applied(
             "runtime_agent_ids": approval.runtime_agent_ids,
         },
     )
+    if approval.permission_sync_key:
+        annotate_permission_sync(
+            config,
+            approval.permission_sync_key,
+            metadata_updates={
+                "settlement": {
+                    "stage": "applied",
+                    "approval_id": approval.id,
+                    "issue_id": approval.issue_id,
+                    "actor": actor,
+                    "updated_at": approval.updated_at,
+                }
+            },
+        )
     return approval
