@@ -669,7 +669,7 @@ def test_tool_runner_bridge_timeout_uses_resolved_permission_runtime_before_loca
 
     assert result.status == "denied"
     assert result.message == "User denied from another path."
-    assert entries[-1]["source"] == "tool_runner.bridge_runtime_fallback"
+    assert entries[-1]["source"] == "tool_runner.bridge_mailbox_fallback"
 
 
 def test_tool_runner_bridge_ask_keeps_runtime_pending_for_hook_resolution(tmp_path: Path) -> None:

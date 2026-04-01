@@ -11,6 +11,7 @@ from autopilot.core.approval_runtime import (
     annotate_approval_runtime,
     create_or_reuse_approval_runtime,
     settle_approval_runtime,
+    wait_for_approval_runtime_mailbox_resolution,
     wait_for_approval_runtime_resolution,
 )
 from autopilot.core.structured_runtime import get_active_structured_io
@@ -144,6 +145,41 @@ def _bridge_permission_decision(
         permission_source="tool_runner.bridge",
     )
     request_id = f"perm_{tool_use_id}"
+
+    def _wait_for_runtime_from_mailbox_or_disk() -> tuple[PermissionDecision | None, str]:
+        if not runtime_key or use_context.config is None:
+            return None, "tool_runner.bridge_fallback"
+        mailbox_runtime_agent_id = next(
+            (str(item).strip() for item in use_context.runtime_agent_ids if str(item).strip()),
+            "",
+        )
+        if mailbox_runtime_agent_id:
+            try:
+                runtime_record = wait_for_approval_runtime_mailbox_resolution(
+                    use_context.config,
+                    key=runtime_key,
+                    runtime_agent_id=mailbox_runtime_agent_id,
+                    wait_timeout_sec=timeout,
+                )
+            except (KeyError, TimeoutError, ValueError):
+                runtime_record = None
+            else:
+                runtime_decision = _permission_decision_from_runtime(runtime_record=runtime_record)
+                if runtime_decision is not None:
+                    return runtime_decision, "tool_runner.bridge_mailbox_fallback"
+        try:
+            runtime_record = wait_for_approval_runtime_resolution(
+                use_context.config,
+                key=runtime_key,
+                wait_timeout_sec=timeout,
+            )
+        except (KeyError, TimeoutError):
+            return None, "tool_runner.bridge_fallback"
+        runtime_decision = _permission_decision_from_runtime(runtime_record=runtime_record)
+        if runtime_decision is not None:
+            return runtime_decision, "tool_runner.bridge_runtime_fallback"
+        return None, "tool_runner.bridge_fallback"
+
     try:
         response = runtime.send_request(
             {
@@ -160,35 +196,11 @@ def _bridge_permission_decision(
             request_id=request_id,
         )
     except (TimeoutError, RuntimeError, ValueError):
-        if runtime_key and use_context.config is not None:
-            try:
-                runtime_record = wait_for_approval_runtime_resolution(
-                    use_context.config,
-                    key=runtime_key,
-                    wait_timeout_sec=timeout,
-                )
-            except (KeyError, TimeoutError):
-                return None, "tool_runner.bridge_fallback"
-            runtime_decision = _permission_decision_from_runtime(runtime_record=runtime_record)
-            if runtime_decision is not None:
-                return runtime_decision, "tool_runner.bridge_runtime_fallback"
-        return None, "tool_runner.bridge_fallback"
+        return _wait_for_runtime_from_mailbox_or_disk()
 
     behavior = str(response.get("behavior") or "").strip().lower()
     if behavior not in {"allow", "ask", "deny"}:
-        if runtime_key and use_context.config is not None:
-            try:
-                runtime_record = wait_for_approval_runtime_resolution(
-                    use_context.config,
-                    key=runtime_key,
-                    wait_timeout_sec=timeout,
-                )
-            except (KeyError, TimeoutError):
-                return None, "tool_runner.bridge_fallback"
-            runtime_decision = _permission_decision_from_runtime(runtime_record=runtime_record)
-            if runtime_decision is not None:
-                return runtime_decision, "tool_runner.bridge_runtime_fallback"
-        return None, "tool_runner.bridge_fallback"
+        return _wait_for_runtime_from_mailbox_or_disk()
 
     try:
         decision = PermissionDecision(

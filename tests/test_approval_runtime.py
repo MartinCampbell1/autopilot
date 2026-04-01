@@ -16,6 +16,7 @@ from autopilot.core.approval_runtime import (
     create_or_reuse_approval_runtime,
     get_approval_runtime,
     settle_approval_runtime,
+    wait_for_approval_runtime_mailbox_resolution,
 )
 from autopilot.core.config import AutopilotConfig
 
@@ -90,6 +91,49 @@ def test_settle_approval_runtime_is_first_writer_wins_under_race(tmp_path: Path)
     assert sum(1 for attempt in stored.settlement_attempts if attempt["applied"] is True) == 1
     assert sum(1 for attempt in stored.settlement_attempts if attempt["ignored_reason"] == "already_resolved") == 1
     assert any(message.message_type.startswith("approval_") and message.message_type != "approval_pending" for message in messages)
+    assert any(message.message_type == "approval_runtime_resolved" for message in messages)
+
+
+def test_wait_for_approval_runtime_mailbox_resolution_uses_canonical_settlement_message(tmp_path: Path) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    runtime = create_or_reuse_approval_runtime(
+        config,
+        key="approval:apr_mailbox_wait",
+        project_id="proj_123",
+        approval_id="apr_mailbox_wait",
+        runtime_agent_ids=["agt_1"],
+        publish_pending=True,
+    )
+
+    def settle_later() -> None:
+        time.sleep(0.05)
+        settle_approval_runtime(
+            config,
+            approval_runtime_id=runtime.id,
+            source="user",
+            outcome="approved",
+            message="Approved from mailbox path.",
+        )
+
+    worker = threading.Thread(target=settle_later, daemon=True)
+    worker.start()
+    resolved = wait_for_approval_runtime_mailbox_resolution(
+        config,
+        approval_runtime_id=runtime.id,
+        runtime_agent_id="agt_1",
+        wait_timeout_sec=0.5,
+    )
+    worker.join(timeout=1.0)
+    messages = list_agent_mailbox_messages(config, approval_runtime_id=runtime.id)
+
+    assert resolved.status == "resolved"
+    assert resolved.winner_source == "user"
+    assert resolved.outcome == "approved"
+    canonical = next(message for message in messages if message.message_type == "approval_runtime_resolved")
+    assert canonical.payload["approval_runtime_id"] == runtime.id
+    assert canonical.payload["source"] == "user"
+    assert canonical.payload["outcome"] == "approved"
+    assert canonical.payload["resolution_id"] == resolved.resolution_id
 
 
 def test_annotate_approval_runtime_can_publish_applied_message(tmp_path: Path) -> None:

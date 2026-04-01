@@ -13,7 +13,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from autopilot.core.agent_mailbox import publish_agent_mailbox_messages
+from autopilot.core.agent_mailbox import poll_agent_mailbox_messages, publish_agent_mailbox_messages
 from autopilot.core.config import AutopilotConfig
 
 _MAX_SETTLEMENT_ATTEMPTS = 25
@@ -217,6 +217,63 @@ def _merge_metadata(
         else:
             merged[key] = value
     return merged
+
+
+def _approval_runtime_mailbox_payload(record: ApprovalRuntimeRecord) -> dict[str, Any]:
+    return {
+        "approval_runtime_id": record.id,
+        "approval_id": record.approval_id,
+        "issue_id": record.issue_id,
+        "permission_sync_key": record.permission_sync_key,
+        "status": record.status,
+        "claim_id": record.claim_id,
+        "resolution_id": record.resolution_id,
+        "source": record.winner_source,
+        "outcome": record.outcome,
+        "message": record.message,
+        "payload": dict(record.payload or {}),
+        "metadata": dict(record.metadata or {}),
+        "resolved_at": record.resolved_at,
+    }
+
+
+def _publish_runtime_resolution_messages(
+    config: AutopilotConfig,
+    record: ApprovalRuntimeRecord,
+    *,
+    specific_message_type: str | None = None,
+) -> None:
+    if not record.runtime_agent_ids:
+        return
+    canonical_message_type = "approval_runtime_resolved"
+    payload = _approval_runtime_mailbox_payload(record)
+    publish_agent_mailbox_messages(
+        config,
+        project_id=record.project_id,
+        runtime_agent_ids=record.runtime_agent_ids,
+        message_type=canonical_message_type,
+        payload=payload,
+        dedupe_key=f"{record.id}:{canonical_message_type}",
+        approval_id=record.approval_id,
+        approval_runtime_id=record.id,
+        issue_id=record.issue_id,
+        permission_sync_key=record.permission_sync_key,
+    )
+    normalized_specific_type = str(specific_message_type or "").strip()
+    if not normalized_specific_type or normalized_specific_type == canonical_message_type:
+        return
+    publish_agent_mailbox_messages(
+        config,
+        project_id=record.project_id,
+        runtime_agent_ids=record.runtime_agent_ids,
+        message_type=normalized_specific_type,
+        payload=payload,
+        dedupe_key=f"{record.id}:{normalized_specific_type}",
+        approval_id=record.approval_id,
+        approval_runtime_id=record.id,
+        issue_id=record.issue_id,
+        permission_sync_key=record.permission_sync_key,
+    )
 
 
 def _append_settlement_attempt(
@@ -472,33 +529,16 @@ def settle_approval_runtime(
                     applied=True,
                 )
                 resolved = save_approval_runtime(config, resolved)
-                if resolved.runtime_agent_ids:
-                    resolved_message_type = (
-                        str(mailbox_message_type).strip()
-                        if mailbox_message_type is not None
-                        else f"approval_{resolved.outcome or 'resolved'}"
-                    )
-                    publish_agent_mailbox_messages(
-                        config,
-                        project_id=resolved.project_id,
-                        runtime_agent_ids=resolved.runtime_agent_ids,
-                        message_type=resolved_message_type,
-                        payload={
-                            "approval_runtime_id": resolved.id,
-                            "approval_id": resolved.approval_id,
-                            "issue_id": resolved.issue_id,
-                            "permission_sync_key": resolved.permission_sync_key,
-                            "source": resolved.winner_source,
-                            "outcome": resolved.outcome,
-                            "message": resolved.message,
-                            **dict(resolved.payload or {}),
-                        },
-                        dedupe_key=f"{resolved.id}:{resolved_message_type}",
-                        approval_id=resolved.approval_id,
-                        approval_runtime_id=resolved.id,
-                        issue_id=resolved.issue_id,
-                        permission_sync_key=resolved.permission_sync_key,
-                    )
+                resolved_message_type = (
+                    str(mailbox_message_type).strip()
+                    if mailbox_message_type is not None
+                    else f"approval_{resolved.outcome or 'resolved'}"
+                )
+                _publish_runtime_resolution_messages(
+                    config,
+                    resolved,
+                    specific_message_type=resolved_message_type,
+                )
                 return resolved
             finally:
                 _release_lock(lock_path, claim_id=claim.id)
@@ -600,6 +640,47 @@ def wait_for_approval_runtime_resolution(
     )
 
 
+def wait_for_approval_runtime_mailbox_resolution(
+    config: AutopilotConfig,
+    *,
+    runtime_agent_id: str,
+    approval_runtime_id: str = "",
+    key: str = "",
+    after_sequence: int = 0,
+    wait_timeout_sec: float = 0.5,
+) -> ApprovalRuntimeRecord:
+    """Wait for a canonical mailbox settlement message for one approval runtime."""
+
+    record = get_approval_runtime(config, approval_runtime_id=approval_runtime_id, key=key)
+    if record is None:
+        raise KeyError(approval_runtime_id or key)
+    if record.status == "resolved":
+        return record
+    normalized_runtime_agent_id = str(runtime_agent_id or "").strip()
+    if not normalized_runtime_agent_id:
+        raise ValueError("Mailbox wait requires `runtime_agent_id`.")
+
+    deadline = time.monotonic() + max(float(wait_timeout_sec), 0.0)
+    cursor = max(int(after_sequence or 0), 0)
+    while True:
+        messages = poll_agent_mailbox_messages(
+            config,
+            runtime_agent_id=normalized_runtime_agent_id,
+            approval_runtime_id=record.id,
+            message_type="approval_runtime_resolved",
+            status=None,
+            after_sequence=cursor,
+        )
+        if messages:
+            cursor = max(cursor, max(message.delivery_sequence for message in messages))
+            refreshed = get_approval_runtime(config, approval_runtime_id=record.id)
+            if refreshed is not None and refreshed.status == "resolved":
+                return refreshed
+        if time.monotonic() >= deadline:
+            raise TimeoutError(f"Timed out waiting for mailbox settlement of approval runtime `{record.id}`.")
+        time.sleep(0.02)
+
+
 __all__ = [
     "ApprovalRuntimeClaim",
     "ApprovalRuntimeRecord",
@@ -610,5 +691,6 @@ __all__ = [
     "list_approval_runtimes",
     "save_approval_runtime",
     "settle_approval_runtime",
+    "wait_for_approval_runtime_mailbox_resolution",
     "wait_for_approval_runtime_resolution",
 ]
