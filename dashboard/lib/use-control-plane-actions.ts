@@ -2,6 +2,7 @@ import { useCallback, type Dispatch, type MutableRefObject, type SetStateAction 
 import {
   applyExecutionPlanePreviewRun,
   applyExecutionPlaneApproval,
+  fetchExecutionPlaneAgentActionRun,
   applyExecutionPlaneOrchestratorSessionControlPlan,
   applyExecutionPlaneOrchestratorSessionRecommendation,
   allowExecutionPlaneToolPermissionRuntime,
@@ -139,6 +140,43 @@ export function useControlPlaneActions({
       await loadAgentDetail(runtimeAgentId);
     },
     [loadAgentDetail, loadOverview, loadSessionDetail, selectedSessionId]
+  );
+
+  const followAsyncRunSettlement = useCallback(
+    (
+      runId: string,
+      options?: {
+        sessionId?: string | null;
+        runtimeAgentId?: string | null;
+      }
+    ) => {
+      const normalizedRunId = toStringValue(runId);
+      if (!normalizedRunId) return;
+      const normalizedSessionId = toStringValue(options?.sessionId);
+      const normalizedRuntimeAgentId = toStringValue(options?.runtimeAgentId);
+      void fetchExecutionPlaneAgentActionRun(normalizedRunId, {
+        waitForAsyncSettlement: true,
+        runtimeAgentId: normalizedRuntimeAgentId || null,
+        waitTimeoutMs: 5000,
+      })
+        .then(async (run) => {
+          if (toStringValue(run.completion_state) === "pending_async") {
+            return;
+          }
+          if (normalizedSessionId) {
+            await refreshAfterMutation(normalizedSessionId);
+          } else {
+            await loadOverview();
+          }
+          if (normalizedRuntimeAgentId) {
+            await loadAgentDetail(normalizedRuntimeAgentId);
+          }
+        })
+        .catch(() => {
+          // Keep async settle follow-through best-effort; the SSE path will still refresh eventually.
+        });
+    },
+    [loadAgentDetail, loadOverview, refreshAfterMutation, toStringValue]
   );
 
   const recordTriageInboxFeedback = useCallback(
@@ -316,6 +354,18 @@ export function useControlPlaneActions({
         if (selectedAgentId && run.runtime_agent_ids.includes(selectedAgentId)) {
           await loadAgentDetail(selectedAgentId);
         }
+        const appliedRun = payload.run;
+        const pendingAppliedRunId = toStringValue(appliedRun?.id, payload.run?.id);
+        const appliedCompletionState = toStringValue(
+          appliedRun?.completion_state,
+          payload.completion_state
+        );
+        if (appliedCompletionState === "pending_async") {
+          followAsyncRunSettlement(pendingAppliedRunId, {
+            sessionId: run.orchestrator_session_id,
+            runtimeAgentId: toStringValue(appliedRun?.runtime_agent_ids?.[0], selectedAgentId),
+          });
+        }
       } catch (error) {
         setErrorMessage(error instanceof Error ? error.message : "Failed to apply selected preview.");
       } finally {
@@ -325,6 +375,7 @@ export function useControlPlaneActions({
     [
       loadAgentDetail,
       loadOverview,
+      followAsyncRunSettlement,
       refreshAfterMutation,
       selectedAgentId,
       setBusyActionKey,
@@ -357,6 +408,9 @@ export function useControlPlaneActions({
           `${payload.recommendation.title || recommendation.kind} finished with status ${payload.status}.`
         );
         await refreshAfterMutation(selectedSessionId);
+        followAsyncRunSettlement(runId, {
+          sessionId: selectedSessionId,
+        });
       } catch (error) {
         setErrorMessage(
           error instanceof Error ? error.message : "Failed to apply session recommendation."
@@ -366,6 +420,7 @@ export function useControlPlaneActions({
       }
     },
     [
+      followAsyncRunSettlement,
       refreshAfterMutation,
       selectedSessionId,
       setBusyActionKey,
@@ -506,6 +561,15 @@ export function useControlPlaneActions({
             `Agent command ${commandName} finished with status ${payload.status}.`
         );
         await refreshAfterAgentMutation(selectedAgent.runtime_agent_id);
+        const run = payload.run;
+        const pendingRunId = toStringValue(run?.id, runId);
+        const pendingCompletionState = toStringValue(run?.completion_state, payload.completion_state);
+        if (pendingCompletionState === "pending_async") {
+          followAsyncRunSettlement(pendingRunId, {
+            sessionId: selectedSessionId,
+            runtimeAgentId: selectedAgent.runtime_agent_id,
+          });
+        }
       } catch (error) {
         setErrorMessage(
           error instanceof Error ? error.message : "Failed to execute runtime agent command."
@@ -515,6 +579,7 @@ export function useControlPlaneActions({
       }
     },
     [
+      followAsyncRunSettlement,
       refreshAfterAgentMutation,
       selectedAgent,
       selectedSessionId,
@@ -548,6 +613,9 @@ export function useControlPlaneActions({
         );
         setSelectedPassId(payload.control_pass.id);
         await refreshAfterMutation(selectedSessionId);
+        followAsyncRunSettlement(runId, {
+          sessionId: selectedSessionId,
+        });
       } catch (error) {
         setErrorMessage(
           error instanceof Error ? error.message : "Failed to apply session control profile."
@@ -557,6 +625,7 @@ export function useControlPlaneActions({
       }
     },
     [
+      followAsyncRunSettlement,
       refreshAfterMutation,
       selectedSessionId,
       setBusyActionKey,
