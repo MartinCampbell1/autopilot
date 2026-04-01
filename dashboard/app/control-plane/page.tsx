@@ -22,7 +22,12 @@ function parseResultIndex(value: string | null): number | null {
 function parseSessionContextKind(
   value: string | null
 ): ControlPlaneViewSelection["sessionContextKind"] {
-  if (value === "approval" || value === "issue" || value === "event") {
+  if (
+    value === "approval" ||
+    value === "issue" ||
+    value === "event" ||
+    value === "tool_permission_runtime"
+  ) {
     return value;
   }
   return null;
@@ -65,6 +70,12 @@ function ControlPlanePageInner({
       if (selection.issueId) next.set("issue", selection.issueId);
       else next.delete("issue");
 
+      if (selection.toolPermissionRuntimeId) {
+        next.set("tool_permission_runtime", selection.toolPermissionRuntimeId);
+      } else {
+        next.delete("tool_permission_runtime");
+      }
+
       if (selection.eventKey) next.set("event", selection.eventKey);
       else next.delete("event");
 
@@ -86,6 +97,7 @@ function ControlPlanePageInner({
     selectedPassId,
     selectedSessionApprovalId,
     selectedSessionIssueId,
+    selectedSessionToolPermissionRuntimeId,
     selectedSessionEventKey,
     selectedSessionContextKind,
     headerSectionProps,
@@ -123,6 +135,12 @@ function ControlPlanePageInner({
     if (selectedSessionIssueId) next.set("issue", selectedSessionIssueId);
     else next.delete("issue");
 
+    if (selectedSessionToolPermissionRuntimeId) {
+      next.set("tool_permission_runtime", selectedSessionToolPermissionRuntimeId);
+    } else {
+      next.delete("tool_permission_runtime");
+    }
+
     if (selectedSessionEventKey) next.set("event", selectedSessionEventKey);
     else next.delete("event");
 
@@ -141,6 +159,7 @@ function ControlPlanePageInner({
     selectedSessionContextKind,
     selectedSessionEventKey,
     selectedSessionIssueId,
+    selectedSessionToolPermissionRuntimeId,
     selectedSessionId,
   ]);
 
@@ -176,6 +195,7 @@ function ControlPlanePageContent() {
       sessionContextKind: parseSessionContextKind(resolvedSearchParams.get("context") ?? null),
       approvalId: resolvedSearchParams.get("approval") ?? null,
       issueId: resolvedSearchParams.get("issue") ?? null,
+      toolPermissionRuntimeId: resolvedSearchParams.get("tool_permission_runtime") ?? null,
       eventKey: resolvedSearchParams.get("event") ?? null,
     }),
     [resolvedSearchParams]
@@ -191,6 +211,7 @@ function ControlPlanePageContent() {
         initialSelection.sessionContextKind || "",
         initialSelection.approvalId || "",
         initialSelection.issueId || "",
+        initialSelection.toolPermissionRuntimeId || "",
         initialSelection.eventKey || "",
       ].join("|"),
     [initialSelection]

@@ -45,6 +45,7 @@ export type ControlPlaneViewSelection = {
   sessionContextKind?: SessionContextKind | null;
   approvalId?: string | null;
   issueId?: string | null;
+  toolPermissionRuntimeId?: string | null;
   eventKey?: string | null;
 };
 
@@ -57,7 +58,12 @@ function normalizeResultIndex(value?: number | null): number {
 }
 
 function normalizeSessionContextKind(value?: string | null): SessionContextKind {
-  if (value === "approval" || value === "issue" || value === "event") {
+  if (
+    value === "approval" ||
+    value === "issue" ||
+    value === "event" ||
+    value === "tool_permission_runtime"
+  ) {
     return value;
   }
   return "";
@@ -74,6 +80,9 @@ export function useControlPlaneViewState(initialSelection?: ControlPlaneViewSele
   );
   const initialApprovalId = normalizeSelectionValue(initialSelection?.approvalId);
   const initialIssueId = normalizeSelectionValue(initialSelection?.issueId);
+  const initialToolPermissionRuntimeId = normalizeSelectionValue(
+    initialSelection?.toolPermissionRuntimeId
+  );
   const initialEventKey = normalizeSelectionValue(initialSelection?.eventKey);
   const [health, setHealth] = useState<AccountHealth | null>(null);
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
@@ -119,6 +128,8 @@ export function useControlPlaneViewState(initialSelection?: ControlPlaneViewSele
   const [pendingAgentTimelineRowDomId, setPendingAgentTimelineRowDomId] = useState("");
   const [selectedSessionApprovalId, setSelectedSessionApprovalId] = useState(initialApprovalId);
   const [selectedSessionIssueId, setSelectedSessionIssueId] = useState(initialIssueId);
+  const [selectedSessionToolPermissionRuntimeId, setSelectedSessionToolPermissionRuntimeId] =
+    useState(initialToolPermissionRuntimeId);
   const [selectedSessionEventKey, setSelectedSessionEventKey] = useState(initialEventKey);
   const [selectedSessionContextKind, setSelectedSessionContextKind] =
     useState<SessionContextKind>(initialSessionContextKind);
@@ -229,6 +240,8 @@ export function useControlPlaneViewState(initialSelection?: ControlPlaneViewSele
     setSelectedSessionApprovalId,
     selectedSessionIssueId,
     setSelectedSessionIssueId,
+    selectedSessionToolPermissionRuntimeId,
+    setSelectedSessionToolPermissionRuntimeId,
     selectedSessionEventKey,
     setSelectedSessionEventKey,
     selectedSessionContextKind,

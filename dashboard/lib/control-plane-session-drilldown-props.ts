@@ -60,18 +60,23 @@ type BuildSessionDrilldownSectionPropsArgs = {
   formatTimestamp: (value?: string | null) => string;
   eventFamily: (eventName: string) => string;
   sessionEventKey: (event: Record<string, unknown>, fallback?: string) => string;
-  sessionContextRowDomId: (kind: "approval" | "issue" | "event", key: string) => string;
+  sessionContextRowDomId: (
+    kind: "approval" | "issue" | "event" | "tool_permission_runtime",
+    key: string
+  ) => string;
   syncLinkedSelection: (payload: {
     event?: Record<string, unknown> | null;
     runId?: string;
     approvalId?: string;
     issueId?: string;
+    toolPermissionRuntimeId?: string;
     runtimeAgentId?: string;
   }) => void;
   selectedPass: SessionDrilldownSectionProps["selectedControlPassCardProps"]["selectedPass"];
   setSelectedSessionId: (sessionId: string) => void;
   selectedSessionApprovalId: string;
   selectedSessionIssueId: string;
+  selectedSessionToolPermissionRuntimeId: string;
   revealSelectedSessionContextRow: () => void;
   revealSelectedSessionContextInAgentTimeline: () => void;
   selectedSessionContext: SessionDrilldownSectionProps["selectedSessionContextCardProps"]["selectedSessionContext"];
@@ -153,6 +158,7 @@ export function buildSessionDrilldownSectionProps({
   setSelectedSessionId,
   selectedSessionApprovalId,
   selectedSessionIssueId,
+  selectedSessionToolPermissionRuntimeId,
   revealSelectedSessionContextRow,
   revealSelectedSessionContextInAgentTimeline,
   selectedSessionContext,
@@ -285,6 +291,7 @@ export function buildSessionDrilldownSectionProps({
       filteredIssues,
       visibleSessionIssues,
       selectedSessionIssueId,
+      selectedSessionToolPermissionRuntimeId,
       busyActionKey,
       formatTimestamp,
       sessionContextRowDomId,
@@ -304,6 +311,12 @@ export function buildSessionDrilldownSectionProps({
           issueId: issue.id,
           approvalId: issue.approval_id,
           runtimeAgentId: issue.runtime_agent_ids[0] || issue.runtime_agent_id,
+        });
+      },
+      onInspectToolPermissionRuntime: (runtime) => {
+        syncLinkedSelection({
+          toolPermissionRuntimeId: runtime.id,
+          runtimeAgentId: runtime.runtime_agent_ids[0],
         });
       },
       onApproveApproval: (approval) => {
@@ -362,6 +375,12 @@ export function buildSessionDrilldownSectionProps({
       },
       onResolveIssue: (issue) => {
         void resolveIssue(issue);
+      },
+      onAllowToolPermissionRuntime: (runtime) => {
+        void resolveToolPermissionRuntime(runtime, "allow");
+      },
+      onDenyToolPermissionRuntime: (runtime) => {
+        void resolveToolPermissionRuntime(runtime, "deny");
       },
       onAdvanceCurrentQueue:
         currentSessionLineageQueue && selectedSessionLineageEntry

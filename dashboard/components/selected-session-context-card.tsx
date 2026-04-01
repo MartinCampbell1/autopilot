@@ -17,12 +17,40 @@ import type {
   ExecutionApprovalRecord,
   ExecutionIssueRecord,
   OrchestratorSessionDetail,
+  ToolPermissionRuntimeRecord,
 } from "@/lib/types";
 
 type SelectedSessionContextValue =
   | { kind: "approval"; approval: ExecutionApprovalRecord }
   | { kind: "issue"; issue: ExecutionIssueRecord }
+  | { kind: "tool_permission_runtime"; runtime: ToolPermissionRuntimeRecord }
   | { kind: "event"; event: Record<string, unknown> };
+
+function formatToolPermissionStage(value?: string | null): string {
+  const normalized = (value || "").trim();
+  if (normalized === "pending_user") return "Waiting for user";
+  if (normalized === "pending_hook") return "Waiting for hook";
+  if (normalized === "pending_classifier") return "Waiting for classifier";
+  return normalized ? normalized.replaceAll("_", " ") : "Pending";
+}
+
+function extractToolPermissionMessage(runtime: ToolPermissionRuntimeRecord): string {
+  const pendingStage = (runtime.pending_stage || "").trim();
+  const stagePayload =
+    pendingStage && runtime.payload && typeof runtime.payload === "object" && !Array.isArray(runtime.payload)
+      ? runtime.payload[pendingStage]
+      : null;
+  if (
+    stagePayload
+    && typeof stagePayload === "object"
+    && !Array.isArray(stagePayload)
+    && typeof (stagePayload as Record<string, unknown>).message === "string"
+    && (stagePayload as Record<string, string>).message
+  ) {
+    return (stagePayload as Record<string, string>).message;
+  }
+  return runtime.message || "Tool permission request is waiting for review.";
+}
 
 type RelatedRunLink = {
   run: ExecutionAgentActionRunRecord;
@@ -49,6 +77,7 @@ type LinkedSelectionPayload = {
   resultIndex?: number;
   approvalId?: string;
   issueId?: string;
+  toolPermissionRuntimeId?: string;
   runtimeAgentId?: string;
   event?: Record<string, unknown> | null;
 };
@@ -81,6 +110,8 @@ type SelectedSessionContextCardProps = {
   onRejectApproval: (approval: ExecutionApprovalRecord) => void;
   onApplyApproval: (approval: ExecutionApprovalRecord) => void;
   onResolveIssue: (issue: ExecutionIssueRecord) => void;
+  onAllowToolPermissionRuntime: (runtime: ToolPermissionRuntimeRecord) => void;
+  onDenyToolPermissionRuntime: (runtime: ToolPermissionRuntimeRecord) => void;
   onAdvanceCurrentQueue?: (() => void) | null;
 };
 
@@ -109,6 +140,8 @@ export function SelectedSessionContextCard({
   onRejectApproval,
   onApplyApproval,
   onResolveIssue,
+  onAllowToolPermissionRuntime,
+  onDenyToolPermissionRuntime,
   onAdvanceCurrentQueue,
 }: SelectedSessionContextCardProps) {
   return (
@@ -128,7 +161,7 @@ export function SelectedSessionContextCard({
           </div>
         ) : !selectedSessionContext ? (
           <div className="rounded-xl border border-dashed border-[#e5e5e3] bg-[#fafaf9] px-5 py-8 text-[13px] text-[#9b9a97]">
-            Pick an approval, issue, event, or outcome to open the unified context inspector.
+            Pick an approval, issue, tool-permission runtime, event, or outcome to open the unified context inspector.
           </div>
         ) : (
           (() => {
@@ -136,17 +169,22 @@ export function SelectedSessionContextCard({
             const approvalContext =
               contextKind === "approval" ? selectedSessionContext.approval : null;
             const issueContext = contextKind === "issue" ? selectedSessionContext.issue : null;
+            const runtimeContext =
+              contextKind === "tool_permission_runtime" ? selectedSessionContext.runtime : null;
             const eventContext = contextKind === "event" ? selectedSessionContext.event : null;
             const relatedApprovalId =
               approvalContext?.id ||
+              runtimeContext?.approval_id ||
               issueContext?.approval_id ||
               toStringValue(eventContext?.approval_id);
             const relatedIssueId =
               issueContext?.id ||
+              runtimeContext?.issue_id ||
               approvalContext?.issue_id ||
               toStringValue(eventContext?.issue_id);
             const runtimeAgentId =
               approvalContext?.runtime_agent_ids[0] ||
+              runtimeContext?.runtime_agent_ids[0] ||
               issueContext?.runtime_agent_ids[0] ||
               issueContext?.runtime_agent_id ||
               toStringValue(eventContext?.runtime_agent_id) ||
@@ -154,10 +192,14 @@ export function SelectedSessionContextCard({
               "";
             const projectId =
               approvalContext?.project_id ||
+              runtimeContext?.project_id ||
               issueContext?.project_id ||
               toStringValue(eventContext?.project_id);
             const storyId =
-              issueContext?.story_id ?? toNullableNumber(eventContext?.story_id);
+              issueContext?.story_id ??
+              toNullableNumber(runtimeContext?.metadata?.story_id) ??
+              toNullableNumber(runtimeContext?.payload?.story_id) ??
+              toNullableNumber(eventContext?.story_id);
             const workspaceHref =
               projectId && storyId
                 ? `/projects/${projectId}?storyId=${storyId}`
@@ -182,12 +224,14 @@ export function SelectedSessionContextCard({
               : null;
             const title =
               approvalContext?.action ||
+              runtimeContext?.tool_name ||
               issueContext?.title ||
               issueContext?.root_cause ||
               issueContext?.id ||
               toStringValue(eventContext?.event, "unknown_event");
             const subtitle =
               approvalContext?.reason ||
+              (runtimeContext ? extractToolPermissionMessage(runtimeContext) : "") ||
               issueContext?.root_cause ||
               issueContext?.description ||
               toStringValue(eventContext?.message, "No event message") ||
@@ -197,12 +241,16 @@ export function SelectedSessionContextCard({
               approvalContext?.decided_at ||
               approvalContext?.updated_at ||
               approvalContext?.created_at ||
+              runtimeContext?.resolved_at ||
+              runtimeContext?.updated_at ||
+              runtimeContext?.created_at ||
               issueContext?.resolved_at ||
               issueContext?.updated_at ||
               issueContext?.created_at ||
               toStringValue(eventContext?.timestamp);
             const status =
               approvalContext?.status ||
+              runtimeContext?.status ||
               issueContext?.status ||
               toStringValue(eventContext?.status, "unknown");
             const statusClass =
@@ -213,20 +261,30 @@ export function SelectedSessionContextCard({
                   : passStatusClass(status);
             const payload =
               (approvalContext ? asRecord(approvalContext) : null) ||
+              (runtimeContext ? asRecord(runtimeContext) : null) ||
               (issueContext ? asRecord(issueContext) : null) ||
               eventContext ||
               {};
             const contextId =
               approvalContext?.id ||
+              runtimeContext?.id ||
               issueContext?.id ||
               toStringValue(eventContext?.id) ||
               title;
             const contextDetail =
               approvalContext?.action ||
+              (runtimeContext
+                ? `${runtimeContext.tool_name || "tool"} · ${formatToolPermissionStage(runtimeContext.pending_stage)}`
+                : "") ||
               issueContext?.category ||
               toStringValue(eventContext?.event, "event");
             const runtimeAgentDetail =
               approvalContext?.requested_by ||
+              (runtimeContext
+                ? `${formatToolPermissionStage(runtimeContext.pending_stage)}${
+                    runtimeContext.resolved_source ? ` · ${runtimeContext.resolved_source}` : ""
+                  }`
+                : "") ||
               issueContext?.related_command ||
               toStringValue(eventContext?.orchestrator_session_id, "No session token");
 
@@ -253,6 +311,14 @@ export function SelectedSessionContextCard({
                           className={`rounded-full px-2.5 py-1 text-[11px] font-semibold capitalize ${issueSeverityClass(issueContext?.severity || "unknown")}`}
                         >
                           {issueContext?.severity || "unknown"}
+                        </Badge>
+                      )}
+                      {contextKind === "tool_permission_runtime" && runtimeContext && (
+                        <Badge
+                          variant="outline"
+                          className="rounded-full border-[#f4e0c4] bg-[#fff6e8] px-2.5 py-1 text-[11px] font-medium text-[#9a6700]"
+                        >
+                          {formatToolPermissionStage(runtimeContext.pending_stage)}
                         </Badge>
                       )}
                       {contextKind === "event" && (
@@ -308,12 +374,17 @@ export function SelectedSessionContextCard({
                   items={[
                     {
                       key: `context-${contextKind}-${contextId}`,
-                      label: `${contextKind} ${contextId}`,
+                      label:
+                        contextKind === "tool_permission_runtime"
+                          ? `tool permission ${contextId}`
+                          : `${contextKind} ${contextId}`,
                       tone:
                         contextKind === "approval"
                           ? "approval"
                           : contextKind === "issue"
                             ? "issue"
+                            : contextKind === "tool_permission_runtime"
+                              ? "approval"
                             : "event",
                       active: true,
                       onClick: onRevealSessionRow,
@@ -347,6 +418,7 @@ export function SelectedSessionContextCard({
                             onSyncLinkedSelection({
                               approvalId: relatedApprovalId,
                               issueId: relatedIssueId,
+                              toolPermissionRuntimeId: runtimeContext?.id,
                               runtimeAgentId,
                               event: eventContext,
                             });
@@ -362,6 +434,7 @@ export function SelectedSessionContextCard({
                             onSyncLinkedSelection({
                               approvalId: relatedApprovalId,
                               issueId: relatedIssueId,
+                              toolPermissionRuntimeId: runtimeContext?.id,
                               runtimeAgentId,
                               event: eventContext,
                             });
@@ -403,6 +476,14 @@ export function SelectedSessionContextCard({
                         className="rounded-full border-[#e5e5e3] bg-white px-2.5 py-1 text-[11px] font-medium text-[#37352f]"
                       >
                         agent {runtimeAgentId}
+                      </Badge>
+                    )}
+                    {runtimeContext && (
+                      <Badge
+                        variant="outline"
+                        className="rounded-full border-[#d6e9dc] bg-[#eef8f1] px-2.5 py-1 text-[11px] font-medium text-[#2b6e3f]"
+                      >
+                        use {runtimeContext.tool_use_id || runtimeContext.id}
                       </Badge>
                     )}
                     {relatedApprovalId && contextKind !== "approval" && (
@@ -474,6 +555,35 @@ export function SelectedSessionContextCard({
                     >
                       {busyActionKey === `issue-resolve:${issueContext.id}` ? "Resolving..." : "Resolve"}
                     </Button>
+                  )}
+                  {runtimeContext?.status === "pending" && (
+                    <>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-8 rounded-lg border-[#e5e5e3] bg-white text-[12px] text-[#37352f] hover:bg-[#f7f7f5]"
+                        disabled={Boolean(busyActionKey)}
+                        onClick={() => {
+                          onDenyToolPermissionRuntime(runtimeContext);
+                        }}
+                      >
+                        {busyActionKey === `tool-permission-deny:${runtimeContext.id}`
+                          ? "Denying..."
+                          : "Deny"}
+                      </Button>
+                      <Button
+                        size="sm"
+                        className="h-8 rounded-lg bg-[#1a1a1a] text-[12px] hover:bg-[#333]"
+                        disabled={Boolean(busyActionKey)}
+                        onClick={() => {
+                          onAllowToolPermissionRuntime(runtimeContext);
+                        }}
+                      >
+                        {busyActionKey === `tool-permission-allow:${runtimeContext.id}`
+                          ? "Allowing..."
+                          : "Allow"}
+                      </Button>
+                    </>
                   )}
                   {runtimeAgentId && (
                     <Button

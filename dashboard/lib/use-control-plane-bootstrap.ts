@@ -38,6 +38,7 @@ type UseControlPlaneBootstrapArgs = {
   setSelectedSession: Dispatch<SetStateAction<OrchestratorSessionDetail | null>>;
   setSelectedSessionApprovalId: Dispatch<SetStateAction<string>>;
   setSelectedSessionIssueId: Dispatch<SetStateAction<string>>;
+  setSelectedSessionToolPermissionRuntimeId: Dispatch<SetStateAction<string>>;
   setSelectedSessionEventKey: Dispatch<SetStateAction<string>>;
   setSelectedSessionContextKind: Dispatch<SetStateAction<SessionContextKind>>;
   setEntitySearch: Dispatch<SetStateAction<string>>;
@@ -83,6 +84,7 @@ export function useControlPlaneBootstrap({
   setSelectedSession,
   setSelectedSessionApprovalId,
   setSelectedSessionIssueId,
+  setSelectedSessionToolPermissionRuntimeId,
   setSelectedSessionEventKey,
   setSelectedSessionContextKind,
   setEntitySearch,
@@ -142,6 +144,7 @@ export function useControlPlaneBootstrap({
       setSelectedAgent(null);
       setSelectedSessionApprovalId("");
       setSelectedSessionIssueId("");
+      setSelectedSessionToolPermissionRuntimeId("");
       setSelectedSessionEventKey("");
       setSelectedSessionContextKind("");
       setEntitySearch("");
@@ -183,6 +186,7 @@ export function useControlPlaneBootstrap({
     setSelectedSessionContextKind,
     setSelectedSessionEventKey,
     setSelectedSessionIssueId,
+    setSelectedSessionToolPermissionRuntimeId,
     setSessionLoading,
   ]);
 
@@ -190,6 +194,7 @@ export function useControlPlaneBootstrap({
     setEntitySearch("");
     setSelectedSessionApprovalId("");
     setSelectedSessionIssueId("");
+    setSelectedSessionToolPermissionRuntimeId("");
     setSelectedSessionEventKey("");
     setSelectedSessionContextKind("");
     setSessionQueueAdvanceFeedback(null);
@@ -205,6 +210,7 @@ export function useControlPlaneBootstrap({
     setSelectedSessionContextKind,
     setSelectedSessionEventKey,
     setSelectedSessionIssueId,
+    setSelectedSessionToolPermissionRuntimeId,
     setSessionQueueAdvanceFeedback,
     setSessionQueueFocusDelta,
   ]);
