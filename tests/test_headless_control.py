@@ -6,6 +6,7 @@ import io
 import json
 from pathlib import Path
 
+from autopilot.core.agent_action_runs import create_agent_action_batch_run
 from autopilot.core.agent_mailbox import list_agent_mailbox_messages
 from autopilot.core.approval_runtime import annotate_approval_runtime, create_or_reuse_approval_runtime, get_approval_runtime
 from autopilot.core.config import AutopilotConfig
@@ -13,7 +14,11 @@ from autopilot.core.headless_control import (
     attach_headless_control_handlers,
     create_headless_control_session,
 )
-from autopilot.core.runtime_agent_tasks import create_or_reuse_runtime_agent_task, refresh_runtime_agent_task
+from autopilot.core.runtime_agent_tasks import (
+    create_or_reuse_runtime_agent_task,
+    link_runtime_agent_task_run,
+    refresh_runtime_agent_task,
+)
 from autopilot.core.structured_io import StructuredIO
 from autopilot.core.tool_permissions import PermissionRuleValue, PermissionUpdate, persist_permission_update
 from autopilot.core.project_store import ensure_project_state, register_project, save_project_state
@@ -866,3 +871,83 @@ def test_headless_control_can_get_runtime_agent_task_and_artifacts(tmp_path: Pat
     assert transcript_response.response.subtype == "success"
     assert transcript_response.response.response["transcript"]["task_id"] == refreshed.id
     assert "Runtime Agent Task Transcript" in transcript_response.response.response["transcript"]["content"]
+
+
+def test_headless_control_can_get_runtime_agent_action_run_and_wait_for_async_settlement(
+    tmp_path: Path,
+) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    project = _create_project(config, tmp_path / "project")
+    log_path = config.autopilot_home / "logs" / "headless-action-run.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path.write_text("launch started\nlaunch finished cleanly\n", encoding="utf-8")
+
+    task = create_or_reuse_runtime_agent_task(
+        config,
+        project_id=str(project["id"]),
+        command="launch",
+        actor="founderos",
+        reason="Launch background work.",
+        orchestrator_session_id="sess_headless",
+        runtime_agent_ids=["proj_headless_runtime:1:worker:a"],
+        output_path=str(log_path),
+    )
+    run = create_agent_action_batch_run(
+        config,
+        run_kind="single_action",
+        orchestrator_session_id="sess_headless",
+        actor="founderos",
+        mode="auto",
+        selection={"mode": "single_action", "project_id": str(project["id"])},
+        summary={"selected_count": 1, "processed_count": 1, "status_counts": {"ok": 1}},
+        results=[{"status": "ok", "command_result": {"command": "launch"}, "async_task": {"id": task.id}}],
+        status="ok",
+        project_ids=[str(project["id"])],
+        runtime_agent_ids=["proj_headless_runtime:1:worker:a"],
+    )
+    link_runtime_agent_task_run(config, task.id, agent_action_run_id=run.id)
+    session = create_headless_control_session(config, project_entry=project, session_id="sess_headless")
+
+    pending_response = session.handle_request(
+        {
+            "type": "control_request",
+            "request_id": "req_get_runtime_agent_action_run_pending",
+            "request": {"subtype": "get_runtime_agent_action_run", "run_id": run.id},
+            "session_id": "sess_headless",
+        }
+    )
+
+    assert pending_response.response.subtype == "success"
+    assert pending_response.response.response["run"]["id"] == run.id
+    assert pending_response.response.response["run"]["completion_state"] == "pending_async"
+
+    save_project_state(
+        config,
+        str(project["id"]),
+        {
+            "status": "completed",
+            "paused": False,
+            "finished_at": "2026-04-02T00:05:00+00:00",
+            "log_path": str(log_path),
+        },
+    )
+    settled_response = session.handle_request(
+        {
+            "type": "control_request",
+            "request_id": "req_get_runtime_agent_action_run_settled",
+            "request": {
+                "subtype": "get_runtime_agent_action_run",
+                "run_id": run.id,
+                "wait_for_async_settlement": True,
+                "runtime_agent_id": "proj_headless_runtime:1:worker:a",
+                "wait_timeout_ms": 200,
+            },
+            "session_id": "sess_headless",
+        }
+    )
+
+    assert settled_response.response.subtype == "success"
+    assert settled_response.response.response["run"]["id"] == run.id
+    assert settled_response.response.response["run"]["completion_state"] == "completed"
+    assert settled_response.response.response["run"]["active_async_task_count"] == 0
+    assert settled_response.response.response["run"]["async_tasks"][0]["id"] == task.id
