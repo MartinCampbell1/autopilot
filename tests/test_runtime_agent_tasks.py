@@ -18,6 +18,7 @@ from autopilot.core.runtime_agent_tasks import (
     list_runtime_agent_tasks,
     refresh_runtime_agent_task,
 )
+from autopilot.core.task_output import get_task_output, read_task_output_text
 
 
 def _seed_project(config: AutopilotConfig, project_path: Path) -> dict[str, object]:
@@ -69,6 +70,9 @@ def test_runtime_agent_task_stays_running_until_project_state_advances(tmp_path:
 def test_runtime_agent_task_transitions_to_completed_with_terminal_summary(tmp_path: Path) -> None:
     config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
     project = _seed_project(config, tmp_path / "async-task-terminal-project")
+    log_path = config.autopilot_home / "logs" / "resume.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path.write_text("worker started\nworker finished cleanly\n", encoding="utf-8")
 
     task = create_or_reuse_runtime_agent_task(
         config,
@@ -77,14 +81,14 @@ def test_runtime_agent_task_transitions_to_completed_with_terminal_summary(tmp_p
         actor="founderos",
         reason="Resume background work.",
         runtime_agent_ids=["proj:1:worker:a"],
-        output_path=str(config.autopilot_home / "logs" / "resume.log"),
+        output_path=str(log_path),
     )
 
     state = load_project_state(config, str(project["id"]))
     state["status"] = "completed"
     state["paused"] = False
     state["finished_at"] = "2026-04-01T12:34:56+00:00"
-    state["log_path"] = str(config.autopilot_home / "logs" / "resume.log")
+    state["log_path"] = str(log_path)
     save_project_state(config, str(project["id"]), state)
 
     refreshed = refresh_runtime_agent_task(config, task.id)
@@ -93,4 +97,13 @@ def test_runtime_agent_task_transitions_to_completed_with_terminal_summary(tmp_p
     assert refreshed.placeholder_result == ""
     assert refreshed.result_summary == "Background run completed."
     assert refreshed.result_payload["project_status"] == "completed"
+    assert refreshed.output_artifact_id
+    assert refreshed.result_payload["output_artifact_id"] == refreshed.output_artifact_id
+    assert "worker finished cleanly" in refreshed.output_preview
     assert refreshed.completed_at == "2026-04-01T12:34:56+00:00"
+
+    output_record = get_task_output(config, refreshed.output_artifact_id)
+    assert output_record is not None
+    assert output_record.owner_kind == "runtime_agent_task"
+    assert output_record.source_path == str(log_path)
+    assert "worker finished cleanly" in read_task_output_text(config, refreshed.output_artifact_id)

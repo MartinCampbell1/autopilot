@@ -43,6 +43,7 @@ from autopilot.core.execution_plane import (
     list_execution_plane_orchestrator_sessions,
     list_execution_plane_projects,
     get_execution_plane_runtime_agent_task,
+    get_execution_plane_runtime_agent_task_output,
     summarize_execution_plane_orchestrator_session_actions,
     summarize_execution_plane_orchestrator_session_control_passes,
     summarize_execution_plane_orchestrator_sessions,
@@ -895,6 +896,17 @@ async def get_execution_runtime_agent_task(task_id: str) -> dict[str, object]:
         return get_execution_plane_runtime_agent_task(config, task_id)
     except KeyError as exc:
         raise HTTPException(404, f"Runtime agent task {task_id} not found") from exc
+
+
+@router.get("/agents/tasks/{task_id}/output")
+async def get_execution_runtime_agent_task_output(task_id: str) -> dict[str, object]:
+    config = get_config()
+    try:
+        return get_execution_plane_runtime_agent_task_output(config, task_id)
+    except KeyError as exc:
+        raise HTTPException(404, f"Runtime agent task {task_id} not found") from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(404, f"Runtime agent task {task_id} has no output artifact") from exc
 
 
 @router.get("/agents/actions/{action_key:path}")

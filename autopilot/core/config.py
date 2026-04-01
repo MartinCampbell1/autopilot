@@ -223,6 +223,10 @@ class AutopilotConfig:
     def tool_results_dir(self) -> Path:
         return self.control_plane_state_dir / "tool-results"
 
+    @property
+    def task_outputs_dir(self) -> Path:
+        return self.control_plane_state_dir / "task-outputs"
+
     def plugin_data_dir(self, plugin_id: str) -> Path:
         normalized = str(plugin_id or "").strip().lower() or "unknown-plugin"
         return self.plugin_data_root_dir / normalized
