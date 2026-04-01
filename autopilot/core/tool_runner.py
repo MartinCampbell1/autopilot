@@ -21,6 +21,7 @@ from autopilot.core.tool_hooks import (
     run_pre_tool_use_hooks,
 )
 from autopilot.core.tool_permissions import PermissionDecision, resolve_tool_permission_decision
+from autopilot.core.tool_result_storage import store_large_tool_result
 
 
 class ToolRunResult(BaseModel):
@@ -153,6 +154,7 @@ def run_tool_use(
             tool_result.payload.update(output.result_updates)
         if output.message:
             tool_result.message = output.message
+    tool_result = store_large_tool_result(tool.name, tool_result, use_context)
 
     return ToolRunResult(
         status=str(tool_result.status or "ok"),
