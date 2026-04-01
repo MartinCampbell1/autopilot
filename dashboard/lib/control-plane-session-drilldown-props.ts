@@ -283,6 +283,7 @@ export function buildSessionDrilldownSectionProps({
     },
     linkedDecisionsCardProps: {
       selectedSession,
+      linkedRuns,
       linkedApprovals,
       filteredApprovals,
       visibleSessionApprovals,
@@ -298,6 +299,10 @@ export function buildSessionDrilldownSectionProps({
       onSearchEntity: setEntitySearch,
       onFocusRuntimeAgent: (runtimeAgentId) => {
         focusRuntimeAgent(runtimeAgentId, true);
+      },
+      onInspectRun: (runId) => {
+        setSelectedRunId(runId);
+        setSelectedRunResultIndex(0);
       },
       onInspectApproval: (approval) => {
         syncLinkedSelection({

@@ -109,10 +109,22 @@ export function useControlPlaneActions({
       if (selectedSessionId) {
         await loadSessionDetail(selectedSessionId);
       }
+      if (selectedAgentId) {
+        const detail = await loadAgentDetail(selectedAgentId);
+        setSelectedAgent(detail);
+      }
     } finally {
       setRefreshing(false);
     }
-  }, [loadOverview, loadSessionDetail, selectedSessionId, setRefreshing]);
+  }, [
+    loadAgentDetail,
+    loadOverview,
+    loadSessionDetail,
+    selectedAgentId,
+    selectedSessionId,
+    setRefreshing,
+    setSelectedAgent,
+  ]);
 
   const refreshAfterMutation = useCallback(
     async (sessionId: string) => {
