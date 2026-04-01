@@ -48,6 +48,10 @@ class AgentActionBatchRunRecord(BaseModel):
     apply_mode: str = "manual"
     results: list[dict[str, Any]] = Field(default_factory=list)
     status: str = "ok"
+    completion_state: str = "completed"
+    completion_message: str = ""
+    async_task_status_counts: dict[str, int] = Field(default_factory=dict)
+    active_async_task_ids: list[str] = Field(default_factory=list)
     project_ids: list[str] = Field(default_factory=list)
     initiative_ids: list[str] = Field(default_factory=list)
     orchestrators: list[str] = Field(default_factory=list)
@@ -109,6 +113,10 @@ def create_agent_action_batch_run(
     apply_mode: str = "manual",
     results: list[dict[str, Any]] | None = None,
     status: str = "ok",
+    completion_state: str = "completed",
+    completion_message: str = "",
+    async_task_status_counts: dict[str, Any] | None = None,
+    active_async_task_ids: list[str] | None = None,
     project_ids: list[str] | None = None,
     initiative_ids: list[str] | None = None,
     orchestrators: list[str] | None = None,
@@ -139,13 +147,23 @@ def create_agent_action_batch_run(
         apply_mode=apply_mode.strip() or "manual",
         results=list(results or []),
         status=status,
+        completion_state=str(completion_state or "").strip() or "completed",
+        completion_message=str(completion_message or "").strip(),
+        async_task_status_counts={
+            str(key): int(value or 0)
+            for key, value in dict(async_task_status_counts or {}).items()
+            if str(key).strip()
+        },
+        active_async_task_ids=sorted(
+            {str(item) for item in (active_async_task_ids or []) if str(item).strip()}
+        ),
         project_ids=sorted({str(item) for item in (project_ids or []) if str(item).strip()}),
         initiative_ids=sorted({str(item) for item in (initiative_ids or []) if str(item).strip()}),
         orchestrators=sorted({str(item) for item in (orchestrators or []) if str(item).strip()}),
         runtime_agent_ids=sorted({str(item) for item in (runtime_agent_ids or []) if str(item).strip()}),
         created_at=created_at,
         updated_at=created_at,
-        completed_at=created_at,
+        completed_at=created_at if str(completion_state or "").strip() != "pending_async" else None,
     )
     return save_agent_action_batch_run(config, record)
 

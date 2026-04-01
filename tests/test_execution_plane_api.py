@@ -10,6 +10,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from autopilot.api.routes import execution_plane as execution_plane_routes
+from autopilot.core.agent_action_runs import create_agent_action_batch_run
 from autopilot.core.config import AutopilotConfig
 from autopilot.core.project_store import (
     emit_project_event,
@@ -2270,6 +2271,117 @@ def test_execution_plane_agent_action_batch_execute_applies_filtered_safe_action
     assert session_detail.status_code == 200
     assert run_id in session_detail.json()["linked_run_ids"]
     assert session_detail.json()["summary"]["by_event"]["execution_plane_agent_batch_executed"] >= 1
+
+
+@patch("autopilot.core.execution_plane.generate_prd_from_spec")
+def test_execution_plane_agent_action_run_tracks_pending_async_completion_honestly(
+    mock_generate_prd_from_spec,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    client = _build_client(config, monkeypatch)
+    mock_generate_prd_from_spec.return_value = {
+        "title": "FounderOS Copilot",
+        "description": "Execution-ready FounderOS project.",
+        "stories": [{"id": 1, "title": "Bootstrap", "description": "Create the app shell"}],
+    }
+
+    created = _create_execution_project(client, tmp_path / "agent-action-run-async-project")
+    project_id = created["project"]["project_id"]
+    session = _create_orchestrator_session(
+        client,
+        project_ids=[project_id],
+        actor="founderos",
+        title="Async action run lifecycle",
+    )
+
+    task = create_or_reuse_runtime_agent_task(
+        config,
+        project_id=project_id,
+        command="launch",
+        actor="founderos",
+        reason="Launch background execution.",
+        orchestrator_session_id=session["id"],
+        runtime_agent_ids=["runtime-agent-1"],
+        output_path=str(config.autopilot_home / "logs" / f"{project_id}.log"),
+    )
+    run = create_agent_action_batch_run(
+        config,
+        run_kind="single_action",
+        orchestrator_session_id=session["id"],
+        actor="founderos",
+        mode="auto",
+        selection={"mode": "single_action", "project_id": project_id},
+        summary={"selected_count": 1, "processed_count": 1, "status_counts": {"ok": 1}},
+        results=[
+            {
+                "status": "ok",
+                "command_result": {"command": "launch"},
+                "async_task": {"id": task.id},
+            }
+        ],
+        status="ok",
+        project_ids=[project_id],
+        runtime_agent_ids=["runtime-agent-1"],
+    )
+
+    detail_response = client.get(f"/api/execution-plane/agents/action-runs/{run.id}")
+    assert detail_response.status_code == 200
+    detail = detail_response.json()
+    assert detail["completion_state"] == "pending_async"
+    assert detail["active_async_task_count"] == 1
+    assert detail["completed_at"] is None
+    assert "do not treat this run as complete yet" in detail["completion_message"]
+
+    summary_response = client.get(
+        "/api/execution-plane/agents/action-runs/summary",
+        params={"project_id": project_id},
+    )
+    assert summary_response.status_code == 200
+    summary = summary_response.json()
+    assert summary["totals"]["pending_async"] >= 1
+    assert summary["by_completion_state"]["pending_async"] >= 1
+
+    pending_events = client.get("/api/execution-plane/events", params={"project_id": project_id})
+    assert pending_events.status_code == 200
+    assert any(
+        event["event"] == "execution_plane_agent_action_run_pending_async"
+        and event["agent_action_run_id"] == run.id
+        for event in pending_events.json()["events"]
+    )
+
+    state = load_project_state(config, project_id)
+    state["status"] = "completed"
+    state["paused"] = False
+    state["finished_at"] = "2026-04-01T12:34:56+00:00"
+    state["log_path"] = str(config.autopilot_home / "logs" / f"{project_id}.log")
+    save_project_state(config, project_id, state)
+
+    refreshed_response = client.get(f"/api/execution-plane/agents/action-runs/{run.id}")
+    assert refreshed_response.status_code == 200
+    refreshed = refreshed_response.json()
+    assert refreshed["completion_state"] == "completed"
+    assert refreshed["active_async_task_count"] == 0
+    assert refreshed["completed_at"] == "2026-04-01T12:34:56+00:00"
+    assert refreshed["async_task_status_counts"]["completed"] == 1
+    assert refreshed["completion_message"] == "Async follow-through reached terminal state."
+
+    refreshed_summary = client.get(
+        "/api/execution-plane/agents/action-runs/summary",
+        params={"project_id": project_id},
+    )
+    assert refreshed_summary.status_code == 200
+    assert refreshed_summary.json()["totals"]["pending_async"] == 0
+    assert refreshed_summary.json()["by_completion_state"]["completed"] >= 1
+
+    settled_events = client.get("/api/execution-plane/events", params={"project_id": project_id})
+    assert settled_events.status_code == 200
+    assert any(
+        event["event"] == "execution_plane_agent_action_run_async_settled"
+        and event["agent_action_run_id"] == run.id
+        for event in settled_events.json()["events"]
+    )
 
 
 @patch("autopilot.core.execution_plane.generate_prd_from_spec")
