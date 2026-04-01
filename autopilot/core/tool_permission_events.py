@@ -39,11 +39,18 @@ def _runtime_details(record: Any) -> dict[str, Any]:
         or _string_value(payload.get("message"))
         or _string_value(getattr(record, "message", ""))
     )
+    orchestrator_session_id = (
+        _string_value(metadata.get("orchestrator_session_id"))
+        or _string_value(pending.get("orchestrator_session_id"))
+        or _string_value(resolution.get("orchestrator_session_id"))
+        or _string_value(pending_payload.get("orchestrator_session_id"))
+    )
     resolution_note = _string_value(resolution.get("note"))
     resolved_message = resolution_note or _string_value(getattr(record, "message", "")) or pending_message
     return {
         "approval_runtime_id": _string_value(getattr(record, "id", "")),
         "project_id": _string_value(getattr(record, "project_id", "")),
+        "orchestrator_session_id": orchestrator_session_id,
         "runtime_agent_ids": list(getattr(record, "runtime_agent_ids", []) or []),
         "approval_id": _string_value(getattr(record, "approval_id", "")),
         "issue_id": _string_value(getattr(record, "issue_id", "")),
@@ -92,6 +99,7 @@ def emit_tool_permission_pending_event(
             "approval_runtime_id": details["approval_runtime_id"],
             "approval_id": details["approval_id"],
             "issue_id": details["issue_id"],
+            "orchestrator_session_id": details["orchestrator_session_id"],
             "permission_sync_key": details["permission_sync_key"],
             "runtime_agent_ids": details["runtime_agent_ids"],
             "runtime_agent_id": details["runtime_agent_ids"][0] if details["runtime_agent_ids"] else "",
@@ -130,6 +138,7 @@ def emit_tool_permission_resolved_event(
             "approval_runtime_id": details["approval_runtime_id"],
             "approval_id": details["approval_id"],
             "issue_id": details["issue_id"],
+            "orchestrator_session_id": details["orchestrator_session_id"],
             "permission_sync_key": details["permission_sync_key"],
             "runtime_agent_ids": details["runtime_agent_ids"],
             "runtime_agent_id": details["runtime_agent_ids"][0] if details["runtime_agent_ids"] else "",

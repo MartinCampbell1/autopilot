@@ -24,6 +24,7 @@ def test_resolve_tool_permission_runtime_preserves_pending_payload_and_publishes
             "kind": "tool_permission_request",
             "tool_name": "demo.pause",
             "tool_use_id": "toolu_123",
+            "orchestrator_session_id": "sess_tool_runtime",
         },
         publish_pending=True,
         pending_message_type="tool_permission_pending",
@@ -79,5 +80,7 @@ def test_resolve_tool_permission_runtime_preserves_pending_payload_and_publishes
     assert event_lines[-2]["event"] == "tool_permission_runtime_pending"
     assert event_lines[-1]["event"] == "tool_permission_runtime_resolved"
     assert event_lines[-1]["approval_runtime_id"] == runtime.id
+    assert event_lines[-2]["orchestrator_session_id"] == "sess_tool_runtime"
+    assert event_lines[-1]["orchestrator_session_id"] == "sess_tool_runtime"
     assert event_lines[-1]["resolved_behavior"] == "allow"
     assert event_lines[-1]["resolved_by"] == "founderos"

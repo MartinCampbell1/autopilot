@@ -249,6 +249,7 @@ def execute_permission_request_hooks(
                 "tool_name": tool.name,
                 "tool_use_id": tool_use_id,
                 "event": "permission_request",
+                "orchestrator_session_id": str(use_context.orchestrator_session_id or "").strip(),
             },
         )
     blocked = False
