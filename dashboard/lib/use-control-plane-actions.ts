@@ -58,7 +58,6 @@ type UseControlPlaneActionsArgs = {
   setSelectedRunId: Dispatch<SetStateAction<string>>;
   setSelectedRunResultIndex: Dispatch<SetStateAction<number>>;
   setSelectedPassId: Dispatch<SetStateAction<string>>;
-  setSelectedAgent: Dispatch<SetStateAction<ExecutionRuntimeAgentDetail | null>>;
   setEntitySearch: Dispatch<SetStateAction<string>>;
   setPendingLineageAutoAdvance: Dispatch<SetStateAction<PendingLineageAutoAdvance | null>>;
   setPendingAgentPriorityAutoAdvance: Dispatch<
@@ -87,7 +86,6 @@ export function useControlPlaneActions({
   setSelectedRunId,
   setSelectedRunResultIndex,
   setSelectedPassId,
-  setSelectedAgent,
   setEntitySearch,
   setPendingLineageAutoAdvance,
   setPendingAgentPriorityAutoAdvance,
@@ -110,8 +108,7 @@ export function useControlPlaneActions({
         await loadSessionDetail(selectedSessionId);
       }
       if (selectedAgentId) {
-        const detail = await loadAgentDetail(selectedAgentId);
-        setSelectedAgent(detail);
+        await loadAgentDetail(selectedAgentId);
       }
     } finally {
       setRefreshing(false);
@@ -123,7 +120,6 @@ export function useControlPlaneActions({
     selectedAgentId,
     selectedSessionId,
     setRefreshing,
-    setSelectedAgent,
   ]);
 
   const refreshAfterMutation = useCallback(
@@ -140,11 +136,9 @@ export function useControlPlaneActions({
       if (selectedSessionId) {
         await loadSessionDetail(selectedSessionId);
       }
-      await loadAgentDetail(runtimeAgentId).then((detail) => {
-        setSelectedAgent(detail);
-      });
+      await loadAgentDetail(runtimeAgentId);
     },
-    [loadAgentDetail, loadOverview, loadSessionDetail, selectedSessionId, setSelectedAgent]
+    [loadAgentDetail, loadOverview, loadSessionDetail, selectedSessionId]
   );
 
   const recordTriageInboxFeedback = useCallback(
@@ -242,8 +236,7 @@ export function useControlPlaneActions({
         }
         await refreshAfterMutation(selectedSessionId);
         if (selectedAgentId) {
-          const detail = await loadAgentDetail(selectedAgentId);
-          setSelectedAgent(detail);
+          await loadAgentDetail(selectedAgentId);
         }
       } catch (error) {
         setErrorMessage(
@@ -268,7 +261,6 @@ export function useControlPlaneActions({
       setNotice,
       setPendingAgentPriorityAutoAdvance,
       setPendingLineageAutoAdvance,
-      setSelectedAgent,
     ]
   );
 
@@ -322,8 +314,7 @@ export function useControlPlaneActions({
           await loadOverview();
         }
         if (selectedAgentId && run.runtime_agent_ids.includes(selectedAgentId)) {
-          const detail = await loadAgentDetail(selectedAgentId);
-          setSelectedAgent(detail);
+          await loadAgentDetail(selectedAgentId);
         }
       } catch (error) {
         setErrorMessage(error instanceof Error ? error.message : "Failed to apply selected preview.");
@@ -340,7 +331,6 @@ export function useControlPlaneActions({
       setEntitySearch,
       setErrorMessage,
       setNotice,
-      setSelectedAgent,
       setSelectedRunId,
       setSelectedRunResultIndex,
       toStringValue,
