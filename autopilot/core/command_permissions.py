@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import shlex
 from dataclasses import dataclass
 from pathlib import Path
@@ -28,7 +29,8 @@ DANGEROUS_ALLOW_TOOL_PATTERNS = (
     "shell_exec*",
     "python_exec*",
 )
-SHELL_ASSIGNMENT_PREFIX = __import__("re").compile(r"^[A-Za-z_][A-Za-z0-9_]*=.*$")
+PERMISSION_RULE_COLON_PATTERN = re.compile(r"^(?P<tool>[A-Za-z0-9._*-]+)\s*:\s*(?P<content>.+)$")
+SHELL_ASSIGNMENT_PREFIX = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=.*$")
 SHELL_INTERPRETERS = {"bash", "sh", "zsh", "ksh"}
 INLINE_CODE_TOOLS = {"python", "python3", "node", "ruby", "perl"}
 REMOTE_ACCESS_TOOLS = {"ssh", "scp", "sftp"}
@@ -89,6 +91,25 @@ def _append_reason(tool_reasons: dict[str, list[str]], key: str, reason: str) ->
     tool_reasons[key] = values
 
 
+def normalize_tool_pattern(tool_name: str) -> str:
+    """Return a canonical tool-name pattern or raise for malformed grammar."""
+
+    normalized = " ".join(str(tool_name or "").strip().split())
+    if not normalized:
+        raise ValueError("Permission rules require `tool_name`.")
+    if any(char.isspace() for char in normalized):
+        raise ValueError("Permission rule tool patterns cannot contain whitespace.")
+    if ":" in normalized:
+        raise ValueError("Permission rule tool patterns cannot contain `:` separators.")
+    if "(" in normalized or ")" in normalized:
+        raise ValueError("Permission rule tool patterns cannot contain parentheses.")
+    if "*" in normalized[:-1]:
+        raise ValueError("Permission rule tool patterns only support a trailing `*` wildcard.")
+    if normalized.endswith("**"):
+        normalized = normalized.rstrip("*") + "*"
+    return normalized
+
+
 def _command_candidates(tool: ToolDef, tool_input: dict[str, Any] | None) -> list[str]:
     payload = dict(tool_input or {})
     candidates = [
@@ -125,6 +146,58 @@ def normalize_shell_command(command: str) -> str:
     if not normalized:
         return ""
     return " ".join(normalized)
+
+
+def normalize_rule_content(rule_content: str | None) -> str:
+    """Return canonical rule-content text for persistence and matching."""
+
+    raw_value = str(rule_content or "").strip()
+    if not raw_value:
+        return ""
+    normalized = normalize_shell_command(raw_value)
+    return normalized or " ".join(raw_value.split())
+
+
+def normalize_permission_rule(tool_name: str, rule_content: str | None = None) -> tuple[str, str]:
+    """Return canonical permission rule components."""
+
+    return normalize_tool_pattern(tool_name), normalize_rule_content(rule_content)
+
+
+def parse_permission_rule(rule: str) -> tuple[str, str]:
+    """Parse and normalize one serialized permission rule."""
+
+    normalized = str(rule or "").strip()
+    if normalized.endswith(")") and "(" in normalized:
+        tool_name, raw_content = normalized[:-1].split("(", 1)
+        return normalize_permission_rule(tool_name, raw_content)
+    colon_match = PERMISSION_RULE_COLON_PATTERN.match(normalized)
+    if colon_match is not None:
+        return normalize_permission_rule(colon_match.group("tool"), colon_match.group("content"))
+    return normalize_permission_rule(normalized, "")
+
+
+def serialize_permission_rule(tool_name: str, rule_content: str | None = None) -> str:
+    """Serialize one canonical permission rule string."""
+
+    normalized_tool_name, normalized_rule_content = normalize_permission_rule(tool_name, rule_content)
+    if not normalized_rule_content:
+        return normalized_tool_name
+    return f"{normalized_tool_name}({normalized_rule_content})"
+
+
+def normalize_serialized_permission_rules(rules: list[str]) -> list[str]:
+    """Normalize and dedupe serialized permission rules while preserving order."""
+
+    normalized_rules: list[str] = []
+    for raw_rule in rules:
+        try:
+            serialized = serialize_permission_rule(*parse_permission_rule(raw_rule))
+        except ValueError:
+            continue
+        if serialized not in normalized_rules:
+            normalized_rules.append(serialized)
+    return normalized_rules
 
 
 def command_rule_matches(

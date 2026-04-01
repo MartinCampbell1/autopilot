@@ -4,7 +4,11 @@ from autopilot.core.command_permissions import (
     check_projected_command_permission,
     command_rule_matches,
     normalize_permission_mode,
+    normalize_permission_rule,
+    normalize_serialized_permission_rules,
     normalize_shell_command,
+    parse_permission_rule,
+    serialize_permission_rule,
     sanitize_permission_context_for_mode,
 )
 from autopilot.core.tool_contracts import ToolPermissionContext, ToolResult, build_tool
@@ -85,3 +89,42 @@ def test_check_projected_command_permission_flags_cloud_control() -> None:
 
     assert decision is not None
     assert decision.pattern_id == "kubectl"
+
+
+def test_permission_rule_parser_normalizes_shell_rule_content() -> None:
+    serialized = serialize_permission_rule("shell_exec", "  FOO=1 env BAR=2 git   status   --short ")
+
+    assert serialized == "shell_exec(git status --short)"
+    assert normalize_permission_rule("shell_exec", " FOO=1 env git status --short ") == (
+        "shell_exec",
+        "git status --short",
+    )
+
+
+def test_permission_rule_parser_accepts_colon_grammar() -> None:
+    assert parse_permission_rule("shell_exec: FOO=1 env git status --short") == (
+        "shell_exec",
+        "git status --short",
+    )
+
+
+def test_permission_rule_parser_rejects_internal_tool_wildcard() -> None:
+    try:
+        serialize_permission_rule("shell*exec", "git status")
+    except ValueError as exc:
+        assert "trailing `*` wildcard" in str(exc)
+    else:
+        raise AssertionError("Expected malformed tool wildcard to raise.")
+
+
+def test_normalize_serialized_permission_rules_dedupes_and_skips_invalid_entries() -> None:
+    normalized = normalize_serialized_permission_rules(
+        [
+            " shell_exec( FOO=1 env git status --short ) ",
+            "shell_exec: FOO=1 env git status --short",
+            "shell_exec(git status --short)",
+            "shell*exec(kubectl apply -f deploy.yaml)",
+        ]
+    )
+
+    assert normalized == ["shell_exec(git status --short)"]

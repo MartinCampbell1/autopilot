@@ -12,7 +12,10 @@ from pydantic import BaseModel, Field, model_validator
 from autopilot.core.command_permissions import (
     check_projected_command_permission,
     command_rule_matches,
+    normalize_serialized_permission_rules,
+    parse_permission_rule,
     sanitize_permission_context_for_mode,
+    serialize_permission_rule,
 )
 from autopilot.core.config import AutopilotConfig
 from autopilot.core.permission_audit import append_permission_audit_entry
@@ -147,23 +150,14 @@ def _utcnow_iso() -> str:
 def permission_rule_value_to_string(rule_value: PermissionRuleValue) -> str:
     """Serialize one rule to a stable string."""
 
-    tool_name = str(rule_value.tool_name or "").strip()
-    if not tool_name:
-        raise ValueError("Permission rules require `tool_name`.")
-    rule_content = str(rule_value.rule_content or "").strip()
-    if not rule_content:
-        return tool_name
-    return f"{tool_name}({rule_content})"
+    return serialize_permission_rule(rule_value.tool_name, rule_value.rule_content)
 
 
 def permission_rule_value_from_string(rule: str) -> PermissionRuleValue:
     """Parse one serialized rule string."""
 
-    normalized = str(rule or "").strip()
-    if normalized.endswith(")") and "(" in normalized:
-        tool_name, raw_content = normalized[:-1].split("(", 1)
-        return PermissionRuleValue(tool_name=tool_name, rule_content=raw_content)
-    return PermissionRuleValue(tool_name=normalized)
+    tool_name, rule_content = parse_permission_rule(rule)
+    return PermissionRuleValue(tool_name=tool_name, rule_content=rule_content or None)
 
 
 def apply_permission_update(context: ToolPermissionContext, update: PermissionUpdate) -> ToolPermissionContext:
@@ -179,11 +173,11 @@ def apply_permission_update(context: ToolPermissionContext, update: PermissionUp
     }[str(update.behavior)]
     source_key = "project" if update.destination == "project" else update.destination
     existing = {
-        key: list(values)
+        key: normalize_serialized_permission_rules(list(values))
         for key, values in getattr(context, rule_field).items()
     }
     serialized = [permission_rule_value_to_string(rule) for rule in update.rules]
-    current_values = list(existing.get(source_key, []))
+    current_values = normalize_serialized_permission_rules(list(existing.get(source_key, [])))
 
     if update.type == "add_rules":
         for item in serialized:
@@ -195,7 +189,7 @@ def apply_permission_update(context: ToolPermissionContext, update: PermissionUp
         removals = set(serialized)
         current_values = [item for item in current_values if item not in removals]
 
-    existing[source_key] = current_values
+    existing[source_key] = normalize_serialized_permission_rules(current_values)
     return context.model_copy(update={rule_field: existing})
 
 
@@ -356,7 +350,7 @@ def persist_permission_update(config: AutopilotConfig, update: PermissionUpdate)
         "deny": "deny_rules",
         "ask": "ask_rules",
     }[str(update.behavior)]
-    current_values = list(getattr(scope, field_name))
+    current_values = normalize_serialized_permission_rules(list(getattr(scope, field_name)))
     serialized = [permission_rule_value_to_string(rule) for rule in update.rules]
 
     if update.type == "add_rules":
@@ -369,7 +363,7 @@ def persist_permission_update(config: AutopilotConfig, update: PermissionUpdate)
         removals = set(serialized)
         current_values = [item for item in current_values if item not in removals]
 
-    setattr(scope, field_name, current_values)
+    setattr(scope, field_name, normalize_serialized_permission_rules(current_values))
     return _save_persisted_state(config, state)
 
 
@@ -392,7 +386,7 @@ def persist_permission_updates(
             "deny": "deny_rules",
             "ask": "ask_rules",
         }[str(update.behavior)]
-        current_values = list(getattr(scope, field_name))
+        current_values = normalize_serialized_permission_rules(list(getattr(scope, field_name)))
         serialized = [permission_rule_value_to_string(rule) for rule in update.rules]
         if update.type == "add_rules":
             for item in serialized:
@@ -403,7 +397,7 @@ def persist_permission_updates(
         elif update.type == "remove_rules":
             removals = set(serialized)
             current_values = [item for item in current_values if item not in removals]
-        setattr(scope, field_name, current_values)
+        setattr(scope, field_name, normalize_serialized_permission_rules(current_values))
     return _save_persisted_state(config, state)
 
 
@@ -419,9 +413,9 @@ def load_tool_permission_context(
     context = context.model_copy(
         update={
             "mode": state.user.mode,
-            "always_allow_rules": {"user": list(state.user.allow_rules)},
-            "always_deny_rules": {"user": list(state.user.deny_rules)},
-            "always_ask_rules": {"user": list(state.user.ask_rules)},
+            "always_allow_rules": {"user": normalize_serialized_permission_rules(list(state.user.allow_rules))},
+            "always_deny_rules": {"user": normalize_serialized_permission_rules(list(state.user.deny_rules))},
+            "always_ask_rules": {"user": normalize_serialized_permission_rules(list(state.user.ask_rules))},
         }
     )
 
@@ -431,9 +425,9 @@ def load_tool_permission_context(
         always_allow_rules = {key: list(values) for key, values in context.always_allow_rules.items()}
         always_deny_rules = {key: list(values) for key, values in context.always_deny_rules.items()}
         always_ask_rules = {key: list(values) for key, values in context.always_ask_rules.items()}
-        always_allow_rules["project"] = list(scope.allow_rules)
-        always_deny_rules["project"] = list(scope.deny_rules)
-        always_ask_rules["project"] = list(scope.ask_rules)
+        always_allow_rules["project"] = normalize_serialized_permission_rules(list(scope.allow_rules))
+        always_deny_rules["project"] = normalize_serialized_permission_rules(list(scope.deny_rules))
+        always_ask_rules["project"] = normalize_serialized_permission_rules(list(scope.ask_rules))
         context = context.model_copy(
             update={
                 "mode": scope.mode if scope.mode != "default" else context.mode,
