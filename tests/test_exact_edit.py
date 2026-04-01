@@ -6,6 +6,7 @@ from unittest.mock import patch
 from autopilot.core import exact_edit as exact_edit_module
 from autopilot.core.exact_edit import ExactEditError, append_with_fresh_snapshot, apply_exact_edit, find_actual_string
 from autopilot.core.file_snapshot_store import FileSnapshotStaleError, capture_file_snapshot
+from autopilot.core.secret_scan import SecretScanError
 
 
 def test_find_actual_string_normalizes_quotes_and_trailing_whitespace() -> None:
@@ -88,3 +89,38 @@ def test_append_with_fresh_snapshot_bootstraps_missing_file_with_initial_content
 
     assert updated == "# Header\n\n- item\n"
     assert path.read_text() == "# Header\n\n- item\n"
+
+
+def test_apply_exact_edit_rejects_obvious_secret_material(tmp_path: Path) -> None:
+    path = tmp_path / "config.py"
+    path.write_text('API_KEY = "changeme"\n')
+    snapshot = capture_file_snapshot(path)
+
+    try:
+        apply_exact_edit(
+            path,
+            snapshot,
+            old_string='API_KEY = "changeme"\n',
+            new_string='API_KEY = "sk-test1234567890abcdefghijk"\n',
+        )
+    except SecretScanError as exc:
+        assert "openai_key" in str(exc) or "generic_secret_assignment" in str(exc)
+        assert path.read_text() == 'API_KEY = "changeme"\n'
+        return
+    raise AssertionError("Expected secret scan rejection.")
+
+
+def test_append_with_fresh_snapshot_rejects_obvious_secret_material(tmp_path: Path) -> None:
+    path = tmp_path / "notes.md"
+    path.write_text("# Notes\n")
+
+    try:
+        append_with_fresh_snapshot(
+            path,
+            build_suffix=lambda existing: '\nGITHUB_TOKEN="ghp_1234567890abcdefghijKLMN"\n',
+        )
+    except SecretScanError as exc:
+        assert "github_token" in str(exc) or "generic_secret_assignment" in str(exc)
+        assert path.read_text() == "# Notes\n"
+        return
+    raise AssertionError("Expected secret scan rejection.")
