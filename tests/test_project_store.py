@@ -28,6 +28,7 @@ from autopilot.core.project_store import (
     save_project_prd,
     save_project_state,
     update_project_budget_policy,
+    watchdog_pause_project_run,
 )
 
 
@@ -136,6 +137,37 @@ def test_register_project_persists_task_source_contract(tmp_path: Path) -> None:
     assert detail["task_source"]["source_kind"] == "github_issue"
     assert detail["task_source"]["external_id"] == "42"
     assert detail["task_source"]["branch_policy"] == "isolated_worktree"
+
+
+def test_build_project_summary_exposes_runtime_control_availability(tmp_path: Path) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    project_dir = tmp_path / "runtime-control-summary"
+    project_dir.mkdir(parents=True)
+
+    project = register_project(config, name="Runtime Control Summary", project_path=project_dir)
+    prd = normalize_prd(
+        {
+            "title": "Runtime Control Summary",
+            "stories": [{"id": 1, "title": "Bootstrap", "description": "Start"}],
+        }
+    )
+    save_project_prd(project, prd)
+    state = ensure_project_state(config, project, seed_mode="new")
+    state["status"] = "running"
+    state["paused"] = False
+    state["runtime_session_id"] = "sess_runtime_summary"
+    save_project_state(config, project["id"], state)
+
+    summary = build_project_summary(config, project)
+
+    assert summary["runtime_session_id"] == "sess_runtime_summary"
+    assert summary["runtime_control_available"] is True
+
+    state["paused"] = True
+    save_project_state(config, project["id"], state)
+    summary = build_project_summary(config, project)
+
+    assert summary["runtime_control_available"] is False
 
 
 def test_normalize_prd_enriches_story_routing_and_phases() -> None:
@@ -680,11 +712,15 @@ def test_update_project_budget_policy_persists_changes(tmp_path: Path) -> None:
         config,
         project["id"],
         project_max_worker_iterations=12,
+        run_max_worker_iterations=30,
+        story_max_runtime_seconds=900,
         auto_pause_on_exhaustion=False,
     )
     state = load_project_state(config, project["id"])
 
     assert policy["project_max_worker_iterations"] == 12
+    assert policy["run_max_worker_iterations"] == 30
+    assert policy["story_max_runtime_seconds"] == 900
     assert state["budget_policy"]["auto_pause_on_exhaustion"] is False
 
 
@@ -707,6 +743,25 @@ def test_auto_pause_project_run_marks_project_paused(tmp_path: Path) -> None:
     assert paused["status"] == "paused"
     assert paused["paused"] is True
     assert paused["last_error"] == "Runtime budget exhausted."
+
+
+def test_watchdog_pause_project_run_marks_watchdog_reason(tmp_path: Path) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    project_dir = tmp_path / "watchdog-paused-project"
+    project_dir.mkdir(parents=True)
+
+    project = register_project(config, name="Watchdog Paused Project", project_path=project_dir)
+    prd = normalize_prd({"title": "Watchdog Paused Project", "stories": [{"id": 1, "title": "Bootstrap", "description": "Start"}]})
+    save_project_prd(project, prd)
+    ensure_project_state(config, project, seed_mode="new")
+
+    watchdog_pause_project_run(config, project["id"], message="Story watchdog triggered.", story_id=1)
+    paused = load_project_state(config, project["id"])
+
+    assert paused["status"] == "paused"
+    assert paused["paused"] is True
+    assert paused["last_error"] == "Story watchdog triggered."
+    assert paused["budget_usage"]["last_watchdog_reason"] == "Story watchdog triggered."
 
 
 def test_emit_project_event_dispatches_notifications_when_configured(tmp_path: Path, monkeypatch) -> None:
@@ -780,3 +835,8 @@ def test_launch_project_run_initializes_ralph_before_background_run(
     assert "autopilot run" in popen_cmd[-1]
     assert "--headless" in popen_cmd[-1]
     assert "autopilot init" not in popen_cmd[-1]
+    assert mock_popen.call_args.kwargs["env"]["AUTOPILOT_RUNTIME_SESSION_ID"].startswith("run_")
+    state = load_project_state(config, project["id"])
+    assert state["runtime_session_id"] == mock_popen.call_args.kwargs["env"]["AUTOPILOT_RUNTIME_SESSION_ID"]
+    assert state["budget_usage"]["run"]["started_at"] is not None
+    assert state["budget_usage"]["run"]["worker_iterations"] == 0

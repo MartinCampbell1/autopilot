@@ -317,6 +317,8 @@ export interface ProjectSummary {
   last_activity_at?: string | null;
   last_message?: string;
   pid?: number | null;
+  runtime_session_id?: string;
+  runtime_control_available?: boolean;
   launch_profile?: LaunchProfile;
   provider_config?: ProviderConfig;
   runtime_profile?: RuntimeProfile;
@@ -356,8 +358,14 @@ export interface ProjectDetail extends ProjectSummary {
 export interface RuntimeBudgetPolicy {
   project_max_worker_iterations: number;
   project_max_critic_reviews: number;
+  run_max_worker_iterations: number;
+  run_max_critic_reviews: number;
+  story_max_worker_iterations: number;
+  story_max_critic_reviews: number;
   agent_max_worker_iterations: number;
   agent_max_critic_reviews: number;
+  run_max_runtime_seconds: number;
+  story_max_runtime_seconds: number;
   auto_pause_on_exhaustion: boolean;
 }
 
@@ -419,6 +427,8 @@ export interface ProjectRuntimeControl {
   leases: RuntimeLease[];
   stories: StoryRuntimeControl[];
   orphaned_worktrees: OrphanedWorktree[];
+  runtime_session_id?: string;
+  runtime_control_available?: boolean;
 }
 
 export type ExecutionPlaneCountMap = Record<string, number>;
@@ -451,6 +461,8 @@ export interface OrchestratorSessionRecord {
   linked_approval_ids: string[];
   linked_issue_ids: string[];
   linked_runtime_agent_ids: string[];
+  runtime_state: "idle" | "running" | "requires_action" | string;
+  pending_action?: OrchestratorPendingAction | null;
   created_at: string;
   updated_at: string;
   closed_at?: string | null;
@@ -541,17 +553,107 @@ export interface OrchestratorSessionControlRecommendation {
   operation: Record<string, unknown>;
 }
 
+export interface OrchestratorPendingActionOperation {
+  type: string;
+  session_id: string;
+  endpoint: string;
+  mode: string;
+  payload: Record<string, unknown>;
+}
+
+export interface OrchestratorPendingAction {
+  kind: string;
+  priority: string;
+  title: string;
+  reason: string;
+  session_id: string;
+  counts: Record<string, number>;
+  operation?: OrchestratorPendingActionOperation | null;
+}
+
 export interface OrchestratorSessionControl {
   state: string;
+  session_state: "idle" | "running" | "requires_action" | string;
+  pending_action?: OrchestratorPendingAction | null;
   counts: {
     pending_approvals: number;
     open_issues: number;
+    active_async_tasks: number;
     safe_actions: number;
     approval_required_actions: number;
     recommendation_actions: number;
   };
   action_summary: OrchestratorSessionActionSummary;
   recommendations: OrchestratorSessionControlRecommendation[];
+}
+
+export interface ControlRequestMessage {
+  type: "control_request";
+  request_id: string;
+  request: {
+    subtype: string;
+    [key: string]: unknown;
+  };
+  session_id?: string | null;
+}
+
+export interface ProjectRuntimeControlRequestResult {
+  status: string;
+  project_id: string;
+  runtime_session_id: string;
+  request: ControlRequestMessage;
+}
+
+export interface ControlSuccessResponsePayload {
+  subtype: "success";
+  request_id: string;
+  response: Record<string, unknown>;
+}
+
+export interface ControlErrorResponsePayload {
+  subtype: "error";
+  request_id: string;
+  error: string;
+}
+
+export type ControlResponsePayload = ControlSuccessResponsePayload | ControlErrorResponsePayload;
+
+export interface ControlResponseMessage {
+  type: "control_response";
+  response: ControlResponsePayload;
+  session_id?: string | null;
+}
+
+export type ProjectRuntimeControlExchangePhase =
+  | "queued"
+  | "acknowledged"
+  | "success"
+  | "error"
+  | "stale";
+
+export interface ProjectRuntimeControlExchangeRecord {
+  requestId: string;
+  projectId: string;
+  runtimeSessionId: string;
+  subtype: string;
+  phase: ProjectRuntimeControlExchangePhase;
+  source: "local" | "external";
+  queuedAt: string;
+  updatedAt: string;
+  request?: ControlRequestMessage | null;
+  response?: ControlResponsePayload | null;
+  errorMessage?: string | null;
+}
+
+export interface StructuredEventEnvelope {
+  type: "event";
+  event: string;
+  event_id: string;
+  sequence: number;
+  data: Record<string, unknown>;
+  source: string;
+  session_id?: string | null;
+  timestamp?: string | null;
 }
 
 export interface ExecutionApprovalRecord {
@@ -975,6 +1077,7 @@ export interface ExtensionRegistryItem {
 
 export interface ExtensionRegistry {
   lifecycle: string[];
+  plugins: ExtensionRegistryItem[];
   agent_providers: ExtensionRegistryItem[];
   runtimes: ExtensionRegistryItem[];
   trackers: ExtensionRegistryItem[];

@@ -57,6 +57,8 @@ def test_create_list_detail_and_pause_project(tmp_path: Path, monkeypatch) -> No
     projects = list_response.json()["projects"]
     assert projects[0]["id"] == project_id
     assert projects[0]["archived"] is False
+    assert projects[0]["runtime_session_id"] == ""
+    assert projects[0]["runtime_control_available"] is False
 
     detail_response = client.get(f"/api/projects/{project_id}")
     assert detail_response.status_code == 200
@@ -132,7 +134,11 @@ def test_patch_budget_policy_route_updates_state(tmp_path: Path, monkeypatch) ->
         f"/api/projects/{project_id}/budget-policy",
         json={
             "project_max_worker_iterations": 12,
+            "run_max_worker_iterations": 30,
+            "story_max_worker_iterations": 5,
             "agent_max_critic_reviews": 4,
+            "run_max_runtime_seconds": 3600,
+            "story_max_runtime_seconds": 900,
             "auto_pause_on_exhaustion": False,
         },
     )
@@ -140,7 +146,11 @@ def test_patch_budget_policy_route_updates_state(tmp_path: Path, monkeypatch) ->
     assert response.status_code == 200
     payload = response.json()
     assert payload["budget_policy"]["project_max_worker_iterations"] == 12
+    assert payload["budget_policy"]["run_max_worker_iterations"] == 30
+    assert payload["budget_policy"]["story_max_worker_iterations"] == 5
     assert payload["budget_policy"]["agent_max_critic_reviews"] == 4
+    assert payload["budget_policy"]["run_max_runtime_seconds"] == 3600
+    assert payload["budget_policy"]["story_max_runtime_seconds"] == 900
     assert payload["budget_policy"]["auto_pause_on_exhaustion"] is False
 
 
@@ -168,6 +178,103 @@ def test_runtime_control_route_returns_workspace_policy(tmp_path: Path, monkeypa
     assert payload["project_id"] == project_id
     assert "stories" in payload
     assert "leases" in payload
+    assert payload["runtime_session_id"] == ""
+    assert payload["runtime_control_available"] is False
+
+
+def test_runtime_control_request_route_queues_control_request(tmp_path: Path, monkeypatch) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    client = _build_client(config, monkeypatch)
+
+    create_response = client.post(
+        "/api/projects/",
+        json={
+            "project_name": "Control Request Project",
+            "project_path": str(tmp_path / "control-request-project"),
+            "prd": {
+                "title": "Control Request Project",
+                "stories": [{"id": 1, "title": "Bootstrap", "description": "Start"}],
+            },
+        },
+    )
+    project_id = create_response.json()["project_id"]
+    state = load_project_state(config, project_id)
+    state["status"] = "running"
+    state["paused"] = False
+    state["runtime_session_id"] = "sess_runtime_1"
+    (config.runtime_state_dir / f"{project_id}.json").write_text(json.dumps(state))
+
+    response = client.post(
+        f"/api/projects/{project_id}/runtime-control/request",
+        json={"request_id": "req_interrupt", "request": {"subtype": "interrupt"}},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "queued"
+    assert payload["runtime_session_id"] == "sess_runtime_1"
+    assert payload["request"]["request_id"] == "req_interrupt"
+    assert payload["request"]["request"]["subtype"] == "interrupt"
+    event_lines = [json.loads(line) for line in config.events_log_path.read_text().splitlines() if line.strip()]
+    assert event_lines[-1]["type"] == "control_request"
+    assert event_lines[-1]["session_id"] == "sess_runtime_1"
+    assert event_lines[-1]["request"]["subtype"] == "interrupt"
+
+
+def test_list_projects_reports_runtime_control_availability(tmp_path: Path, monkeypatch) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    client = _build_client(config, monkeypatch)
+
+    create_response = client.post(
+        "/api/projects/",
+        json={
+            "project_name": "Runtime Control Summary Project",
+            "project_path": str(tmp_path / "runtime-control-summary-project"),
+            "prd": {
+                "title": "Runtime Control Summary Project",
+                "stories": [{"id": 1, "title": "Bootstrap", "description": "Start"}],
+            },
+        },
+    )
+    project_id = create_response.json()["project_id"]
+    state = load_project_state(config, project_id)
+    state["status"] = "running"
+    state["paused"] = False
+    state["runtime_session_id"] = "sess_runtime_summary"
+    (config.runtime_state_dir / f"{project_id}.json").write_text(json.dumps(state))
+
+    response = client.get("/api/projects/")
+
+    assert response.status_code == 200
+    project = next(item for item in response.json()["projects"] if item["id"] == project_id)
+    assert project["runtime_session_id"] == "sess_runtime_summary"
+    assert project["runtime_control_available"] is True
+
+
+def test_runtime_control_request_route_rejects_when_no_active_runtime_session(tmp_path: Path, monkeypatch) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    client = _build_client(config, monkeypatch)
+
+    create_response = client.post(
+        "/api/projects/",
+        json={
+            "project_name": "No Control Session Project",
+            "project_path": str(tmp_path / "no-control-session-project"),
+            "prd": {
+                "title": "No Control Session Project",
+                "stories": [{"id": 1, "title": "Bootstrap", "description": "Start"}],
+            },
+        },
+    )
+    project_id = create_response.json()["project_id"]
+
+    response = client.post(
+        f"/api/projects/{project_id}/runtime-control/request",
+        json={"request": {"subtype": "interrupt"}},
+    )
+
+    assert response.status_code == 409
+    assert "active runtime control session" in response.json()["detail"]
 
 
 def test_create_project_route_accepts_task_source_contract(tmp_path: Path, monkeypatch) -> None:

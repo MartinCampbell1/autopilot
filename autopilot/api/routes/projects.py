@@ -2,21 +2,28 @@
 
 from __future__ import annotations
 
+import uuid
+from typing import Any
+
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from autopilot.api.deps import get_account_manager, get_config
+from autopilot.core.control_messages import ControlRequestEnvelope
 from autopilot.core.execution_brief import ExecutionBrief, TaskSource
 from autopilot.core.execution_plane import build_execution_plane_project_detail, ingest_execution_brief_project
+from autopilot.core.headless_event_bridge import append_event_log_message
 from autopilot.core.project_bootstrap import create_project_from_prd
 from autopilot.core.project_store import (
     append_guidance,
     archive_project,
     build_project_detail,
     build_project_summary,
+    ensure_project_state,
     emit_project_event,
     get_project_entry,
     launch_project_run,
+    utcnow_iso,
     load_project_state,
     load_projects_registry,
     mark_story_skipped,
@@ -60,8 +67,14 @@ class LaunchRequest(BaseModel):
 class BudgetPolicyRequest(BaseModel):
     project_max_worker_iterations: int | None = Field(default=None, ge=1)
     project_max_critic_reviews: int | None = Field(default=None, ge=1)
+    run_max_worker_iterations: int | None = Field(default=None, ge=1)
+    run_max_critic_reviews: int | None = Field(default=None, ge=1)
+    story_max_worker_iterations: int | None = Field(default=None, ge=1)
+    story_max_critic_reviews: int | None = Field(default=None, ge=1)
     agent_max_worker_iterations: int | None = Field(default=None, ge=1)
     agent_max_critic_reviews: int | None = Field(default=None, ge=1)
+    run_max_runtime_seconds: int | None = Field(default=None, ge=60)
+    story_max_runtime_seconds: int | None = Field(default=None, ge=60)
     auto_pause_on_exhaustion: bool | None = None
 
 
@@ -74,6 +87,11 @@ class RecoverStaleCheckoutsRequest(BaseModel):
     cleanup_worktrees: bool = True
     reopen_stories: bool = True
     stale_after_sec: int = Field(default=900, ge=30)
+
+
+class ProjectRuntimeControlRequest(BaseModel):
+    request_id: str = ""
+    request: dict[str, Any] = Field(default_factory=dict)
 
 
 class ImportExecutionBriefRequest(BaseModel):
@@ -161,9 +179,70 @@ async def get_project_runtime_control(
 ) -> dict[str, object]:
     config = get_config()
     try:
-        return inspect_project_workspace_policy(config, project_id, stale_after_sec=stale_after_sec)
+        payload = inspect_project_workspace_policy(config, project_id, stale_after_sec=stale_after_sec)
     except KeyError as exc:
         raise HTTPException(404, f"Project {project_id} not found") from exc
+    project = get_project_entry(config, project_id=project_id, include_archived=True)
+    if project is None:
+        raise HTTPException(404, f"Project {project_id} not found")
+    state = ensure_project_state(config, project, seed_mode="migrate")
+    return {
+        **payload,
+        "runtime_session_id": str(state.get("runtime_session_id") or ""),
+        "runtime_control_available": bool(
+            str(state.get("runtime_session_id") or "").strip()
+            and str(state.get("status") or "") == "running"
+            and not bool(state.get("paused"))
+        ),
+    }
+
+
+@router.post("/{project_id}/runtime-control/request")
+async def request_project_runtime_control(
+    project_id: str,
+    payload: ProjectRuntimeControlRequest,
+) -> dict[str, object]:
+    config = get_config()
+    project = get_project_entry(config, project_id=project_id, include_archived=True)
+    if project is None:
+        raise HTTPException(404, f"Project {project_id} not found")
+
+    state = ensure_project_state(config, project, seed_mode="migrate")
+    runtime_session_id = str(state.get("runtime_session_id") or "").strip()
+    if (
+        not runtime_session_id
+        or str(state.get("status") or "") != "running"
+        or bool(state.get("paused"))
+    ):
+        raise HTTPException(409, f"Project {project_id} does not have an active runtime control session")
+
+    request_id = str(payload.request_id or "").strip() or str(uuid.uuid4())
+    try:
+        request = ControlRequestEnvelope(
+            type="control_request",
+            request_id=request_id,
+            request=payload.request,
+            session_id=runtime_session_id,
+        )
+    except Exception as exc:
+        raise HTTPException(400, f"Invalid runtime control request: {exc}") from exc
+
+    append_event_log_message(
+        config,
+        {
+            **request.model_dump(exclude_none=True),
+            "project_id": project_id,
+            "runtime_session_id": runtime_session_id,
+            "timestamp": utcnow_iso(),
+            "source": "projects_api",
+        },
+    )
+    return {
+        "status": "queued",
+        "project_id": project_id,
+        "runtime_session_id": runtime_session_id,
+        "request": request.model_dump(exclude_none=True),
+    }
 
 
 @router.post("/")

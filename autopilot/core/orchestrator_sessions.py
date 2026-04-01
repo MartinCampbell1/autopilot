@@ -18,6 +18,11 @@ SUPPORTED_ORCHESTRATOR_SESSION_STATUSES = {
     "completed",
     "archived",
 }
+SUPPORTED_ORCHESTRATOR_SESSION_RUNTIME_STATES = {
+    "idle",
+    "running",
+    "requires_action",
+}
 
 
 def _utcnow_iso() -> str:
@@ -48,11 +53,35 @@ class OrchestratorSessionRecord(BaseModel):
     linked_approval_ids: list[str] = Field(default_factory=list)
     linked_issue_ids: list[str] = Field(default_factory=list)
     linked_runtime_agent_ids: list[str] = Field(default_factory=list)
+    runtime_state: str = "idle"
+    pending_action: dict[str, Any] | None = None
     created_at: str
     updated_at: str
     closed_at: str | None = None
     closed_by: str = ""
     close_note: str = ""
+
+
+class OrchestratorPendingActionOperation(BaseModel):
+    """Stable operation payload for one requires-action session state."""
+
+    type: str
+    session_id: str = ""
+    endpoint: str = ""
+    mode: str = ""
+    payload: dict[str, Any] = Field(default_factory=dict)
+
+
+class OrchestratorPendingAction(BaseModel):
+    """Structured pending-action metadata for one runtime-blocked session."""
+
+    kind: str
+    priority: str = "medium"
+    title: str
+    reason: str = ""
+    session_id: str = ""
+    counts: dict[str, int] = Field(default_factory=dict)
+    operation: OrchestratorPendingActionOperation | None = None
 
 
 def orchestrator_session_path(config: AutopilotConfig, session_id: str) -> Path:
@@ -131,6 +160,33 @@ def create_orchestrator_session(
     return session
 
 
+def update_orchestrator_session_runtime_state(
+    config: AutopilotConfig,
+    session_id: str,
+    *,
+    runtime_state: str,
+    pending_action: dict[str, Any] | OrchestratorPendingAction | None = None,
+) -> OrchestratorSessionRecord:
+    """Persist one derived runtime state for an orchestrator session."""
+
+    session = get_orchestrator_session(config, session_id)
+    if session is None:
+        raise KeyError(session_id)
+    if runtime_state not in SUPPORTED_ORCHESTRATOR_SESSION_RUNTIME_STATES:
+        raise ValueError(f"Unsupported orchestrator session runtime state: {runtime_state}")
+
+    normalized_action: dict[str, Any] | None = None
+    if pending_action:
+        normalized_action = OrchestratorPendingAction.model_validate(pending_action).model_dump(exclude_none=True)
+
+    changed = session.runtime_state != runtime_state or session.pending_action != normalized_action
+    session.runtime_state = runtime_state
+    session.pending_action = normalized_action
+    if not changed:
+        return session
+    return save_orchestrator_session(config, session)
+
+
 def list_orchestrator_sessions(
     config: AutopilotConfig,
     *,
@@ -192,6 +248,8 @@ def update_orchestrator_session_status(
         session.closed_at = _utcnow_iso()
         session.closed_by = actor
         session.close_note = note
+        session.runtime_state = "idle"
+        session.pending_action = None
     save_orchestrator_session(config, session)
     for project_id in session.project_ids:
         emit_project_event(

@@ -20,12 +20,21 @@ from autopilot.core.config import load_config
 from autopilot.core.cost_accounting import merge_usage_records, record_iteration_cost, start_run_cost_bucket
 from autopilot.core.headless import (
     RUN_EXIT_FAILED,
+    get_active_structured_io,
+    build_headless_session_id,
     build_preflight_summary,
     build_run_all_summary,
     build_run_summary,
     emit_headless_event,
     emit_headless_summary,
     exit_code_for_state,
+    structured_headless_runtime,
+)
+from autopilot.core.headless_event_bridge import HeadlessEventLogControlBridge
+from autopilot.core.headless_control import (
+    HeadlessControlSession,
+    attach_headless_control_handlers,
+    create_headless_control_session,
 )
 from autopilot.core.github_prs import normalize_story_github_pr, stable_story_branch_name
 from autopilot.core.orchestrator import Orchestrator, StoryOutcome
@@ -37,6 +46,7 @@ from autopilot.core.project_store import (
     ensure_project_state,
     extract_structured_discoveries,
     get_project_entry,
+    interrupt_project_run,
     load_project_prd,
     load_projects_registry,
     load_project_state,
@@ -47,6 +57,7 @@ from autopilot.core.project_store import (
     save_project_state,
     update_project_runtime,
     update_story_runtime,
+    watchdog_pause_project_run,
 )
 from autopilot.core.run_trace import append_trace_entry
 from autopilot.core.runtime_agents import (
@@ -54,7 +65,8 @@ from autopilot.core.runtime_agents import (
     resolve_story_runtime_agent_id,
     update_pipeline_stage_state,
 )
-from autopilot.core.runtime_budgets import consume_iteration_budget
+from autopilot.core.run_watchdog import check_runtime_watchdog
+from autopilot.core.runtime_budgets import consume_iteration_budget, start_run_budget_bucket
 from autopilot.core.runtime_control import (
     RuntimeAgentRole,
     WorkItemLeaseConflict,
@@ -510,6 +522,7 @@ def _mark_run_finished(config, project_id: str, *, failed: bool, message: str) -
     state.update(
         {
             "pid": None,
+            "runtime_session_id": "",
             "paused": False,
             "active_worker": None,
             "active_critic": None,
@@ -528,6 +541,47 @@ def _mark_run_finished(config, project_id: str, *, failed: bool, message: str) -
         status="failed" if failed else "completed",
         message=message,
     )
+
+
+def _apply_requested_headless_interrupt(
+    *,
+    control_session: HeadlessControlSession | None,
+    config,
+    project_id: str,
+    headless: bool,
+    story_id: int | None = None,
+) -> bool:
+    """Apply one pending structured interrupt at a safe checkpoint."""
+
+    if control_session is None or not control_session.interrupt_requested():
+        return False
+    interrupt = control_session.take_interrupt()
+    if interrupt is None:
+        return True
+    message = "Project paused by structured control interrupt."
+    interrupt_project_run(
+        config,
+        project_id,
+        message=message,
+        story_id=story_id,
+        extra={
+            "request_id": interrupt.get("request_id"),
+            "requested_at": interrupt.get("requested_at"),
+            "session_id": control_session.session_id,
+        },
+    )
+    _emit_runtime_message(
+        headless=headless,
+        event="run_interrupted",
+        message=message,
+        rich_message="[yellow]Project paused by structured control interrupt.[/yellow]",
+        level="warning",
+        project_id=project_id,
+        story_id=story_id,
+        request_id=interrupt.get("request_id"),
+        session_id=control_session.session_id,
+    )
+    return True
 
 
 def _run_impl(
@@ -562,6 +616,10 @@ def _run_impl(
     project_entry = _load_or_register_project(config, project, project_id, prd)
     project_id = project_entry["id"]
     state = ensure_project_state(config, project_entry, seed_mode="migrate")
+    structured_runtime = get_active_structured_io()
+    requested_runtime_session_id = str(os.getenv("AUTOPILOT_RUNTIME_SESSION_ID") or "").strip()
+    control_session: HeadlessControlSession | None = None
+    control_event_bridge: HeadlessEventLogControlBridge | None = None
     launch_profile = normalize_launch_profile(state.get("launch_profile"))
     selected_provider = launch_profile.provider
     selected_provider_config_id = launch_profile.provider_config_id
@@ -600,8 +658,32 @@ def _run_impl(
         )
         return build_preflight_summary(str(project), project_id=project_id, message=message)
 
+    if structured_runtime is not None and str(structured_runtime.metadata.get("mode") or "") == "run":
+        control_session = create_headless_control_session(
+            config,
+            project_entry=project_entry,
+            session_id=structured_runtime.session_id,
+        )
+        attach_headless_control_handlers(
+            structured_runtime,
+            control_session,
+        )
+    elif headless and requested_runtime_session_id:
+        control_session = create_headless_control_session(
+            config,
+            project_entry=project_entry,
+            session_id=requested_runtime_session_id,
+        )
+        control_event_bridge = HeadlessEventLogControlBridge(
+            config=config,
+            session=control_session,
+        )
+        control_event_bridge.start()
+
     run_started_at = state.get("started_at") or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-    start_run_cost_bucket(state, started_at=run_started_at)
+    current_run_started_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    start_run_cost_bucket(state, started_at=current_run_started_at)
+    start_run_budget_bucket(state, started_at=current_run_started_at)
     state_lock = threading.Lock()
     account_lock = threading.Lock()
 
@@ -639,6 +721,7 @@ def _run_impl(
             started_at=run_started_at,
             launch_profile=launch_profile.model_dump(),
             cost_usage=state.get("cost_usage"),
+            budget_usage=state.get("budget_usage"),
         )
         emit_project_event(
             config,
@@ -655,6 +738,7 @@ def _run_impl(
             paused=False,
             finished_at=None,
             launch_profile=launch_profile.model_dump(),
+            budget_usage=state.get("budget_usage"),
             cost_usage=state.get("cost_usage"),
         )
 
@@ -736,6 +820,56 @@ def _run_impl(
                 extra=extra,
             )
 
+    def apply_runtime_watchdog(
+        *,
+        story_id: int | None = None,
+        runtime_plan: dict[str, Any] | None = None,
+        worker_label: str = "",
+        critic_label: str = "",
+    ) -> bool:
+        with state_lock:
+            current_state = load_project_state(config, project_id)
+            decision = check_runtime_watchdog(current_state, story_id=story_id)
+        if not decision.triggered:
+            return False
+
+        extra: dict[str, Any] = {
+            "scope": decision.scope,
+            "elapsed_seconds": decision.elapsed_seconds,
+            "limit_seconds": decision.limit_seconds,
+        }
+        resolved_story_id = decision.story_id if decision.scope == "story" else story_id
+        if runtime_plan is not None and resolved_story_id is not None:
+            extra.update(
+                _story_agent_event_extra(
+                    project_id,
+                    resolved_story_id,
+                    runtime_plan,
+                    worker_label=worker_label or None,
+                    critic_label=critic_label or None,
+                    primary_role="worker",
+                )
+            )
+
+        watchdog_pause_project_run(
+            config,
+            project_id,
+            message=decision.reason,
+            story_id=resolved_story_id,
+            extra=extra,
+        )
+        _emit_runtime_message(
+            headless=headless,
+            event="story_watchdog_paused" if decision.scope == "story" else "run_watchdog_paused",
+            message=decision.reason,
+            rich_message=f"[yellow]{decision.reason}[/yellow]",
+            level="warning",
+            project_id=project_id,
+            story_id=resolved_story_id,
+            **extra,
+        )
+        return True
+
     def reserve_profiles() -> tuple[Any, Any] | None:
         with account_lock:
             worker_profile = account_mgr.get_next(selected_provider, preferred_name=selected_provider_config_id)
@@ -764,6 +898,7 @@ def _run_impl(
             state = load_project_state(config, project_id)
             allowed, reason = consume_iteration_budget(
                 state,
+                story_id=story_id,
                 worker_label=worker_label,
                 critic_label=critic_label,
             )
@@ -1015,6 +1150,14 @@ def _run_impl(
         )
         planned_story_branch = stable_story_branch_name(project_entry["name"], story_id, story_title)
         shared_discoveries = build_story_discovery_context(load_project_state(config, project_id), story_id=story_id)
+        if _apply_requested_headless_interrupt(
+            control_session=control_session,
+            config=config,
+            project_id=project_id,
+            headless=headless,
+            story_id=story_id,
+        ):
+            return "paused"
 
         def story_github_pr(**incoming: Any) -> dict[str, Any]:
             existing = (
@@ -1305,11 +1448,39 @@ def _run_impl(
         approved = False
         try:
             while not approved:
+                if _apply_requested_headless_interrupt(
+                    control_session=control_session,
+                    config=config,
+                    project_id=project_id,
+                    headless=headless,
+                    story_id=story_id,
+                ):
+                    return "paused"
+                if apply_runtime_watchdog(
+                    story_id=story_id,
+                    runtime_plan=runtime_plan,
+                ):
+                    unregister_parallel_story(story_id)
+                    return "paused"
                 current_state = load_project_state(config, project_id)
                 iteration = int(current_state.get("story_state", {}).get(str(story_id), {}).get("iteration", 0)) + 1
 
                 reserved = reserve_profiles()
                 if reserved is None:
+                    if _apply_requested_headless_interrupt(
+                        control_session=control_session,
+                        config=config,
+                        project_id=project_id,
+                        headless=headless,
+                        story_id=story_id,
+                    ):
+                        return "paused"
+                    if apply_runtime_watchdog(
+                        story_id=story_id,
+                        runtime_plan=runtime_plan,
+                    ):
+                        unregister_parallel_story(story_id)
+                        return "paused"
                     _emit_runtime_message(
                         headless=headless,
                         event="accounts_cooling_down",
@@ -1319,7 +1490,22 @@ def _run_impl(
                         project_id=project_id,
                         story_id=story_id,
                     )
-                    time.sleep(60)
+                    for _ in range(60):
+                        if _apply_requested_headless_interrupt(
+                            control_session=control_session,
+                            config=config,
+                            project_id=project_id,
+                            headless=headless,
+                            story_id=story_id,
+                        ):
+                            return "paused"
+                        if apply_runtime_watchdog(
+                            story_id=story_id,
+                            runtime_plan=runtime_plan,
+                        ):
+                            unregister_parallel_story(story_id)
+                            return "paused"
+                        time.sleep(1)
                     continue
                 worker_profile, critic_profile = reserved
                 worker_env = account_mgr.build_env(worker_profile)
@@ -1818,6 +2004,15 @@ def _run_impl(
     failure: Exception | None = None
     try:
         while True:
+            if _apply_requested_headless_interrupt(
+                control_session=control_session,
+                config=config,
+                project_id=project_id,
+                headless=headless,
+            ):
+                break
+            if apply_runtime_watchdog():
+                break
             state = ensure_project_state(config, project_entry, seed_mode="migrate")
             if state.get("paused"):
                 _emit_runtime_message(
@@ -1895,7 +2090,7 @@ def _run_impl(
                 break
     except Exception as exc:  # pragma: no cover - defensive top-level sync
         failure = exc
-        update_project_runtime(config, project_id, status="failed", last_error=str(exc), pid=None)
+        update_project_runtime(config, project_id, status="failed", last_error=str(exc), pid=None, runtime_session_id="")
         emit_project_event(
             config,
             project_id,
@@ -1915,6 +2110,9 @@ def _run_impl(
         )
         if not headless:
             raise
+    finally:
+        if control_event_bridge is not None:
+            control_event_bridge.close()
 
     final_state = load_project_state(config, project_id)
     summary = build_run_summary(
@@ -1940,34 +2138,45 @@ def run(
     prd: str = typer.Option(".agents/tasks/prd.json", help="Path to PRD JSON file (relative to project)"),
     project_id: str | None = typer.Option(None, help="Stable project id from the dashboard"),
     headless: bool = typer.Option(False, "--headless", help="Disable rich console output and emit a JSON run summary."),
+    structured: bool = typer.Option(False, "--structured", help="Use structured NDJSON envelopes for headless output."),
     schedule: str | None = typer.Option(None, "--schedule", help="Repeat the run on a cadence like 30m or 6h."),
     max_runs: int | None = typer.Option(None, "--max-runs", help="Stop a scheduled run after N iterations."),
 ) -> int:
     """Run the autopilot loop on one project until all stories are done."""
+    resolved_headless = headless if isinstance(headless, bool) else False
+    resolved_structured = structured if isinstance(structured, bool) else False
     resolved_schedule = schedule if isinstance(schedule, str) or schedule is None else None
     resolved_max_runs = max_runs if isinstance(max_runs, int) or max_runs is None else None
 
     if resolved_max_runs is not None and resolved_schedule is None:
         raise typer.BadParameter("--max-runs requires --schedule", param_hint="--max-runs")
+    if resolved_structured and not resolved_headless:
+        raise typer.BadParameter("--structured requires --headless", param_hint="--structured")
 
-    if resolved_schedule:
-        summary = _run_on_schedule(
-            job_name=f"run:{Path(project_path).name or 'project'}",
-            schedule_raw=resolved_schedule,
-            max_runs=resolved_max_runs,
-            headless=headless,
-            runner=lambda run_index: {
-                **_run_impl(project_path, prd, project_id, headless=headless),
-                "scheduled_run_index": run_index,
-            },
-        )
-    else:
-        summary = _run_impl(project_path, prd, project_id, headless=headless)
-    if headless:
+    session_label = f"run_{project_id}" if project_id else f"run_{Path(project_path).name or 'project'}"
+    with structured_headless_runtime(
+        enabled=resolved_headless and resolved_structured,
+        session_id=build_headless_session_id(session_label),
+        metadata={"mode": "run"},
+    ):
         if resolved_schedule:
-            for run_summary in summary.get("runs") or []:
-                emit_headless_summary(run_summary)
-        emit_headless_summary(summary)
+            summary = _run_on_schedule(
+                job_name=f"run:{Path(project_path).name or 'project'}",
+                schedule_raw=resolved_schedule,
+                max_runs=resolved_max_runs,
+                headless=resolved_headless,
+                runner=lambda run_index: {
+                    **_run_impl(project_path, prd, project_id, headless=resolved_headless),
+                    "scheduled_run_index": run_index,
+                },
+            )
+        else:
+            summary = _run_impl(project_path, prd, project_id, headless=resolved_headless)
+        if resolved_headless:
+            if resolved_schedule:
+                for run_summary in summary.get("runs") or []:
+                    emit_headless_summary(run_summary)
+            emit_headless_summary(summary)
     return int(summary.get("exit_code", 0))
 
 
@@ -2077,32 +2286,42 @@ def _run_all_impl(*, headless: bool = False) -> dict[str, Any]:
 
 def run_all(
     headless: bool = False,
+    structured: bool = False,
     schedule: str | None = None,
     max_runs: int | None = None,
 ) -> int:
     """Run autopilot on all configured projects in parallel."""
+    resolved_headless = headless if isinstance(headless, bool) else False
+    resolved_structured = structured if isinstance(structured, bool) else False
     resolved_schedule = schedule if isinstance(schedule, str) or schedule is None else None
     resolved_max_runs = max_runs if isinstance(max_runs, int) or max_runs is None else None
 
     if resolved_max_runs is not None and resolved_schedule is None:
         raise typer.BadParameter("--max-runs requires --schedule", param_hint="--max-runs")
+    if resolved_structured and not resolved_headless:
+        raise typer.BadParameter("--structured requires --headless", param_hint="--structured")
 
-    if resolved_schedule:
-        summary = _run_on_schedule(
-            job_name="run-all",
-            schedule_raw=resolved_schedule,
-            max_runs=resolved_max_runs,
-            headless=headless,
-            runner=lambda run_index: {
-                **_run_all_impl(headless=headless),
-                "scheduled_run_index": run_index,
-            },
-        )
-    else:
-        summary = _run_all_impl(headless=headless)
-    if headless:
+    with structured_headless_runtime(
+        enabled=resolved_headless and resolved_structured,
+        session_id=build_headless_session_id("run_all"),
+        metadata={"mode": "run_all"},
+    ):
         if resolved_schedule:
-            for run_summary in summary.get("runs") or []:
-                emit_headless_summary(run_summary)
-        emit_headless_summary(summary)
+            summary = _run_on_schedule(
+                job_name="run-all",
+                schedule_raw=resolved_schedule,
+                max_runs=resolved_max_runs,
+                headless=resolved_headless,
+                runner=lambda run_index: {
+                    **_run_all_impl(headless=resolved_headless),
+                    "scheduled_run_index": run_index,
+                },
+            )
+        else:
+            summary = _run_all_impl(headless=resolved_headless)
+        if resolved_headless:
+            if resolved_schedule:
+                for run_summary in summary.get("runs") or []:
+                    emit_headless_summary(run_summary)
+            emit_headless_summary(summary)
     return int(summary.get("exit_code", 0))

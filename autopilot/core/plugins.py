@@ -6,6 +6,8 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from autopilot.core.config import AutopilotConfig, NotificationChannelConfig, TrackerConfig
+from autopilot.core.plugin_loader import load_all_plugins
+from autopilot.core.plugin_models import LoadedPlugin
 from autopilot.core.notifiers import channel_ready
 
 
@@ -175,6 +177,12 @@ def resolve_notifier_plugins(config: AutopilotConfig) -> list[NotifierPlugin]:
         plugin = notifier_plugin_from_channel(channel)
         notifiers[plugin.notifier_id] = plugin
     return list(notifiers.values())
+
+
+def resolve_loaded_plugins(config: AutopilotConfig) -> list[LoadedPlugin]:
+    """Return discovered on-disk plugins with validation and enablement metadata."""
+
+    return load_all_plugins(config, use_cache=False)
 
 
 def _register_builtin_slots() -> None:

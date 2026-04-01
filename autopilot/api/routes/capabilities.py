@@ -29,16 +29,88 @@ from autopilot.core.plugins import (
     list_agent_providers,
     list_runtimes,
     resolve_notifier_plugins,
+    resolve_loaded_plugins,
     resolve_tracker_plugins,
 )
+from autopilot.core.plugin_commands import list_plugin_commands, render_plugin_command_content
+from autopilot.core.plugin_loader import build_plugin_id, clear_plugin_cache
+from autopilot.core.plugin_mcp import list_plugin_mcp_servers
+from autopilot.core.plugin_skills import list_plugin_skills
+from autopilot.core.plugin_storage import get_plugin_option_state, save_plugin_options
+from autopilot.core.plugin_state import set_plugin_enabled
 
 router = APIRouter()
-EXTENSION_LIFECYCLE = ["register", "validate", "expose", "audit"]
+EXTENSION_LIFECYCLE = ["discover", "validate", "enable", "expose", "audit"]
 
 
 def _build_extension_registry(config) -> dict[str, object]:
+    loaded_plugins = resolve_loaded_plugins(config)
+    plugin_skills = list_plugin_skills(config)
+    plugin_commands = list_plugin_commands(config)
+    plugin_mcp_servers = list_plugin_mcp_servers(config)
+    skill_counts: dict[str, int] = {}
+    command_counts: dict[str, int] = {}
+    mcp_counts: dict[str, int] = {}
+    invalid_mcp_counts: dict[str, int] = {}
+    for skill in plugin_skills:
+        skill_counts[skill.plugin_id] = skill_counts.get(skill.plugin_id, 0) + 1
+    for command in plugin_commands:
+        command_counts[command.plugin_id] = command_counts.get(command.plugin_id, 0) + 1
+    for server in plugin_mcp_servers:
+        mcp_counts[server.plugin_id] = mcp_counts.get(server.plugin_id, 0) + 1
+        if server.validation_status != "valid":
+            invalid_mcp_counts[server.plugin_id] = invalid_mcp_counts.get(server.plugin_id, 0) + 1
+    option_states = {
+        plugin.plugin_id: get_plugin_option_state(config, plugin)
+        for plugin in loaded_plugins
+    }
     return {
         "lifecycle": list(EXTENSION_LIFECYCLE),
+        "plugins": [
+            {
+                "extension_id": plugin.plugin_id,
+                "display_name": plugin.display_name or plugin.name,
+                "kind": "plugin",
+                "transport": "plugin",
+                "metadata": {
+                    "source": plugin.source,
+                    "version": plugin.version,
+                    "description": plugin.description,
+                    "enabled": plugin.enabled,
+                    "manifest_path": plugin.manifest_path,
+                    "root_path": plugin.root_path,
+                    "data_dir": plugin.data_dir,
+                    "commands_path": plugin.commands_path,
+                    "commands_paths": list(plugin.commands_paths),
+                    "command_count": command_counts.get(plugin.plugin_id, 0),
+                    "mcp_paths": list(plugin.mcp_paths),
+                    "mcp_server_count": mcp_counts.get(plugin.plugin_id, 0),
+                    "invalid_mcp_server_count": invalid_mcp_counts.get(plugin.plugin_id, 0),
+                    "skills_path": plugin.skills_path,
+                    "skills_present": plugin.skills_present,
+                    "skill_count": skill_counts.get(plugin.plugin_id, 0),
+                    "apps_path": plugin.apps_path,
+                    "apps_present": plugin.apps_present,
+                    "configurable": bool(plugin.user_config),
+                    "option_count": len(plugin.user_config),
+                    "configured_option_keys": option_states[plugin.plugin_id].configured_keys,
+                    "unconfigured_option_keys": option_states[plugin.plugin_id].unconfigured_keys,
+                    "validation_option_errors": option_states[plugin.plugin_id].validation_errors,
+                    "validation_status": plugin.validation_status,
+                    "validation_errors": list(plugin.validation_errors),
+                    "homepage": plugin.homepage,
+                    "repository": plugin.repository,
+                    "license": plugin.license,
+                    "keywords": list(plugin.keywords),
+                    "category": plugin.interface.category,
+                    "developer_name": plugin.interface.developerName
+                    or (plugin.author.name if plugin.author is not None else ""),
+                    "capabilities": list(plugin.interface.capabilities),
+                    "default_prompts": plugin.interface.normalized_default_prompts(),
+                },
+            }
+            for plugin in loaded_plugins
+        ],
         "agent_providers": [
             {
                 "extension_id": plugin.provider_family,
@@ -120,6 +192,23 @@ class RoutingPolicyRequest(BaseModel):
     forbidden_connectors: list[str] = Field(default_factory=list)
 
 
+class PluginEnablementRequest(BaseModel):
+    enabled: bool = True
+
+
+class PluginOptionsRequest(BaseModel):
+    values: dict[str, object] = Field(default_factory=dict)
+
+
+def _require_plugin(config, plugin_id: str):
+    normalized = build_plugin_id(plugin_id)
+    discovered = {plugin.plugin_id: plugin for plugin in resolve_loaded_plugins(config)}
+    plugin = discovered.get(normalized)
+    if plugin is None:
+        raise HTTPException(404, f"Plugin {plugin_id} not found")
+    return normalized, plugin
+
+
 @router.get("/catalog")
 async def get_capabilities_catalog() -> dict:
     config = get_config()
@@ -173,9 +262,109 @@ async def list_extensions() -> dict[str, object]:
     return _build_extension_registry(get_config())
 
 
+@router.get("/plugins")
+async def list_plugins() -> dict[str, list[dict]]:
+    return {"plugins": [plugin.model_dump() for plugin in resolve_loaded_plugins(get_config())]}
+
+
+@router.get("/plugins/{plugin_id}/options")
+async def get_plugin_options(plugin_id: str) -> dict[str, object]:
+    config = get_config()
+    _, plugin = _require_plugin(config, plugin_id)
+    return {
+        "plugin": plugin.model_dump(),
+        "options": get_plugin_option_state(config, plugin).model_dump(),
+    }
+
+
+@router.put("/plugins/{plugin_id}/options")
+async def update_plugin_options(plugin_id: str, request: PluginOptionsRequest) -> dict[str, object]:
+    config = get_config()
+    normalized, plugin = _require_plugin(config, plugin_id)
+    if not plugin.user_config:
+        raise HTTPException(400, f"Plugin {plugin_id} has no configurable options")
+    validation = save_plugin_options(config, normalized, request.values, plugin.user_config)
+    if not validation.valid:
+        raise HTTPException(400, {"errors": validation.errors})
+    _, refreshed = _require_plugin(config, normalized)
+    return {
+        "status": "ok",
+        "plugin": refreshed.model_dump(),
+        "options": get_plugin_option_state(config, refreshed).model_dump(),
+    }
+
+
+@router.get("/plugins/{plugin_id}/commands")
+async def list_plugin_command_descriptors(plugin_id: str) -> dict[str, list[dict]]:
+    config = get_config()
+    normalized, _ = _require_plugin(config, plugin_id)
+    return {
+        "commands": [command.model_dump() for command in list_plugin_commands(config, plugin_id=normalized)]
+    }
+
+
+@router.get("/plugins/{plugin_id}/commands/{command_id}")
+async def get_plugin_command_descriptor(plugin_id: str, command_id: str) -> dict[str, object]:
+    config = get_config()
+    normalized, _ = _require_plugin(config, plugin_id)
+    command = next(
+        (
+            item
+            for item in list_plugin_commands(config, plugin_id=normalized)
+            if item.command_id == command_id
+        ),
+        None,
+    )
+    if command is None:
+        raise HTTPException(404, f"Plugin command {command_id} not found")
+    return {
+        "command": command.model_dump(),
+        "content": render_plugin_command_content(config, command),
+    }
+
+
+@router.get("/plugins/{plugin_id}/mcp")
+async def list_plugin_mcp_descriptors(plugin_id: str) -> dict[str, list[dict]]:
+    config = get_config()
+    normalized, _ = _require_plugin(config, plugin_id)
+    return {
+        "mcp_servers": [
+            server.model_dump()
+            for server in list_plugin_mcp_servers(config, plugin_id=normalized)
+        ]
+    }
+
+
+@router.get("/plugins/{plugin_id}/skills")
+async def list_plugin_skill_descriptors(plugin_id: str) -> dict[str, list[dict]]:
+    config = get_config()
+    normalized, _ = _require_plugin(config, plugin_id)
+    return {
+        "skills": [skill.model_dump() for skill in list_plugin_skills(config, plugin_id=normalized)]
+    }
+
+
+@router.patch("/plugins/{plugin_id}")
+async def update_plugin_enablement(plugin_id: str, request: PluginEnablementRequest) -> dict[str, object]:
+    config = get_config()
+    normalized, _ = _require_plugin(config, plugin_id)
+    record = set_plugin_enabled(config, normalized, enabled=request.enabled)
+    clear_plugin_cache()
+    refreshed = {item.plugin_id: item for item in resolve_loaded_plugins(config)}[normalized]
+    return {
+        "status": "ok",
+        "plugin": refreshed.model_dump(),
+        "enablement": record.model_dump(),
+    }
+
+
 @router.post("/connectors")
 async def create_connector(request: ConnectorRequest) -> dict:
     config = get_config()
+    existing = {connector.id: connector for connector in load_connectors_registry(config)}
+    current = existing.get(request.id)
+    if current is not None and (current.built_in or current.managed):
+        raise HTTPException(400, f"Connector {request.id} is managed and cannot be overwritten")
     if get_connector_type_schema(request.connector_type) is None:
         raise HTTPException(400, f"Unknown connector type: {request.connector_type}")
     connector = MCPConnector.model_validate({**request.model_dump(), "built_in": False})
@@ -188,9 +377,12 @@ async def update_connector(connector_id: str, request: ConnectorRequest) -> dict
     if connector_id != request.id:
         raise HTTPException(400, "Connector id mismatch")
     config = get_config()
-    existing = {connector.id for connector in load_connectors_registry(config)}
-    if connector_id not in existing:
+    existing = {connector.id: connector for connector in load_connectors_registry(config)}
+    current = existing.get(connector_id)
+    if current is None:
         raise HTTPException(404, f"Connector {connector_id} not found")
+    if current.built_in or current.managed:
+        raise HTTPException(400, f"Connector {connector_id} is managed and cannot be edited")
     if get_connector_type_schema(request.connector_type) is None:
         raise HTTPException(400, f"Unknown connector type: {request.connector_type}")
     connector = MCPConnector.model_validate({**request.model_dump(), "built_in": False})
@@ -215,6 +407,12 @@ async def validate_saved_connector(connector_id: str) -> dict:
     if connector is None:
         raise HTTPException(404, f"Connector {connector_id} not found")
     result = validate_connector_config(connector)
+    if connector.managed:
+        return {
+            "status": "ok",
+            "connector": connector.model_dump(),
+            "result": result.model_dump(),
+        }
     stored = upsert_connector(
         config,
         connector.model_copy(
@@ -238,7 +436,7 @@ async def remove_connector(connector_id: str) -> dict[str, str]:
     connector = existing.get(connector_id)
     if connector is None:
         raise HTTPException(404, f"Connector {connector_id} not found")
-    if connector.built_in:
+    if connector.built_in or connector.managed:
         raise HTTPException(400, f"Connector {connector_id} is built in and cannot be deleted")
     delete_connector(config, connector_id)
     return {"status": "ok", "message": f"Connector {connector_id} deleted."}

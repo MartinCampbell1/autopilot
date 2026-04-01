@@ -6,20 +6,60 @@ import asyncio
 import json
 from pathlib import Path
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 from fastapi.responses import StreamingResponse
 
 from autopilot.api.deps import get_config
+from autopilot.core.control_messages import (
+    build_structured_event_envelope,
+    format_sse_frame,
+    parse_control_message,
+    resolve_control_event_id,
+)
 
 router = APIRouter()
 
 
-async def _event_generator(path: Path):
+def _load_event_record(line: str) -> dict | None:
+    try:
+        payload = json.loads(line)
+    except json.JSONDecodeError:
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _render_sse_event(payload: dict, *, sequence: int, structured: bool) -> str:
+    parsed_control = parse_control_message(payload)
+    event_name = str(payload.get("event") or getattr(parsed_control, "type", "project_event"))
+    event_id = resolve_control_event_id(payload, sequence)
+    if structured:
+        data = (
+            parsed_control.model_dump(exclude_none=True)
+            if parsed_control is not None
+            else build_structured_event_envelope(payload, sequence=sequence).model_dump(exclude_none=True)
+        )
+    else:
+        data = payload
+    return format_sse_frame(event_name, data, event_id=event_id)
+
+
+async def _event_generator(path: Path, *, structured: bool = False, from_sequence: int | None = None):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.touch(exist_ok=True)
 
     with path.open("r", encoding="utf-8") as handle:
-        handle.seek(0, 2)
+        sequence = 0
+        if from_sequence is None:
+            handle.seek(0, 2)
+        else:
+            for line in handle:
+                sequence += 1
+                if sequence <= from_sequence:
+                    continue
+                payload = _load_event_record(line)
+                if payload is None:
+                    continue
+                yield _render_sse_event(payload, sequence=sequence, structured=structured)
         while True:
             line = handle.readline()
             if not line:
@@ -27,20 +67,25 @@ async def _event_generator(path: Path):
                 await asyncio.sleep(1)
                 continue
 
-            try:
-                event = json.loads(line)
-            except json.JSONDecodeError:
+            sequence += 1
+            payload = _load_event_record(line)
+            if payload is None:
                 continue
-
-            event_name = event.get("event", "project_event")
-            yield f"event: {event_name}\ndata: {json.dumps(event)}\n\n"
+            yield _render_sse_event(payload, sequence=sequence, structured=structured)
 
 
 @router.get("/")
-async def event_stream() -> StreamingResponse:
+async def event_stream(
+    structured: bool = Query(default=False),
+    from_sequence: int | None = Query(default=None, ge=0),
+) -> StreamingResponse:
     config = get_config()
     return StreamingResponse(
-        _event_generator(config.events_log_path),
+        _event_generator(
+            config.events_log_path,
+            structured=structured,
+            from_sequence=from_sequence,
+        ),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",

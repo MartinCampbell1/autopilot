@@ -40,7 +40,13 @@ from autopilot.core.github_prs import normalize_story_github_pr
 from autopilot.core.loop_runner import apply_autopilot_ralph_overrides, check_ralph_installed, init_ralph_project
 from autopilot.core.models import normalize_story_blocked_by, resolve_story_blocked_on, validate_story_dependencies
 from autopilot.core.runtime_agents import build_story_pipeline_state
-from autopilot.core.runtime_budgets import default_budget_policy, default_budget_usage, ensure_budget_state, update_budget_policy
+from autopilot.core.runtime_budgets import (
+    default_budget_policy,
+    default_budget_usage,
+    ensure_budget_state,
+    start_run_budget_bucket,
+    update_budget_policy,
+)
 
 TIMELINE_LIMIT = 300
 DISCOVERY_BOARD_LIMIT = 200
@@ -68,6 +74,13 @@ VALID_TASK_SOURCE_BRANCH_POLICIES = {"shared_main", "isolated_worktree"}
 def utcnow_iso() -> str:
     """Return the current UTC timestamp in ISO format."""
     return datetime.now(timezone.utc).isoformat()
+
+
+def build_runtime_session_id(project_id: str) -> str:
+    """Build one opaque runtime session id for a background project run."""
+
+    normalized = re.sub(r"[^a-z0-9]+", "_", str(project_id or "").strip().lower()).strip("_") or "project"
+    return f"run_{normalized}_{uuid.uuid4().hex[:12]}"
 
 
 def default_quality_policy() -> dict[str, Any]:
@@ -803,6 +816,7 @@ def _default_runtime_state(project_id: str, prd: dict[str, Any]) -> dict[str, An
     timeline: list[dict[str, Any]] = []
     return {
         "project_id": project_id,
+        "runtime_session_id": "",
         "pid": None,
         "status": "idle",
         "paused": False,
@@ -882,6 +896,7 @@ def ensure_project_state(
         changed = True
 
     state.setdefault("project_id", project["id"])
+    state.setdefault("runtime_session_id", "")
     state.setdefault("pid", None)
     state.setdefault("status", "idle")
     state.setdefault("paused", False)
@@ -1806,6 +1821,12 @@ def build_project_summary(config: AutopilotConfig, project: dict[str, Any]) -> d
         "last_activity_at": state.get("updated_at"),
         "last_message": _sanitize_message(last_event["message"]) if last_event else "",
         "pid": state.get("pid"),
+        "runtime_session_id": state.get("runtime_session_id", ""),
+        "runtime_control_available": bool(
+            str(state.get("runtime_session_id") or "").strip()
+            and str(state.get("status") or "") == "running"
+            and not bool(state.get("paused"))
+        ),
         "launch_profile": launch_profile,
         "provider_config": provider_config,
         "runtime_profile": runtime_profile,
@@ -1881,6 +1902,7 @@ def build_project_detail(config: AutopilotConfig, project_id: str) -> dict[str, 
         "guardrails": _read_guardrails(project),
         "log_tail": _read_log_tail(state.get("log_path", "")),
         "log_path": state.get("log_path", ""),
+        "runtime_session_id": state.get("runtime_session_id", ""),
         "last_error": _sanitize_message(state.get("last_error") or ""),
         "started_at": state.get("started_at"),
         "finished_at": state.get("finished_at"),
@@ -2034,6 +2056,7 @@ def launch_project_run(
     existing_pid = state.get("pid")
     if _is_pid_running(existing_pid):
         return True, Path(state["log_path"]) if state.get("log_path") else None, "Project is already running."
+    runtime_session_id = build_runtime_session_id(project_id)
 
     state["launch_profile"] = normalize_launch_profile(launch_profile or state.get("launch_profile")).model_dump()
 
@@ -2064,12 +2087,18 @@ def launch_project_run(
             stdout=log_file,
             stderr=subprocess.STDOUT,
             start_new_session=True,
+            env={
+                **os.environ,
+                "AUTOPILOT_RUNTIME_SESSION_ID": runtime_session_id,
+            },
         )
 
     started_at = utcnow_iso()
+    start_run_budget_bucket(state, started_at=started_at)
     state.update(
         {
             "pid": process.pid,
+            "runtime_session_id": runtime_session_id,
             "status": "running",
             "paused": False,
             "started_at": state.get("started_at") or started_at,
@@ -2129,9 +2158,37 @@ def pause_project_run(config: AutopilotConfig, project_id: str) -> str:
                 except OSError:
                     pass
 
+    return _persist_paused_project_run(
+        config,
+        project_id,
+        message="Project paused by user.",
+        event="paused",
+        story_id=state.get("current_story_id"),
+    )
+
+
+def _persist_paused_project_run(
+    config: AutopilotConfig,
+    project_id: str,
+    *,
+    message: str,
+    event: str,
+    story_id: int | None = None,
+    extra: dict[str, Any] | None = None,
+    set_last_error: bool = False,
+    record_budget_exhaustion: bool = False,
+    record_watchdog: bool = False,
+) -> str:
+    state = load_project_state(config, project_id)
+    if not state:
+        raise KeyError(project_id)
+
+    resolved_story_id = story_id if story_id is not None else state.get("current_story_id")
+    _, budget_usage = ensure_budget_state(state)
     state.update(
         {
             "pid": None,
+            "runtime_session_id": "",
             "status": "paused",
             "paused": True,
             "active_worker": None,
@@ -2139,16 +2196,25 @@ def pause_project_run(config: AutopilotConfig, project_id: str) -> str:
             "parallel_story_ids": [],
         }
     )
+    if record_budget_exhaustion:
+        budget_usage["last_exhaustion_reason"] = message
+        budget_usage["auto_paused_at"] = utcnow_iso()
+    if record_watchdog:
+        budget_usage["last_watchdog_reason"] = message
+        budget_usage["auto_paused_at"] = utcnow_iso()
+    if set_last_error:
+        state["last_error"] = message
     save_project_state(config, project_id, state)
     emit_project_event(
         config,
         project_id,
-        event="paused",
+        event=event,
         status="paused",
-        message="Project paused by user.",
-        story_id=state.get("current_story_id"),
+        message=message,
+        story_id=resolved_story_id,
+        extra=extra,
     )
-    return "Project paused."
+    return message
 
 
 def auto_pause_project_run(
@@ -2160,32 +2226,58 @@ def auto_pause_project_run(
     extra: dict[str, Any] | None = None,
 ) -> str:
     """Pause a project from inside the runtime without sending signals to the current process."""
-    state = load_project_state(config, project_id)
-    if not state:
-        raise KeyError(project_id)
-
-    state.update(
-        {
-            "pid": None,
-            "status": "paused",
-            "paused": True,
-            "active_worker": None,
-            "active_critic": None,
-            "parallel_story_ids": [],
-            "last_error": message,
-        }
-    )
-    save_project_state(config, project_id, state)
-    emit_project_event(
+    return _persist_paused_project_run(
         config,
         project_id,
-        event="budget_paused",
-        status="paused",
         message=message,
+        event="budget_paused",
         story_id=story_id,
         extra=extra,
+        set_last_error=True,
+        record_budget_exhaustion=True,
     )
-    return message
+
+
+def watchdog_pause_project_run(
+    config: AutopilotConfig,
+    project_id: str,
+    *,
+    message: str,
+    story_id: int | None = None,
+    extra: dict[str, Any] | None = None,
+) -> str:
+    """Pause a project after a run/story watchdog timeout inside the runtime."""
+    return _persist_paused_project_run(
+        config,
+        project_id,
+        message=message,
+        event="timeout_paused",
+        story_id=story_id,
+        extra=extra,
+        set_last_error=True,
+        record_watchdog=True,
+    )
+
+
+def interrupt_project_run(
+    config: AutopilotConfig,
+    project_id: str,
+    *,
+    message: str,
+    story_id: int | None = None,
+    extra: dict[str, Any] | None = None,
+) -> str:
+    """Pause a project in-process after a structured control interrupt."""
+
+    return _persist_paused_project_run(
+        config,
+        project_id,
+        message=message,
+        event="interrupt_paused",
+        story_id=story_id,
+        extra=extra,
+        set_last_error=True,
+    )
 
 
 def resume_project_run(config: AutopilotConfig, project_id: str) -> tuple[bool, Path | None, str]:

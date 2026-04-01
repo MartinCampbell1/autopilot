@@ -55,6 +55,14 @@ from autopilot.core.agent_action_runs import (
     save_agent_action_batch_run,
 )
 from autopilot.core.control_plane_issues import create_issue, link_issue_approval, list_issues, resolve_issue
+from autopilot.core.tool_contracts import ToolResult, ToolUseContext, build_tool
+from autopilot.core.tool_permissions import (
+    PermissionRuleValue,
+    has_permissions_to_use_tool,
+    load_tool_permission_context,
+    permission_rule_value_to_string,
+)
+from autopilot.core.tool_runner import run_tool_use
 from autopilot.core.orchestrator_control_passes import (
     create_orchestrator_control_pass,
     get_orchestrator_control_pass,
@@ -65,9 +73,18 @@ from autopilot.core.orchestrator_sessions import (
     get_orchestrator_session,
     link_orchestrator_session_entities,
     list_orchestrator_sessions,
+    update_orchestrator_session_runtime_state,
     update_orchestrator_session_status,
 )
 from autopilot.core.runtime_agents import build_runtime_agents, parse_runtime_agent_id
+from autopilot.core.runtime_agent_tasks import (
+    RuntimeAgentTaskRecord,
+    create_or_reuse_runtime_agent_task,
+    get_runtime_agent_task,
+    link_runtime_agent_task_run,
+    list_runtime_agent_tasks,
+    refresh_runtime_agent_task,
+)
 from autopilot.core.runtime_budgets import ensure_budget_state
 from autopilot.core.runtime_control import list_project_work_item_leases
 from autopilot.core.workspace_policy import inspect_project_workspace_policy
@@ -331,8 +348,14 @@ DEFAULT_COMMAND_POLICY: dict[str, Any] = {
     "github_approved_and_green_auto_resume": False,
     "project_max_worker_iterations_without_approval": 14,
     "project_max_critic_reviews_without_approval": 6,
+    "run_max_worker_iterations_without_approval": 60,
+    "run_max_critic_reviews_without_approval": 60,
+    "story_max_worker_iterations_without_approval": 16,
+    "story_max_critic_reviews_without_approval": 16,
     "agent_max_worker_iterations_without_approval": 8,
     "agent_max_critic_reviews_without_approval": 4,
+    "run_max_runtime_seconds_without_approval": 43200,
+    "story_max_runtime_seconds_without_approval": 14400,
 }
 
 
@@ -347,8 +370,14 @@ def default_execution_command_policy() -> dict[str, Any]:
         "github_approved_and_green_auto_resume": DEFAULT_COMMAND_POLICY["github_approved_and_green_auto_resume"],
         "project_max_worker_iterations_without_approval": DEFAULT_COMMAND_POLICY["project_max_worker_iterations_without_approval"],
         "project_max_critic_reviews_without_approval": DEFAULT_COMMAND_POLICY["project_max_critic_reviews_without_approval"],
+        "run_max_worker_iterations_without_approval": DEFAULT_COMMAND_POLICY["run_max_worker_iterations_without_approval"],
+        "run_max_critic_reviews_without_approval": DEFAULT_COMMAND_POLICY["run_max_critic_reviews_without_approval"],
+        "story_max_worker_iterations_without_approval": DEFAULT_COMMAND_POLICY["story_max_worker_iterations_without_approval"],
+        "story_max_critic_reviews_without_approval": DEFAULT_COMMAND_POLICY["story_max_critic_reviews_without_approval"],
         "agent_max_worker_iterations_without_approval": DEFAULT_COMMAND_POLICY["agent_max_worker_iterations_without_approval"],
         "agent_max_critic_reviews_without_approval": DEFAULT_COMMAND_POLICY["agent_max_critic_reviews_without_approval"],
+        "run_max_runtime_seconds_without_approval": DEFAULT_COMMAND_POLICY["run_max_runtime_seconds_without_approval"],
+        "story_max_runtime_seconds_without_approval": DEFAULT_COMMAND_POLICY["story_max_runtime_seconds_without_approval"],
     }
 
 
@@ -403,51 +432,24 @@ def evaluate_execution_command_policy(
     """Evaluate whether a command should require approval under project policy."""
 
     policy = load_project_command_policy(config, project_id)
-    payload = payload or {}
-    reasons: list[str] = []
-
-    if command in policy.get("approval_required_commands", []):
-        reasons.append(f"`{command}` is configured to always require approval.")
-
-    if command == "launch":
-        launch_profile = payload.get("launch_profile") or {}
-        if (
-            policy.get("parallel_launch_requires_approval")
-            and launch_profile.get("project_concurrency_mode") == "parallel"
-        ):
-            reasons.append("Parallel project launch requires approval under current policy.")
-        max_parallel_stories = int(launch_profile.get("max_parallel_stories") or 1)
-        if max_parallel_stories > int(policy.get("max_parallel_stories_without_approval") or 1):
-            reasons.append(
-                "Requested parallel story fan-out exceeds the non-approved threshold "
-                f"({max_parallel_stories} > {policy['max_parallel_stories_without_approval']})."
-            )
-
-    if command == "update_budget_policy":
-        budget_policy = payload.get("budget_policy") or {}
-        if (
-            policy.get("disable_auto_pause_requires_approval")
-            and budget_policy.get("auto_pause_on_exhaustion") is False
-        ):
-            reasons.append("Disabling auto-pause on budget exhaustion requires approval.")
-        threshold_map = {
-            "project_max_worker_iterations": "project_max_worker_iterations_without_approval",
-            "project_max_critic_reviews": "project_max_critic_reviews_without_approval",
-            "agent_max_worker_iterations": "agent_max_worker_iterations_without_approval",
-            "agent_max_critic_reviews": "agent_max_critic_reviews_without_approval",
-        }
-        for requested_key, threshold_key in threshold_map.items():
-            requested_value = budget_policy.get(requested_key)
-            if requested_value is None:
-                continue
-            if int(requested_value) > int(policy.get(threshold_key) or 0):
-                reasons.append(
-                    f"`{requested_key}` exceeds the non-approved threshold "
-                    f"({requested_value} > {policy[threshold_key]})."
-                )
+    tool = _build_execution_command_tool(config, project_id=project_id, command=command)
+    permission_context = _execution_command_permission_context(
+        config,
+        project_id=project_id,
+        command=command,
+        payload=payload,
+    )
+    decision = has_permissions_to_use_tool(tool, payload or {}, permission_context)
+    reasons = list(decision.reasons)
+    if decision.behavior == "deny" and not reasons and decision.message:
+        reasons = [decision.message]
 
     return {
-        "requires_approval": bool(reasons),
+        "requires_approval": decision.behavior == "ask",
+        "denied": decision.behavior == "deny",
+        "allowed": decision.behavior == "allow",
+        "behavior": decision.behavior,
+        "message": decision.message,
         "reasons": reasons,
         "policy": policy,
     }
@@ -1159,13 +1161,48 @@ def _build_execution_plane_agent_action_patch_bundle(
     }
 
 
+def _materialize_execution_plane_runtime_agent_task_record(
+    record: RuntimeAgentTaskRecord,
+) -> dict[str, Any]:
+    payload = record.model_dump()
+    payload["artifact_ref"] = f"/api/execution-plane/agents/tasks/{record.id}"
+    payload["active"] = record.status in {"queued", "running"}
+    payload["terminal"] = record.status in {"completed", "failed", "cancelled"}
+    return payload
+
+
+def _refresh_result_async_tasks(
+    config: AutopilotConfig,
+    results: list[dict[str, Any]] | None,
+) -> list[dict[str, Any]]:
+    refreshed: list[dict[str, Any]] = []
+    for raw_result in results or []:
+        result = dict(raw_result)
+        async_task = result.get("async_task")
+        async_task_id = ""
+        if isinstance(async_task, dict):
+            async_task_id = str(async_task.get("id") or "").strip()
+        if not async_task_id:
+            async_task_id = str(result.get("async_task_id") or "").strip()
+        if async_task_id:
+            task = get_runtime_agent_task(config, async_task_id)
+            if task is not None:
+                result["async_task"] = _materialize_execution_plane_runtime_agent_task_record(
+                    refresh_runtime_agent_task(config, task)
+                )
+        refreshed.append(result)
+    return refreshed
+
+
 def _materialize_execution_plane_agent_action_run_record(
+    config: AutopilotConfig,
     record: AgentActionBatchRunRecord,
 ) -> dict[str, Any]:
     payload = record.model_dump()
+    payload["results"] = _refresh_result_async_tasks(config, record.results)
     approval_required = bool(payload.get("approval_required")) or _execution_plane_agent_action_run_requires_approval(
         [],
-        list(record.results or []),
+        list(payload.get("results") or []),
     )
     preview_id = str(payload.get("preview_id") or "").strip()
     artifact_ref = str(payload.get("artifact_ref") or "").strip()
@@ -1192,13 +1229,14 @@ def _materialize_execution_plane_agent_action_run_record(
 
 
 def _execution_plane_agent_action_batch_run_response(
+    config: AutopilotConfig,
     record: AgentActionBatchRunRecord,
     *,
     idempotent_replay: bool = False,
 ) -> dict[str, Any]:
     """Project one persisted batch run record back into API response shape."""
 
-    run_payload = _materialize_execution_plane_agent_action_run_record(record)
+    run_payload = _materialize_execution_plane_agent_action_run_record(config, record)
     return {
         "status": record.status,
         "selection": record.selection,
@@ -1211,21 +1249,24 @@ def _execution_plane_agent_action_batch_run_response(
         "approval_required": run_payload["approval_required"],
         "apply_mode": run_payload["apply_mode"],
         "dry_run": record.dry_run,
-        "results": record.results,
+        "results": run_payload["results"],
         "run": run_payload,
         "idempotent_replay": idempotent_replay,
     }
 
 
 def _execution_plane_agent_action_run_response(
+    config: AutopilotConfig,
     record: AgentActionBatchRunRecord,
     *,
     idempotent_replay: bool = False,
 ) -> dict[str, Any]:
     """Project one persisted single-action run record back into API response shape."""
 
-    run_payload = _materialize_execution_plane_agent_action_run_record(record)
+    run_payload = _materialize_execution_plane_agent_action_run_record(config, record)
     payload = dict((record.results or [{}])[0])
+    if run_payload["results"]:
+        payload = dict(run_payload["results"][0])
     payload.setdefault("status", record.status)
     payload["preview_id"] = run_payload["preview_id"]
     payload["diff_summary"] = run_payload["diff_summary"]
@@ -1995,7 +2036,7 @@ def list_execution_plane_agent_action_runs(
     """List persisted runtime-agent batch run reports."""
 
     return [
-        _materialize_execution_plane_agent_action_run_record(record)
+        _materialize_execution_plane_agent_action_run_record(config, record)
         for record in list_agent_action_batch_runs(
             config,
             run_kind=run_kind,
@@ -2090,7 +2131,48 @@ def get_execution_plane_agent_action_run(
     record = get_agent_action_batch_run(config, run_id)
     if record is None:
         raise KeyError(run_id)
-    return _materialize_execution_plane_agent_action_run_record(record)
+    return _materialize_execution_plane_agent_action_run_record(config, record)
+
+
+def list_execution_plane_runtime_agent_tasks(
+    config: AutopilotConfig,
+    *,
+    task_id: str | None = None,
+    project_id: str | None = None,
+    orchestrator_session_id: str | None = None,
+    runtime_agent_id: str | None = None,
+    status: str | None = None,
+    command: str | None = None,
+    agent_action_run_id: str | None = None,
+) -> list[dict[str, Any]]:
+    """List persisted async runtime-agent tasks with refreshed lifecycle state."""
+
+    tasks = list_runtime_agent_tasks(
+        config,
+        task_id=task_id,
+        project_id=project_id,
+        orchestrator_session_id=orchestrator_session_id,
+        runtime_agent_id=runtime_agent_id,
+        status=status,
+        command=command,
+        agent_action_run_id=agent_action_run_id,
+    )
+    return [
+        _materialize_execution_plane_runtime_agent_task_record(refresh_runtime_agent_task(config, task))
+        for task in tasks
+    ]
+
+
+def get_execution_plane_runtime_agent_task(
+    config: AutopilotConfig,
+    task_id: str,
+) -> dict[str, Any]:
+    """Load one persisted async runtime-agent task."""
+
+    task = get_runtime_agent_task(config, task_id)
+    if task is None:
+        raise KeyError(task_id)
+    return _materialize_execution_plane_runtime_agent_task_record(refresh_runtime_agent_task(config, task))
 
 
 def list_execution_plane_orchestrator_sessions(
@@ -2329,6 +2411,65 @@ def _resolve_execution_plane_orchestrator_session_control_profile(
     }
 
 
+def _build_orchestrator_session_pending_action(
+    session_id: str,
+    recommendations: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    """Select one stable pending-action payload from current control recommendations."""
+
+    if not recommendations:
+        return None
+
+    priority_rank = {"high": 0, "medium": 1, "low": 2}
+    ranked = sorted(
+        enumerate(recommendations),
+        key=lambda item: (priority_rank.get(str(item[1].get("priority") or "medium"), 99), item[0]),
+    )
+    selected = dict(ranked[0][1])
+    operation_payload = selected.get("operation")
+    operation = None
+    if isinstance(operation_payload, dict) and operation_payload:
+        operation = {
+            "type": str(operation_payload.get("type") or "").strip(),
+            "session_id": str(operation_payload.get("session_id") or session_id).strip(),
+            "endpoint": str(operation_payload.get("endpoint") or "").strip(),
+            "mode": str(operation_payload.get("mode") or "").strip(),
+            "payload": dict(operation_payload.get("payload") or {}),
+        }
+    return {
+        "kind": str(selected.get("kind") or "").strip(),
+        "priority": str(selected.get("priority") or "medium").strip() or "medium",
+        "title": str(selected.get("title") or "").strip(),
+        "reason": str(selected.get("reason") or "").strip(),
+        "session_id": session_id,
+        "counts": {
+            str(key): int(value)
+            for key, value in dict(selected.get("counts") or {}).items()
+            if str(key).strip()
+        },
+        "operation": operation,
+    }
+
+
+def _derive_orchestrator_session_runtime_state(
+    session: Any,
+    control: dict[str, Any],
+) -> tuple[str, dict[str, Any] | None]:
+    """Map control state to the explicit idle|running|requires_action contract."""
+
+    if str(session.status) != "open":
+        return "idle", None
+    if str(control.get("state") or "") == "in_progress":
+        return "running", None
+    pending_action = _build_orchestrator_session_pending_action(
+        str(session.id),
+        list(control.get("recommendations") or []),
+    )
+    if pending_action is not None:
+        return "requires_action", pending_action
+    return "idle", None
+
+
 def build_execution_plane_orchestrator_session_control(
     config: AutopilotConfig,
     session_id: str,
@@ -2352,9 +2493,18 @@ def build_execution_plane_orchestrator_session_control(
         for issue in list_issues(config)
         if issue.id in set(session.linked_issue_ids)
     ]
+    async_tasks = list_execution_plane_runtime_agent_tasks(
+        config,
+        orchestrator_session_id=session_id,
+    )
 
     pending_approvals = [approval for approval in approvals if approval.get("status") == "pending"]
     open_issues = [issue for issue in issues if issue.get("status") == "open"]
+    active_async_tasks = [
+        task
+        for task in async_tasks
+        if str(task.get("status") or "") in {"queued", "running"}
+    ]
     safe_actions = [
         action
         for action in actions
@@ -2371,6 +2521,8 @@ def build_execution_plane_orchestrator_session_control(
         state = "closed"
     elif pending_approvals:
         state = "needs_approval"
+    elif active_async_tasks:
+        state = "in_progress"
     elif safe_actions or approval_actions or recommendation_actions:
         state = "actionable"
     elif open_issues:
@@ -2390,6 +2542,21 @@ def build_execution_plane_orchestrator_session_control(
                 "operation": {
                     "type": "inspect_session_approvals",
                     "session_id": session_id,
+                },
+            }
+        )
+    if active_async_tasks:
+        recommendations.append(
+            {
+                "kind": "inspect_background_tasks",
+                "priority": "high",
+                "title": "Inspect background tasks",
+                "reason": f"{len(active_async_tasks)} background task(s) are still running; do not treat the session as complete yet.",
+                "counts": {"active_async_tasks": len(active_async_tasks)},
+                "operation": {
+                    "type": "inspect_background_tasks",
+                    "session_id": session_id,
+                    "endpoint": f"/api/execution-plane/agents/tasks?orchestrator_session_id={session_id}&status=running",
                 },
             }
         )
@@ -2492,11 +2659,28 @@ def build_execution_plane_orchestrator_session_control(
             }
         )
 
+    runtime_state, pending_action = _derive_orchestrator_session_runtime_state(
+        session,
+        {
+            "state": state,
+            "recommendations": recommendations,
+        },
+    )
+    session = update_orchestrator_session_runtime_state(
+        config,
+        session.id,
+        runtime_state=runtime_state,
+        pending_action=pending_action,
+    )
+
     return {
         "state": state,
+        "session_state": session.runtime_state,
+        "pending_action": session.pending_action,
         "counts": {
             "pending_approvals": len(pending_approvals),
             "open_issues": len(open_issues),
+            "active_async_tasks": len(active_async_tasks),
             "safe_actions": len(safe_actions),
             "approval_required_actions": len(approval_actions),
             "recommendation_actions": len(recommendation_actions),
@@ -3061,8 +3245,6 @@ def get_execution_plane_orchestrator_session(
         config,
         orchestrator_session_id=session_id,
     )
-    all_events = list_execution_plane_orchestrator_session_events(config, session_id, limit=None)
-    events = all_events[-event_limit:] if event_limit > 0 else []
     approvals = [
         approval.model_dump()
         for approval in list_approvals(config)
@@ -3073,7 +3255,14 @@ def get_execution_plane_orchestrator_session(
         for issue in list_issues(config)
         if issue.id in set(session.linked_issue_ids)
     ]
+    async_tasks = list_execution_plane_runtime_agent_tasks(
+        config,
+        orchestrator_session_id=session_id,
+    )
+    all_events = list_execution_plane_orchestrator_session_events(config, session_id, limit=None)
+    events = all_events[-event_limit:] if event_limit > 0 else []
     control = build_execution_plane_orchestrator_session_control(config, session_id)
+    session = get_orchestrator_session(config, session_id) or session
     event_by_name: dict[str, int] = {}
     event_by_status: dict[str, int] = {}
     for event in all_events:
@@ -3087,6 +3276,7 @@ def get_execution_plane_orchestrator_session(
         "control_passes": control_passes,
         "approvals": approvals,
         "issues": issues,
+        "async_tasks": async_tasks,
         "events": events,
         "control": control,
         "summary": {
@@ -3096,6 +3286,10 @@ def get_execution_plane_orchestrator_session(
             "pending_approval_count": sum(1 for approval in approvals if approval.get("status") == "pending"),
             "issue_count": len(issues),
             "open_issue_count": sum(1 for issue in issues if issue.get("status") == "open"),
+            "async_task_count": len(async_tasks),
+            "active_async_task_count": sum(
+                1 for task in async_tasks if str(task.get("status") or "") in {"queued", "running"}
+            ),
             "event_count": len(all_events),
             "event_limit": event_limit,
             "latest_event_at": all_events[-1]["timestamp"] if all_events else None,
@@ -3309,6 +3503,11 @@ def get_execution_plane_agent_detail(
         project_id=parsed.project_id,
         runtime_agent_id=runtime_agent_id,
     )]
+    async_tasks = list_execution_plane_runtime_agent_tasks(
+        config,
+        project_id=parsed.project_id,
+        runtime_agent_id=runtime_agent_id,
+    )
     events = list_execution_plane_events(
         config,
         project_id=parsed.project_id,
@@ -3316,7 +3515,7 @@ def get_execution_plane_agent_detail(
         limit=event_limit,
     )
 
-    if current_agent is None and not issues and not approvals and not events:
+    if current_agent is None and not issues and not approvals and not async_tasks and not events:
         raise KeyError(runtime_agent_id)
 
     story = next((item for item in stories if int(item["id"]) == parsed.story_id), None)
@@ -3410,11 +3609,16 @@ def get_execution_plane_agent_detail(
             "open_issue_count": sum(1 for issue in issues if issue.get("status") == "open"),
             "approval_count": len(approvals),
             "pending_approval_count": sum(1 for approval in approvals if approval.get("status") == "pending"),
+            "async_task_count": len(async_tasks),
+            "active_async_task_count": sum(
+                1 for task in async_tasks if str(task.get("status") or "") in {"queued", "running"}
+            ),
             "event_count": len(events),
             "last_event_at": events[-1].get("timestamp") if events else None,
         },
         "issues": issues,
         "approvals": approvals,
+        "async_tasks": async_tasks,
         "events": events,
     }
 
@@ -3470,6 +3674,204 @@ SUPPORTED_AGENT_ACTION_EXECUTION_MODES = {
     "execute_now",
     "request_approval",
 }
+EXECUTION_COMMAND_TOOL_DESCRIPTIONS: dict[str, str] = {
+    "launch": "Launch a project run from the execution-plane control surface.",
+    "pause": "Pause the active project run.",
+    "resume": "Resume a paused or stopped project run.",
+    "archive": "Archive the project from the execution plane.",
+    "update_budget_policy": "Update the project runtime budget policy.",
+}
+
+
+def _execution_command_tool_name(command: str) -> str:
+    return f"execution.{command}"
+
+
+def _execution_command_policy_reasons(
+    policy: dict[str, Any],
+    *,
+    command: str,
+    payload: dict[str, Any] | None = None,
+) -> list[str]:
+    payload = payload or {}
+    reasons: list[str] = []
+
+    if command in policy.get("approval_required_commands", []):
+        reasons.append(f"`{command}` is configured to always require approval.")
+
+    if command == "launch":
+        launch_profile = payload.get("launch_profile") or {}
+        if (
+            policy.get("parallel_launch_requires_approval")
+            and launch_profile.get("project_concurrency_mode") == "parallel"
+        ):
+            reasons.append("Parallel project launch requires approval under current policy.")
+        max_parallel_stories = int(launch_profile.get("max_parallel_stories") or 1)
+        if max_parallel_stories > int(policy.get("max_parallel_stories_without_approval") or 1):
+            reasons.append(
+                "Requested parallel story fan-out exceeds the non-approved threshold "
+                f"({max_parallel_stories} > {policy['max_parallel_stories_without_approval']})."
+            )
+
+    if command == "update_budget_policy":
+        budget_policy = payload.get("budget_policy") or {}
+        if (
+            policy.get("disable_auto_pause_requires_approval")
+            and budget_policy.get("auto_pause_on_exhaustion") is False
+        ):
+            reasons.append("Disabling auto-pause on budget exhaustion requires approval.")
+        threshold_map = {
+            "project_max_worker_iterations": "project_max_worker_iterations_without_approval",
+            "project_max_critic_reviews": "project_max_critic_reviews_without_approval",
+            "run_max_worker_iterations": "run_max_worker_iterations_without_approval",
+            "run_max_critic_reviews": "run_max_critic_reviews_without_approval",
+            "story_max_worker_iterations": "story_max_worker_iterations_without_approval",
+            "story_max_critic_reviews": "story_max_critic_reviews_without_approval",
+            "agent_max_worker_iterations": "agent_max_worker_iterations_without_approval",
+            "agent_max_critic_reviews": "agent_max_critic_reviews_without_approval",
+            "run_max_runtime_seconds": "run_max_runtime_seconds_without_approval",
+            "story_max_runtime_seconds": "story_max_runtime_seconds_without_approval",
+        }
+        for requested_key, threshold_key in threshold_map.items():
+            requested_value = budget_policy.get(requested_key)
+            if requested_value is None:
+                continue
+            if int(requested_value) > int(policy.get(threshold_key) or 0):
+                reasons.append(
+                    f"`{requested_key}` exceeds the non-approved threshold "
+                    f"({requested_value} > {policy[threshold_key]})."
+                )
+    return reasons
+
+
+def _execution_command_permission_context(
+    config: AutopilotConfig,
+    *,
+    project_id: str,
+    command: str,
+    payload: dict[str, Any] | None = None,
+    mode: str = "default",
+) -> Any:
+    context = load_tool_permission_context(config, project_id=project_id)
+    if mode != "default":
+        context = context.model_copy(update={"mode": mode})
+    reasons = _execution_command_policy_reasons(
+        load_project_command_policy(config, project_id),
+        command=command,
+        payload=payload,
+    )
+    if not reasons:
+        return context
+
+    tool_name = _execution_command_tool_name(command)
+    always_ask_rules = {key: list(values) for key, values in context.always_ask_rules.items()}
+    serialized_rule = permission_rule_value_to_string(PermissionRuleValue(tool_name=tool_name))
+    project_policy_rules = list(always_ask_rules.get("project_policy", []))
+    if serialized_rule not in project_policy_rules:
+        project_policy_rules.append(serialized_rule)
+    always_ask_rules["project_policy"] = project_policy_rules
+    tool_reasons = {key: list(values) for key, values in context.tool_reasons.items()}
+    tool_reasons[tool_name] = reasons
+    return context.model_copy(update={"always_ask_rules": always_ask_rules, "tool_reasons": tool_reasons})
+
+
+def _build_execution_command_tool(
+    config: AutopilotConfig,
+    *,
+    project_id: str,
+    command: str,
+) -> Any:
+    if command not in SUPPORTED_EXECUTION_COMMANDS:
+        raise ValueError(f"Unsupported execution-plane command: {command}")
+    return build_tool(
+        name=_execution_command_tool_name(command),
+        description=EXECUTION_COMMAND_TOOL_DESCRIPTIONS[command],
+        input_schema={"type": "object", "properties": {}},
+        execute=lambda tool_input, use_context: _execute_execution_plane_command_impl(
+            config,
+            project_id=project_id,
+            command=command,
+            payload=tool_input,
+            use_context=use_context,
+        ),
+        kind="execution_command",
+        scope="project",
+        approval_policy="policy",
+        metadata={"project_id": project_id, "command": command},
+    )
+
+
+def _execute_execution_plane_command_impl(
+    config: AutopilotConfig,
+    *,
+    project_id: str,
+    command: str,
+    payload: dict[str, Any] | None,
+    use_context: ToolUseContext,
+) -> ToolResult:
+    del use_context
+
+    payload = payload or {}
+    result: dict[str, Any] = {
+        "project_id": project_id,
+        "command": command,
+    }
+    if command == "launch":
+        launched, log_path, message = launch_project_run(
+            config,
+            project_id,
+            launch_profile=payload.get("launch_profile"),
+        )
+        result.update(
+            {
+                "status": "ok" if launched else "error",
+                "launched": launched,
+                "message": message,
+                "log_path": str(log_path) if log_path else "",
+            }
+        )
+    elif command == "pause":
+        result.update(
+            {
+                "status": "ok",
+                "message": pause_project_run(config, project_id),
+            }
+        )
+    elif command == "resume":
+        launched, log_path, message = resume_project_run(config, project_id)
+        result.update(
+            {
+                "status": "ok" if launched else "error",
+                "launched": launched,
+                "message": message,
+                "log_path": str(log_path) if log_path else "",
+            }
+        )
+    elif command == "archive":
+        archived = archive_project(config, project_id)
+        result.update(
+            {
+                "status": "ok",
+                "archived": True,
+                "message": f"Archived {archived['name']}",
+            }
+        )
+    elif command == "update_budget_policy":
+        policy = update_project_budget_policy(config, project_id, **(payload.get("budget_policy") or {}))
+        state = load_project_state(config, project_id)
+        result.update(
+            {
+                "status": "ok",
+                "message": "Budget policy updated.",
+                "budget_policy": policy,
+                "budget_usage": state.get("budget_usage"),
+            }
+        )
+    return ToolResult(
+        status=str(result.get("status") or "ok"),
+        message=str(result.get("message") or ""),
+        payload=result,
+    )
 
 
 def create_execution_command_approval(
@@ -3619,6 +4021,10 @@ def execute_execution_plane_agent_action(
         project_id=project_id,
         command=command,
         payload=payload,
+        actor=actor,
+        orchestrator_session_id=normalized_session_id,
+        runtime_agent_ids=[str(action["runtime_agent_id"])],
+        reason=action_reason,
     )
     emit_project_event(
         config,
@@ -3674,7 +4080,7 @@ def execute_execution_plane_agent_action_with_run(
                 raise RuntimeError(
                     f"Idempotency key `{normalized_idempotency_key}` was already used for a different runtime-agent action request."
                 )
-            return _execution_plane_agent_action_run_response(existing, idempotent_replay=True)
+            return _execution_plane_agent_action_run_response(config, existing, idempotent_replay=True)
 
     action = get_execution_plane_agent_action(config, action_key)
     result = execute_execution_plane_agent_action(
@@ -3784,7 +4190,12 @@ def execute_execution_plane_agent_action_with_run(
             "runtime_agent_ids": [str(action.get("runtime_agent_id") or "")] if str(action.get("runtime_agent_id") or "").strip() else [],
         },
     )
-    return _execution_plane_agent_action_run_response(run, idempotent_replay=False)
+    task_id = str((result.get("async_task") or {}).get("id") or "")
+    if task_id:
+        link_runtime_agent_task_run(config, task_id, agent_action_run_id=run.id)
+        run.results = _refresh_result_async_tasks(config, run.results)
+        run = save_agent_action_batch_run(config, run)
+    return _execution_plane_agent_action_run_response(config, run, idempotent_replay=False)
 
 
 def execute_execution_plane_agent_actions(
@@ -3879,7 +4290,7 @@ def execute_execution_plane_agent_actions(
                 raise RuntimeError(
                     f"Idempotency key `{normalized_idempotency_key}` was already used for a different batch action request."
                 )
-            return _execution_plane_agent_action_batch_run_response(existing, idempotent_replay=True)
+            return _execution_plane_agent_action_batch_run_response(config, existing, idempotent_replay=True)
 
     selected_actions: list[dict[str, Any]]
     if normalized_keys:
@@ -4223,6 +4634,12 @@ def execute_execution_plane_agent_actions(
         run_updated = True
     if run_updated:
         run = save_agent_action_batch_run(config, run)
+    for result in results:
+        task_id = str((result.get("async_task") or {}).get("id") or "")
+        if task_id:
+            link_runtime_agent_task_run(config, task_id, agent_action_run_id=run.id)
+    run.results = _refresh_result_async_tasks(config, run.results)
+    run = save_agent_action_batch_run(config, run)
     if normalized_session_id:
         linked_approval_ids = [
             str(result.get("approval", {}).get("id") or "")
@@ -4244,7 +4661,47 @@ def execute_execution_plane_agent_actions(
             linked_runtime_agent_ids=sorted(runtime_agent_ids),
         )
     _emit_execution_plane_agent_action_batch_run_events(config, run)
-    return _execution_plane_agent_action_batch_run_response(run, idempotent_replay=False)
+    return _execution_plane_agent_action_batch_run_response(config, run, idempotent_replay=False)
+
+
+def _attach_execution_plane_runtime_agent_task(
+    config: AutopilotConfig,
+    *,
+    project_id: str,
+    command: str,
+    actor: str,
+    result: dict[str, Any],
+    orchestrator_session_id: str = "",
+    runtime_agent_ids: list[str] | None = None,
+    reason: str = "",
+    approval_id: str = "",
+    issue_id: str = "",
+) -> dict[str, Any]:
+    normalized_command = str(command or "").strip()
+    if normalized_command not in {"launch", "resume"}:
+        return result
+    if not bool(result.get("launched")):
+        return result
+
+    task = create_or_reuse_runtime_agent_task(
+        config,
+        project_id=project_id,
+        command=normalized_command,
+        actor=actor,
+        reason=reason,
+        orchestrator_session_id=orchestrator_session_id,
+        runtime_agent_ids=runtime_agent_ids,
+        output_path=str(result.get("log_path") or ""),
+        approval_id=approval_id,
+        issue_id=issue_id,
+    )
+    payload = dict(result)
+    payload["async_task"] = _materialize_execution_plane_runtime_agent_task_record(task)
+    payload["async_task_id"] = task.id
+    base_message = str(payload.get("message") or "").strip()
+    honesty_suffix = f"Async task `{task.id}` is running; final completion is not available yet."
+    payload["message"] = f"{base_message} {honesty_suffix}".strip() if base_message else honesty_suffix
+    return payload
 
 
 def execute_execution_plane_command(
@@ -4253,6 +4710,13 @@ def execute_execution_plane_command(
     project_id: str,
     command: str,
     payload: dict[str, Any] | None = None,
+    actor: str = "",
+    permission_mode: str = "default",
+    orchestrator_session_id: str = "",
+    runtime_agent_ids: list[str] | None = None,
+    reason: str = "",
+    approval_id: str = "",
+    issue_id: str = "",
 ) -> dict[str, Any]:
     """Execute one explicit external control-plane command against a project."""
 
@@ -4261,65 +4725,43 @@ def execute_execution_plane_command(
     if get_project_entry(config, project_id=project_id, include_archived=True) is None:
         raise KeyError(project_id)
 
-    payload = payload or {}
-    result: dict[str, Any] = {
-        "project_id": project_id,
-        "command": command,
-    }
-    if command == "launch":
-        launched, log_path, message = launch_project_run(
-            config,
-            project_id,
-            launch_profile=payload.get("launch_profile"),
-        )
-        result.update(
-            {
-                "status": "ok" if launched else "error",
-                "launched": launched,
-                "message": message,
-                "log_path": str(log_path) if log_path else "",
-            }
-        )
-    elif command == "pause":
-        result.update(
-            {
-                "status": "ok",
-                "message": pause_project_run(config, project_id),
-            }
-        )
-    elif command == "resume":
-        launched, log_path, message = resume_project_run(config, project_id)
-        result.update(
-            {
-                "status": "ok" if launched else "error",
-                "launched": launched,
-                "message": message,
-                "log_path": str(log_path) if log_path else "",
-            }
-        )
-    elif command == "archive":
-        archived = archive_project(config, project_id)
-        result.update(
-            {
-                "status": "ok",
-                "archived": True,
-                "message": f"Archived {archived['name']}",
-            }
-        )
-    elif command == "update_budget_policy":
-        policy = update_project_budget_policy(config, project_id, **(payload.get("budget_policy") or {}))
-        state = load_project_state(config, project_id)
-        result.update(
-            {
-                "status": "ok",
-                "message": "Budget policy updated.",
-                "budget_policy": policy,
-                "budget_usage": state.get("budget_usage"),
-            }
-        )
-
+    tool = _build_execution_command_tool(config, project_id=project_id, command=command)
+    permission_context = _execution_command_permission_context(
+        config,
+        project_id=project_id,
+        command=command,
+        payload=payload,
+        mode=permission_mode,
+    )
+    run_result = run_tool_use(
+        tool,
+        payload or {},
+        ToolUseContext(
+            config=config,
+            actor=actor,
+            project_id=project_id,
+            metadata={"command": command},
+        ),
+        permission_context=permission_context,
+    )
+    if run_result.status == "approval_required":
+        raise RuntimeError(run_result.message or f"Execution command `{command}` requires approval.")
+    if run_result.status in {"denied", "blocked", "error"}:
+        raise RuntimeError(run_result.message or f"Execution command `{command}` failed.")
+    result = dict((run_result.tool_result.payload if run_result.tool_result else {}) or {})
     result["project"] = build_execution_plane_project_detail(config, project_id)
-    return result
+    return _attach_execution_plane_runtime_agent_task(
+        config,
+        project_id=project_id,
+        command=command,
+        actor=actor,
+        result=result,
+        orchestrator_session_id=orchestrator_session_id.strip(),
+        runtime_agent_ids=runtime_agent_ids,
+        reason=reason,
+        approval_id=approval_id,
+        issue_id=issue_id,
+    )
 
 
 def apply_execution_command_approval(
@@ -4341,6 +4783,12 @@ def apply_execution_command_approval(
         project_id=approval.project_id,
         command=approval.action,
         payload=approval.payload,
+        actor=actor,
+        permission_mode="approved",
+        runtime_agent_ids=list(approval.runtime_agent_ids),
+        reason=approval.reason,
+        approval_id=approval.id,
+        issue_id=approval.issue_id,
     )
     if command_result.get("status") != "ok":
         raise RuntimeError(str(command_result.get("message") or f"Execution command `{approval.action}` failed."))

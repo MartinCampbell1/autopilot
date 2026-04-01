@@ -1,5 +1,6 @@
 """API tests for MCP connector and skill-pack registries."""
 
+import json
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -15,6 +16,36 @@ def _build_client(config: AutopilotConfig, monkeypatch) -> TestClient:
     app = FastAPI()
     app.include_router(capabilities_routes.router, prefix="/api/capabilities")
     return TestClient(app)
+
+
+def _write_plugin_manifest(root: Path, *, name: str = "github", version: str = "0.1.0") -> None:
+    (root / ".codex-plugin").mkdir(parents=True, exist_ok=True)
+    (root / "skills" / name).mkdir(parents=True, exist_ok=True)
+    (root / ".app.json").write_text("{}")
+    (root / ".codex-plugin" / "plugin.json").write_text(
+        json.dumps(
+            {
+                "name": name,
+                "version": version,
+                "description": f"{name} plugin",
+                "skills": "./skills/",
+                "apps": "./.app.json",
+                "interface": {
+                    "displayName": name.title(),
+                    "category": "Coding",
+                    "capabilities": ["Interactive", "Write"],
+                },
+            },
+            indent=2,
+        )
+    )
+    (root / "skills" / name / "SKILL.md").write_text(
+        "---\n"
+        f"name: {name}\n"
+        f"description: {name.title()} skill\n"
+        "---\n\n"
+        "# Demo\n"
+    )
 
 
 def test_capabilities_catalog_lists_defaults(tmp_path: Path, monkeypatch) -> None:
@@ -35,6 +66,7 @@ def test_capabilities_catalog_lists_defaults(tmp_path: Path, monkeypatch) -> Non
     assert any(provider["family"] == "codex" for provider in payload["provider_configs"])
     assert any(profile["id"] == "local" for profile in payload["runtime_profiles"])
     assert any(tracker["extension_id"] == "project_state" for tracker in payload["extensions"]["trackers"])
+    assert payload["extensions"]["plugins"] == []
 
 
 def test_capabilities_routes_list_provider_and_runtime_contracts(tmp_path: Path, monkeypatch) -> None:
@@ -61,6 +93,161 @@ def test_capabilities_routes_list_tools_and_extensions(tmp_path: Path, monkeypat
     assert extensions_response.status_code == 200
     assert any(tool["tool_id"] == "shell_exec" for tool in tools_response.json()["tools"])
     assert any(item["extension_id"] == "project_state" for item in extensions_response.json()["trackers"])
+
+
+def test_capabilities_extensions_surface_discovered_plugins_and_enablement(tmp_path: Path, monkeypatch) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    _write_plugin_manifest(config.plugins_dir / "github", name="github")
+    client = _build_client(config, monkeypatch)
+
+    response = client.get("/api/capabilities/extensions")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["lifecycle"][:3] == ["discover", "validate", "enable"]
+    plugin = next(item for item in payload["plugins"] if item["extension_id"] == "github")
+    assert plugin["display_name"] == "Github"
+    assert plugin["metadata"]["enabled"] is True
+    assert plugin["metadata"]["skills_present"] is True
+    assert plugin["metadata"]["skill_count"] == 1
+    assert plugin["metadata"]["validation_status"] == "valid"
+
+    skills_response = client.get("/api/capabilities/plugins/github/skills")
+    assert skills_response.status_code == 200
+    assert skills_response.json()["skills"][0]["skill_id"] == "github:github"
+
+    toggle_response = client.patch("/api/capabilities/plugins/github", json={"enabled": False})
+    assert toggle_response.status_code == 200
+    assert toggle_response.json()["plugin"]["enabled"] is False
+
+    list_response = client.get("/api/capabilities/plugins")
+    assert list_response.status_code == 200
+    assert any(item["plugin_id"] == "github" and item["enabled"] is False for item in list_response.json()["plugins"])
+
+
+def test_capabilities_plugin_options_and_commands_routes(tmp_path: Path, monkeypatch) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    plugin_root = config.plugins_dir / "deploy"
+    (plugin_root / ".codex-plugin").mkdir(parents=True, exist_ok=True)
+    (plugin_root / "commands").mkdir(parents=True, exist_ok=True)
+    (plugin_root / ".app.json").write_text("{}")
+    (plugin_root / ".codex-plugin" / "plugin.json").write_text(
+        json.dumps(
+            {
+                "name": "deploy",
+                "version": "0.1.0",
+                "description": "deploy plugin",
+                "commands": "./commands/",
+                "apps": "./.app.json",
+                "userConfig": {
+                    "projectId": {"type": "string", "required": True},
+                    "apiToken": {"type": "string", "required": True, "sensitive": True},
+                },
+                "interface": {"displayName": "Deploy"},
+            },
+            indent=2,
+        )
+    )
+    (plugin_root / "commands" / "review.md").write_text(
+        "---\n"
+        "description: Review deploy readiness.\n"
+        "---\n\n"
+        "Review ${user_config.projectId}\n"
+    )
+    client = _build_client(config, monkeypatch)
+
+    extensions_response = client.get("/api/capabilities/extensions")
+    assert extensions_response.status_code == 200
+    deploy = next(item for item in extensions_response.json()["plugins"] if item["extension_id"] == "deploy")
+    assert deploy["metadata"]["command_count"] == 1
+    assert deploy["metadata"]["option_count"] == 2
+    assert deploy["metadata"]["unconfigured_option_keys"] == ["apiToken", "projectId"]
+
+    options_response = client.get("/api/capabilities/plugins/deploy/options")
+    assert options_response.status_code == 200
+    assert options_response.json()["options"]["unconfigured_keys"] == ["apiToken", "projectId"]
+
+    invalid_response = client.put(
+        "/api/capabilities/plugins/deploy/options",
+        json={"values": {"projectId": "proj-123"}},
+    )
+    assert invalid_response.status_code == 400
+    assert "apiToken" in invalid_response.json()["detail"]["errors"]
+
+    update_response = client.put(
+        "/api/capabilities/plugins/deploy/options",
+        json={"values": {"projectId": "proj-123", "apiToken": "secret-token"}},
+    )
+    assert update_response.status_code == 200
+    assert update_response.json()["options"]["configured_values"]["apiToken"] == "[configured]"
+
+    commands_response = client.get("/api/capabilities/plugins/deploy/commands")
+    assert commands_response.status_code == 200
+    assert commands_response.json()["commands"][0]["command_id"] == "deploy:review"
+
+    command_response = client.get("/api/capabilities/plugins/deploy/commands/deploy:review")
+    assert command_response.status_code == 200
+    assert "proj-123" in command_response.json()["content"]
+
+
+def test_capabilities_plugin_mcp_routes_and_managed_connector_guards(tmp_path: Path, monkeypatch) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    plugin_root = config.plugins_dir / "ops"
+    (plugin_root / ".codex-plugin").mkdir(parents=True, exist_ok=True)
+    (plugin_root / ".app.json").write_text("{}")
+    (plugin_root / ".codex-plugin" / "plugin.json").write_text(
+        json.dumps(
+            {
+                "name": "ops",
+                "version": "0.1.0",
+                "description": "ops plugin",
+                "apps": "./.app.json",
+                "mcpServers": {
+                    "review": {
+                        "type": "stdio",
+                        "command": "node ${CLAUDE_PLUGIN_ROOT}/mcp/review.js",
+                    }
+                },
+                "interface": {"displayName": "Ops"},
+            },
+            indent=2,
+        )
+    )
+    client = _build_client(config, monkeypatch)
+
+    extensions_response = client.get("/api/capabilities/extensions")
+    assert extensions_response.status_code == 200
+    ops = next(item for item in extensions_response.json()["plugins"] if item["extension_id"] == "ops")
+    assert ops["metadata"]["mcp_server_count"] == 1
+
+    mcp_response = client.get("/api/capabilities/plugins/ops/mcp")
+    assert mcp_response.status_code == 200
+    server = mcp_response.json()["mcp_servers"][0]
+    assert server["connector_id"] == "plugin-ops-review"
+
+    connectors = client.get("/api/capabilities/connectors").json()["connectors"]
+    assert any(item["id"] == "plugin-ops-review" and item["managed"] is True for item in connectors)
+
+    overwrite_response = client.post(
+        "/api/capabilities/connectors",
+        json={
+            "id": "plugin-ops-review",
+            "name": "Replacement",
+            "connector_type": "mcp_server",
+            "description": "override",
+            "transport": "stdio",
+            "tags": [],
+            "providers": ["codex"],
+            "risk_level": "medium",
+            "scopes": ["workspace"],
+            "enabled": True,
+            "config": {"command": "echo hacked"},
+        },
+    )
+    assert overwrite_response.status_code == 400
+
+    delete_response = client.delete("/api/capabilities/connectors/plugin-ops-review")
+    assert delete_response.status_code == 400
 
 
 def test_capabilities_extensions_include_configured_tracker_and_notifier_entries(tmp_path: Path, monkeypatch) -> None:

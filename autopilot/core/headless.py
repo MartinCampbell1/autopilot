@@ -3,20 +3,72 @@
 from __future__ import annotations
 
 import json
+import threading
+import uuid
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 import typer
 
+from autopilot.core.structured_io import StructuredIO
+
 RUN_EXIT_SUCCESS = 0
 RUN_EXIT_FAILED = 1
 RUN_EXIT_PRECHECK_FAILED = 2
 RUN_EXIT_PAUSED = 3
 
+_STRUCTURED_IO_LOCK = threading.RLock()
+_ACTIVE_STRUCTURED_IO: StructuredIO | None = None
+
 
 def _utcnow_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def build_headless_session_id(prefix: str = "run") -> str:
+    """Build one opaque session id for structured headless execution."""
+
+    normalized = prefix.strip().replace(" ", "_") or "run"
+    return f"{normalized}_{uuid.uuid4().hex[:12]}"
+
+
+def get_active_structured_io() -> StructuredIO | None:
+    """Return the current global structured headless runtime, if any."""
+
+    with _STRUCTURED_IO_LOCK:
+        return _ACTIVE_STRUCTURED_IO
+
+
+def activate_structured_io(io: StructuredIO | None) -> None:
+    """Register or clear the global structured headless runtime."""
+
+    global _ACTIVE_STRUCTURED_IO
+    with _STRUCTURED_IO_LOCK:
+        _ACTIVE_STRUCTURED_IO = io
+
+
+@contextmanager
+def structured_headless_runtime(
+    *,
+    enabled: bool,
+    session_id: str | None = None,
+    metadata: dict[str, Any] | None = None,
+):
+    """Opt-in structured headless context layered over the legacy headless mode."""
+
+    if not enabled:
+        yield None
+        return
+    runtime = StructuredIO(session_id=session_id or build_headless_session_id(), metadata=metadata)
+    runtime.start_reader_thread()
+    activate_structured_io(runtime)
+    try:
+        yield runtime
+    finally:
+        activate_structured_io(None)
+        runtime.close()
 
 
 def emit_headless_event(
@@ -37,12 +89,25 @@ def emit_headless_event(
     for key, value in extra.items():
         if value is not None:
             payload[key] = value
+    runtime = get_active_structured_io()
+    if runtime is not None:
+        runtime.emit_event(event, data=payload)
+        return
     typer.echo(json.dumps(payload, ensure_ascii=False))
 
 
 def emit_headless_summary(summary: dict[str, Any]) -> None:
     """Emit one structured summary line."""
-    typer.echo(json.dumps({"timestamp": _utcnow_iso(), **summary}, ensure_ascii=False))
+    payload = {"timestamp": _utcnow_iso(), **summary}
+    runtime = get_active_structured_io()
+    if runtime is not None:
+        exit_code = int(payload.get("exit_code", RUN_EXIT_SUCCESS) or RUN_EXIT_SUCCESS)
+        runtime.emit_result(
+            payload,
+            is_error=exit_code in {RUN_EXIT_FAILED, RUN_EXIT_PRECHECK_FAILED},
+        )
+        return
+    typer.echo(json.dumps(payload, ensure_ascii=False))
 
 
 def exit_code_for_state(state: dict[str, Any]) -> int:

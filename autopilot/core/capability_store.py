@@ -25,6 +25,10 @@ class MCPConnector(BaseModel):
     scopes: list[str] = Field(default_factory=list)
     enabled: bool = True
     built_in: bool = False
+    source: str = "registry"
+    managed: bool = False
+    origin_plugin_id: str | None = None
+    origin_server_name: str | None = None
     config: dict = Field(default_factory=dict)
     validation_status: str = "unknown"
     last_validation_result: dict = Field(default_factory=dict)
@@ -755,18 +759,34 @@ def _merge_registry(raw_items: list[dict], defaults: list[BaseModel], model_type
     return list(merged.values())
 
 
-def load_connectors_registry(config: AutopilotConfig) -> list[MCPConnector]:
+def _load_saved_connectors_registry(config: AutopilotConfig) -> list[MCPConnector]:
     if not config.connectors_json_path.exists():
-        return list(DEFAULT_CONNECTORS)
+        return []
     raw = json.loads(config.connectors_json_path.read_text())
     items = raw.get("connectors", []) if isinstance(raw, dict) else raw
-    return _merge_registry(items, DEFAULT_CONNECTORS, MCPConnector)
+    return [MCPConnector.model_validate(item) for item in items]
+
+
+def load_connectors_registry(config: AutopilotConfig) -> list[MCPConnector]:
+    connectors = _merge_registry(
+        [connector.model_dump() for connector in _load_saved_connectors_registry(config)],
+        DEFAULT_CONNECTORS,
+        MCPConnector,
+    )
+    from autopilot.core.plugin_mcp import plugin_mcp_connectors
+
+    managed_connectors = plugin_mcp_connectors(config)
+
+    by_id = {connector.id: connector for connector in connectors}
+    for managed in managed_connectors:
+        by_id[managed.id] = managed
+    return list(by_id.values())
 
 
 def save_connectors_registry(config: AutopilotConfig, connectors: list[MCPConnector]) -> None:
     _atomic_write_json(
         config.connectors_json_path,
-        {"connectors": [connector.model_dump() for connector in connectors]},
+        {"connectors": [connector.model_dump() for connector in connectors if not connector.managed]},
     )
 
 
@@ -778,18 +798,22 @@ def upsert_connector(config: AutopilotConfig, connector: MCPConnector) -> MCPCon
             "last_validation_result": validation.model_dump(),
         }
     )
-    connectors = {item.id: item for item in load_connectors_registry(config)}
+    connectors = {item.id: item for item in _merge_registry(
+        [saved.model_dump() for saved in _load_saved_connectors_registry(config)],
+        DEFAULT_CONNECTORS,
+        MCPConnector,
+    ) if not item.built_in}
     connectors[connector.id] = connector
     save_connectors_registry(config, list(connectors.values()))
     return connector
 
 
 def delete_connector(config: AutopilotConfig, connector_id: str) -> bool:
-    connectors = load_connectors_registry(config)
+    connectors = _load_saved_connectors_registry(config)
     kept: list[MCPConnector] = []
     removed = False
     for connector in connectors:
-        if connector.id == connector_id and not connector.built_in:
+        if connector.id == connector_id and not connector.built_in and not connector.managed:
             removed = True
             continue
         kept.append(connector)

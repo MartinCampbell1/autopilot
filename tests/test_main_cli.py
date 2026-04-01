@@ -18,6 +18,7 @@ def test_run_command_passes_headless_option(monkeypatch) -> None:
         project_id: str | None,
         *,
         headless: bool = False,
+        structured: bool = False,
         schedule: str | None = None,
         max_runs: int | None = None,
     ) -> int:
@@ -27,6 +28,7 @@ def test_run_command_passes_headless_option(monkeypatch) -> None:
                 "prd": prd,
                 "project_id": project_id,
                 "headless": headless,
+                "structured": structured,
                 "schedule": schedule,
                 "max_runs": max_runs,
             }
@@ -43,6 +45,7 @@ def test_run_command_passes_headless_option(monkeypatch) -> None:
         "prd": ".agents/tasks/prd.json",
         "project_id": None,
         "headless": True,
+        "structured": False,
         "schedule": None,
         "max_runs": None,
     }
@@ -51,7 +54,7 @@ def test_run_command_passes_headless_option(monkeypatch) -> None:
 def test_run_command_uses_returned_exit_code(monkeypatch) -> None:
     monkeypatch.setattr(
         "autopilot.cli.run.run",
-        lambda project_path, prd, project_id, *, headless=False, schedule=None, max_runs=None: 3,
+        lambda project_path, prd, project_id, *, headless=False, structured=False, schedule=None, max_runs=None: 3,
     )
 
     result = runner.invoke(app, ["run", "/tmp/project", "--headless"])
@@ -62,8 +65,15 @@ def test_run_command_uses_returned_exit_code(monkeypatch) -> None:
 def test_run_all_command_passes_headless_option(monkeypatch) -> None:
     captured: dict[str, object] = {}
 
-    def fake_run_all(*, headless: bool = False, schedule: str | None = None, max_runs: int | None = None) -> int:
+    def fake_run_all(
+        *,
+        headless: bool = False,
+        structured: bool = False,
+        schedule: str | None = None,
+        max_runs: int | None = None,
+    ) -> int:
         captured["headless"] = headless
+        captured["structured"] = structured
         captured["schedule"] = schedule
         captured["max_runs"] = max_runs
         return 0
@@ -74,6 +84,7 @@ def test_run_all_command_passes_headless_option(monkeypatch) -> None:
 
     assert result.exit_code == 0
     assert captured["headless"] is True
+    assert captured["structured"] is False
     assert captured["schedule"] is None
     assert captured["max_runs"] is None
 
@@ -81,8 +92,14 @@ def test_run_all_command_passes_headless_option(monkeypatch) -> None:
 def test_run_all_command_passes_schedule_options(monkeypatch) -> None:
     captured: dict[str, object] = {}
 
-    def fake_run_all(*, headless: bool = False, schedule: str | None = None, max_runs: int | None = None) -> int:
-        captured.update({"headless": headless, "schedule": schedule, "max_runs": max_runs})
+    def fake_run_all(
+        *,
+        headless: bool = False,
+        structured: bool = False,
+        schedule: str | None = None,
+        max_runs: int | None = None,
+    ) -> int:
+        captured.update({"headless": headless, "structured": structured, "schedule": schedule, "max_runs": max_runs})
         return 0
 
     monkeypatch.setattr("autopilot.cli.run.run_all", fake_run_all)
@@ -92,9 +109,74 @@ def test_run_all_command_passes_schedule_options(monkeypatch) -> None:
     assert result.exit_code == 0
     assert captured == {
         "headless": False,
+        "structured": False,
         "schedule": "6h",
         "max_runs": 3,
     }
+
+
+def test_run_command_passes_structured_option(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_run(
+        project_path: str,
+        prd: str,
+        project_id: str | None,
+        *,
+        headless: bool = False,
+        structured: bool = False,
+        schedule: str | None = None,
+        max_runs: int | None = None,
+    ) -> int:
+        captured.update(
+            {
+                "project_path": project_path,
+                "prd": prd,
+                "project_id": project_id,
+                "headless": headless,
+                "structured": structured,
+                "schedule": schedule,
+                "max_runs": max_runs,
+            }
+        )
+        return 0
+
+    monkeypatch.setattr("autopilot.cli.run.run", fake_run)
+
+    result = runner.invoke(app, ["run", "/tmp/project", "--headless", "--structured"])
+
+    assert result.exit_code == 0
+    assert captured["headless"] is True
+    assert captured["structured"] is True
+
+
+def test_run_all_command_passes_structured_option(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_run_all(
+        *,
+        headless: bool = False,
+        structured: bool = False,
+        schedule: str | None = None,
+        max_runs: int | None = None,
+    ) -> int:
+        captured.update(
+            {
+                "headless": headless,
+                "structured": structured,
+                "schedule": schedule,
+                "max_runs": max_runs,
+            }
+        )
+        return 0
+
+    monkeypatch.setattr("autopilot.cli.run.run_all", fake_run_all)
+
+    result = runner.invoke(app, ["run-all", "--headless", "--structured"])
+
+    assert result.exit_code == 0
+    assert captured["headless"] is True
+    assert captured["structured"] is True
 
 
 def test_init_command_passes_bootstrap_options(monkeypatch) -> None:
