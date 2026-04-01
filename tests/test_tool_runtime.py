@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from autopilot.core.config import AutopilotConfig
@@ -13,6 +14,8 @@ from autopilot.core.tool_permissions import (
     PermissionUpdate,
     apply_permission_update,
     load_tool_permission_context,
+    permission_rule_value_from_string,
+    permission_rule_value_to_string,
     persist_permission_update,
     resolve_tool_permission_decision,
 )
@@ -47,6 +50,65 @@ def test_permission_updates_persist_user_and_project_rules(tmp_path: Path) -> No
     assert config.tool_permissions_json_path.exists()
     assert context.always_ask_rules["user"] == ["execution.pause"]
     assert context.always_deny_rules["project"] == ["execution.archive"]
+
+
+def test_load_tool_permission_context_normalizes_dirty_persisted_rules(tmp_path: Path) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    config.tool_permissions_json_path.parent.mkdir(parents=True, exist_ok=True)
+    config.tool_permissions_json_path.write_text(
+        json.dumps(
+            {
+                "user": {
+                    "mode": "default",
+                    "allow_rules": [],
+                    "deny_rules": [],
+                    "ask_rules": [
+                        " shell_exec( FOO=1 env git status --short ) ",
+                        "shell_exec(git status --short)",
+                        "shell*exec(kubectl apply -f deploy.yaml)",
+                    ],
+                },
+                "projects": {},
+            }
+        )
+    )
+
+    context = load_tool_permission_context(config)
+
+    assert context.always_ask_rules["user"] == ["shell_exec(git status --short)"]
+
+
+def test_load_tool_permission_context_normalizes_legacy_colon_rule_strings(tmp_path: Path) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    config.tool_permissions_json_path.parent.mkdir(parents=True, exist_ok=True)
+    config.tool_permissions_json_path.write_text(
+        json.dumps(
+            {
+                "user": {
+                    "mode": "default",
+                    "allow_rules": [],
+                    "deny_rules": [],
+                    "ask_rules": [
+                        "shell_exec: FOO=1 env git status",
+                        "shell_exec(git status)",
+                    ],
+                },
+                "projects": {},
+            }
+        )
+    )
+
+    context = load_tool_permission_context(config, project_id="proj_123")
+
+    assert context.always_ask_rules["user"] == ["shell_exec(git status)"]
+
+
+def test_permission_rule_string_round_trip_canonicalizes_shell_grammar() -> None:
+    rule_value = permission_rule_value_from_string("shell_exec: FOO=1 env git status --short")
+
+    assert rule_value.tool_name == "shell_exec"
+    assert rule_value.rule_content == "git status --short"
+    assert permission_rule_value_to_string(rule_value) == "shell_exec(git status --short)"
 
 
 def test_tool_runner_permission_hook_can_auto_allow_and_pre_hook_can_mutate_input() -> None:
