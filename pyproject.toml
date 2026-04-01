@@ -3,6 +3,7 @@ name = "autopilot"
 version = "0.1.0"
 description = "Autonomous AI programmer platform with account rotation and critic loops"
 readme = "README.md"
+license = {file = "LICENSE"}
 requires-python = ">=3.12"
 dependencies = [
     "typer>=0.15.0",
@@ -10,6 +11,10 @@ dependencies = [
     "pyyaml>=6.0",
     "pydantic>=2.0",
 ]
+
+[project.urls]
+Repository = "https://github.com/MartinCampbell1/autopilot"
+Issues = "https://github.com/MartinCampbell1/autopilot/issues"
 
 [project.optional-dependencies]
 dev = [
