@@ -616,8 +616,10 @@ export interface OrchestratorSessionControl {
   pending_action?: OrchestratorPendingAction | null;
   counts: {
     pending_approvals: number;
+    pending_tool_permission_runtimes?: number;
     open_issues: number;
     active_async_tasks: number;
+    pending_async_runs?: number;
     safe_actions: number;
     approval_required_actions: number;
     recommendation_actions: number;
