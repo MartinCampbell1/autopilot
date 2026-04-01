@@ -2,24 +2,23 @@
 
 from __future__ import annotations
 
-import threading
+from contextvars import ContextVar
 
 from autopilot.core.structured_io import StructuredIO
 
-_STRUCTURED_IO_LOCK = threading.RLock()
-_ACTIVE_STRUCTURED_IO: StructuredIO | None = None
+_ACTIVE_STRUCTURED_IO: ContextVar[StructuredIO | None] = ContextVar(
+    "autopilot_active_structured_io",
+    default=None,
+)
 
 
 def get_active_structured_io() -> StructuredIO | None:
-    """Return the current global structured headless runtime, if any."""
+    """Return the active structured runtime for the current execution context."""
 
-    with _STRUCTURED_IO_LOCK:
-        return _ACTIVE_STRUCTURED_IO
+    return _ACTIVE_STRUCTURED_IO.get()
 
 
 def activate_structured_io(io: StructuredIO | None) -> None:
-    """Register or clear the global structured headless runtime."""
+    """Register or clear the structured runtime for the current execution context."""
 
-    global _ACTIVE_STRUCTURED_IO
-    with _STRUCTURED_IO_LOCK:
-        _ACTIVE_STRUCTURED_IO = io
+    _ACTIVE_STRUCTURED_IO.set(io)

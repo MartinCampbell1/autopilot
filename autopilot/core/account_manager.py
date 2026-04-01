@@ -3,15 +3,16 @@
 from __future__ import annotations
 
 import json
-import os
 import shutil
 import time
 from dataclasses import asdict
 from pathlib import Path
+from typing import Mapping
 
 from autopilot.core.adapters import get_adapter, list_provider_families
 from autopilot.core.config import AutopilotConfig
 from autopilot.core.models import Profile
+from autopilot.core.runtime_env import build_runtime_base_env
 
 
 class AccountManager:
@@ -174,9 +175,9 @@ class AccountManager:
         shutil.copytree(source_dir, destination)
         return name
 
-    def build_env(self, profile: Profile) -> dict[str, str]:
+    def build_env(self, profile: Profile, base_env: Mapping[str, str] | None = None) -> dict[str, str]:
         """Build environment variables for a CLI invocation using this profile."""
-        env = os.environ.copy()
+        env = build_runtime_base_env(base_env)
         adapter = get_adapter(profile.resolved_adapter_id)
         if self.config is not None and not adapter.requires_managed_profile:
             provider_config = self.config.resolve_provider_config(profile.provider, profile.name)
