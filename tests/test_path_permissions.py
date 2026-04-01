@@ -61,3 +61,31 @@ def test_validate_gate_shell_command_rejects_destructive_find_operator() -> None
 
     assert result.allowed is False
     assert "-delete" in result.reason
+
+
+def test_validate_gate_shell_command_rejects_unc_network_path() -> None:
+    result = validate_gate_shell_command(r"pytest //server/share/tests")
+
+    assert result.allowed is False
+    assert "unc" in result.reason.lower() or "network path" in result.reason.lower()
+
+
+def test_validate_gate_shell_command_rejects_heredoc_syntax() -> None:
+    result = validate_gate_shell_command("cat <<EOF")
+
+    assert result.allowed is False
+    assert "heredoc" in result.reason.lower()
+
+
+def test_validate_gate_shell_command_rejects_dynamic_redirect_target() -> None:
+    result = validate_gate_shell_command("pytest -q > $TMPDIR/out.txt")
+
+    assert result.allowed is False
+    assert "dynamic redirect" in result.reason.lower() or "shell expansion" in result.reason.lower()
+
+
+def test_validate_gate_shell_command_rejects_suspicious_unicode_whitespace() -> None:
+    result = validate_gate_shell_command("pytest\u00a0-q")
+
+    assert result.allowed is False
+    assert "unicode whitespace" in result.reason.lower()

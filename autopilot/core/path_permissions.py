@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 import shlex
 
+from autopilot.core.shell_validation import validate_shell_security
 
 WORKTREE_NAME_PATTERN = re.compile(r"^(?P<name>.+)-story-(?P<story_id>\d+)$")
 SHELL_EXPANSION_PATTERN = re.compile(r"(?P<dynamic>~|\$\(|\$\{|\$[A-Za-z_][A-Za-z0-9_]*|%[A-Za-z_][A-Za-z0-9_]*%|`)")
@@ -107,6 +108,9 @@ def validate_gate_shell_command(command: str) -> ShellCommandValidationResult:
         return ShellCommandValidationResult(False, reason="Gate command is empty.")
     if any(marker in raw_value for marker in ("\r", "\n", "\x00")):
         return ShellCommandValidationResult(False, reason="Gate command contains newline or null-byte control characters.")
+    shell_security_violations = validate_shell_security(raw_value)
+    if shell_security_violations:
+        return ShellCommandValidationResult(False, reason=shell_security_violations[0].reason)
 
     try:
         punctuated_tokens = _shell_tokens(raw_value)
