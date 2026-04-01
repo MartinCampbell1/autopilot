@@ -53,6 +53,7 @@ from autopilot.core.approvals import (
     mark_approval_applied,
     save_approval,
 )
+from autopilot.core.approval_runtime import create_or_reuse_approval_runtime
 from autopilot.core.agent_action_runs import (
     AgentActionBatchRunRecord,
     create_agent_action_batch_run,
@@ -4047,8 +4048,32 @@ def create_execution_command_approval(
     if approval_id:
         approval_record = get_approval(config, approval_id)
         if approval_record is not None:
-            changed = False
             merged_runtime_agent_ids = sorted({*approval_record.runtime_agent_ids, *runtime_agent_ids})
+            approval_runtime = create_or_reuse_approval_runtime(
+                config,
+                key=f"approval:{approval_record.id}",
+                project_id=approval_record.project_id,
+                approval_id=approval_record.id,
+                issue_id=approval_record.issue_id,
+                permission_sync_key=approval_record.permission_sync_key,
+                runtime_agent_ids=merged_runtime_agent_ids,
+                metadata={
+                    "command": command,
+                    "requested_by": approval_record.requested_by,
+                    "reason": approval_record.reason,
+                    "policy_reasons": list(approval_record.policy_reasons),
+                },
+                publish_pending=True,
+                pending_payload={
+                    "command": command,
+                    "requested_by": approval_record.requested_by,
+                    "reason": approval_record.reason,
+                },
+            )
+            changed = False
+            if approval_record.approval_runtime_id != approval_runtime.id:
+                approval_record.approval_runtime_id = approval_runtime.id
+                changed = True
             if merged_runtime_agent_ids != approval_record.runtime_agent_ids:
                 approval_record.runtime_agent_ids = merged_runtime_agent_ids
                 changed = True

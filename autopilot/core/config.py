@@ -212,6 +212,14 @@ class AutopilotConfig:
         return self.control_plane_state_dir / "permission-sync"
 
     @property
+    def approval_runtime_dir(self) -> Path:
+        return self.control_plane_state_dir / "approval-runtime"
+
+    @property
+    def agent_mailbox_dir(self) -> Path:
+        return self.control_plane_state_dir / "agent-mailbox"
+
+    @property
     def tool_results_dir(self) -> Path:
         return self.control_plane_state_dir / "tool-results"
 

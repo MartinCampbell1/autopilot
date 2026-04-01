@@ -9,6 +9,8 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import autopilot.core.permission_sync as permission_sync_module
+from autopilot.core.agent_mailbox import list_agent_mailbox_messages
+from autopilot.core.approval_runtime import get_approval_runtime
 from autopilot.core.approvals import decide_approval, list_approvals, mark_approval_applied
 from autopilot.core.config import AutopilotConfig
 from autopilot.core.control_plane_issues import list_issues, resolve_issue
@@ -475,9 +477,18 @@ def test_execution_command_approval_sync_publishes_decision_and_apply_settlement
 
     assert pending_record is not None
     assert pending_record.metadata["settlement"]["stage"] == "pending"
+    assert approval["approval_runtime_id"]
     assert decided_record is not None
     assert decided_record.metadata["settlement"]["stage"] == "approved"
     assert decided_record.metadata["settlement"]["note"] == "Approved."
     assert applied.status == "applied"
     assert applied_record is not None
     assert applied_record.metadata["settlement"]["stage"] == "applied"
+
+    runtime = get_approval_runtime(config, approval_runtime_id=str(approval["approval_runtime_id"]))
+    mailbox = list_agent_mailbox_messages(config, approval_runtime_id=str(approval["approval_runtime_id"]))
+
+    assert runtime is not None
+    assert runtime.outcome == "approved"
+    assert runtime.metadata["lifecycle"]["stage"] == "applied"
+    assert {message.message_type for message in mailbox} >= {"approval_pending", "approval_approved", "approval_applied"}
