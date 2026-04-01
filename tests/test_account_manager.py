@@ -6,6 +6,7 @@ from pathlib import Path
 
 from autopilot.core.account_manager import AccountManager
 from autopilot.core.config import AutopilotConfig, ProviderConfig
+from autopilot.core.models import Profile
 
 
 class TestAccountManager:
@@ -228,3 +229,64 @@ class TestAccountManager:
 
         assert json.loads(endpoint_env["AUTOPILOT_PROVIDER_CONFIG_JSON"])["endpoint"] == "http://127.0.0.1:11434/v1"
         assert json.loads(command_env["AUTOPILOT_PROVIDER_CONFIG_JSON"])["command"][0] == sys.executable
+
+    def test_build_env_strips_unrelated_parent_env_but_keeps_proxy_and_api_keys(self, tmp_path: Path) -> None:
+        profiles_dir = tmp_path / "profiles"
+        config = AutopilotConfig(
+            autopilot_home_override=str(tmp_path / ".autopilot"),
+            providers=[
+                ProviderConfig(
+                    id="local-openai",
+                    family="openai_compatible",
+                    mode="local",
+                    transport="http",
+                    endpoint="http://127.0.0.1:11434/v1",
+                    auth_strategy="none",
+                    capabilities=["exec", "review", "critic"],
+                )
+            ],
+        )
+        manager = AccountManager(profiles_dir=profiles_dir, config=config)
+        manager.discover()
+        profile = manager.get_next("openai_compatible")
+
+        assert profile is not None
+
+        env = manager.build_env(
+            profile,
+            base_env={
+                "PATH": "/usr/bin:/bin",
+                "HTTPS_PROXY": "http://proxy.internal:8080",
+                "OPENAI_API_KEY": "sk-test",
+                "LANG": "en_US.UTF-8",
+                "SHOULD_NOT_LEAK": "secret",
+            },
+        )
+
+        assert env["PATH"] == "/usr/bin:/bin"
+        assert env["HTTPS_PROXY"] == "http://proxy.internal:8080"
+        assert env["OPENAI_API_KEY"] == "sk-test"
+        assert env["LANG"] == "en_US.UTF-8"
+        assert "SHOULD_NOT_LEAK" not in env
+
+    def test_build_env_uses_managed_runtime_home_without_forwarding_parent_noise(self, tmp_path: Path) -> None:
+        profiles_dir = tmp_path / "profiles"
+        profile_dir = self._create_codex_profile(profiles_dir, "acc1")
+        manager = AccountManager(profiles_dir=profiles_dir)
+        profile = Profile(name="acc1", provider="codex", path=str(profile_dir))
+
+        env = manager.build_env(
+            profile,
+            base_env={
+                "PATH": "/opt/bin",
+                "HOME": "/Users/example",
+                "TERM": "xterm-256color",
+                "RANDOM_SECRET": "do-not-forward",
+            },
+        )
+
+        assert env["PATH"] == "/opt/bin"
+        assert env["TERM"] == "xterm-256color"
+        assert env["CODEX_HOME"] == str(profile_dir)
+        assert env["HOME"] == "/Users/example"
+        assert "RANDOM_SECRET" not in env
