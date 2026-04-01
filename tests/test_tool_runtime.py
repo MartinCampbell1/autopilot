@@ -946,6 +946,81 @@ def test_tool_runner_reuses_existing_tool_permission_runtime_for_same_tool_use_i
     assert len(user_pending_final) == 1
 
 
+def test_tool_runner_waits_for_pending_user_resolution_and_continues(tmp_path: Path) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    executed: list[dict[str, object]] = []
+    tool = build_tool(
+        name="demo.pause",
+        description="Pause demo execution.",
+        approval_policy="policy",
+        execute=lambda tool_input, _: executed.append(dict(tool_input)) or ToolResult(status="ok", payload=tool_input),
+    )
+    permission_context = apply_permission_update(
+        get_empty_tool_permission_context(),
+        PermissionUpdate(
+            type="add_rules",
+            destination="session",
+            behavior="ask",
+            rules=[PermissionRuleValue(tool_name="demo.pause")],
+        ),
+    )
+    approval_runtime_id_holder: dict[str, str] = {}
+    failure_holder: list[str] = []
+
+    def _resolve_later() -> None:
+        deadline = time.monotonic() + 0.5
+        while time.monotonic() < deadline:
+            runtime = get_approval_runtime(
+                config,
+                key="tool-permission:proj_tool_wait:demo.pause:toolu_wait",
+            )
+            if runtime is not None:
+                approval_runtime_id_holder["id"] = runtime.id
+                time.sleep(0.05)
+                try:
+                    resolve_tool_permission_runtime(
+                        config,
+                        runtime.id,
+                        outcome="allow",
+                        actor="founderos",
+                        note="Approved while the tool was waiting.",
+                        source="user",
+                    )
+                except Exception as exc:  # pragma: no cover - test failure path
+                    failure_holder.append(str(exc))
+                return
+            time.sleep(0.01)
+        failure_holder.append("runtime_not_created")
+
+    resolver = threading.Thread(target=_resolve_later, daemon=True)
+    resolver.start()
+    result = run_tool_use(
+        tool,
+        {},
+        ToolUseContext(
+            config=config,
+            actor="tester",
+            project_id="proj_tool_wait",
+            runtime_agent_ids=("proj_tool_wait:1:worker:a",),
+            metadata={
+                "tool_use_id": "toolu_wait",
+                "tool_permission_wait_for_resolution": True,
+                "tool_permission_resolution_timeout_sec": 0.5,
+            },
+        ),
+        permission_context=permission_context,
+    )
+    resolver.join(timeout=1.0)
+
+    assert failure_holder == []
+    assert approval_runtime_id_holder["id"]
+    assert result.status == "ok"
+    assert result.permission is not None
+    assert result.permission.behavior == "allow"
+    assert result.permission.message == "Approved while the tool was waiting."
+    assert executed == [{}]
+
+
 def test_tool_runner_uses_bridge_permission_decision_when_enabled(tmp_path: Path) -> None:
     config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
     runtime = StructuredIO(
@@ -1263,6 +1338,100 @@ def test_tool_runner_bridge_pending_user_keeps_runtime_pending_for_hook_resoluti
     assert approval_runtime.winner_source == "hook:deny-after-bridge-pending-user"
     assert approval_runtime.outcome == "deny"
     assert approval_runtime.metadata["bridge_decision"]["behavior"] == "pending_user"
+
+
+def test_tool_runner_bridge_pending_user_waits_for_resolution_and_continues(tmp_path: Path) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    executed: list[dict[str, object]] = []
+    resolver_threads: list[threading.Thread] = []
+    runtime = StructuredIO(
+        session_id="sess_bridge_wait",
+        input_stream=io.StringIO(""),
+        output_stream=io.StringIO(),
+        metadata={
+            "permission_bridge_mode": "bridge_first",
+            "tool_permission_wait_for_resolution": True,
+            "tool_permission_resolution_timeout_sec": 0.5,
+        },
+    )
+
+    def _on_request(envelope) -> None:
+        approval_runtime = get_approval_runtime(
+            config,
+            key="tool-permission:proj_bridge_wait:demo.write:toolu_bridge_wait",
+        )
+        assert approval_runtime is not None
+
+        def _resolve_later() -> None:
+            time.sleep(0.05)
+            resolve_tool_permission_runtime(
+                config,
+                approval_runtime.id,
+                outcome="allow",
+                actor="founderos",
+                note="Bridge wait approved.",
+                source="user",
+            )
+
+        resolver = threading.Thread(target=_resolve_later, daemon=True)
+        resolver.start()
+        resolver_threads.append(resolver)
+        runtime.inject_control_response(
+            {
+                "type": "control_response",
+                "response": {
+                    "subtype": "success",
+                    "request_id": envelope.request_id,
+                    "response": {
+                        "behavior": "pending_user",
+                        "message": "Bridge wants explicit user review.",
+                        "reasons": ["Bridge requests confirmation."],
+                        "approval_runtime_id": approval_runtime.id,
+                    },
+                },
+            }
+        )
+
+    runtime.set_on_control_request_sent(_on_request)
+    activate_structured_io(runtime)
+    try:
+        tool = build_tool(
+            name="demo.write",
+            description="Write demo payload.",
+            approval_policy="policy",
+            execute=lambda tool_input, _: executed.append(dict(tool_input)) or ToolResult(status="ok", payload=tool_input),
+        )
+        result = run_tool_use(
+            tool,
+            {"value": "original"},
+            ToolUseContext(
+                config=config,
+                actor="tester",
+                project_id="proj_bridge_wait",
+                runtime_agent_ids=("proj_bridge_wait:1:worker:a",),
+                metadata={"tool_use_id": "toolu_bridge_wait"},
+            ),
+            permission_context=get_empty_tool_permission_context(),
+        )
+    finally:
+        activate_structured_io(None)
+        runtime.close()
+    for resolver in resolver_threads:
+        resolver.join(timeout=1.0)
+
+    approval_runtime = get_approval_runtime(
+        config,
+        key="tool-permission:proj_bridge_wait:demo.write:toolu_bridge_wait",
+    )
+
+    assert result.status == "ok"
+    assert result.permission is not None
+    assert result.permission.behavior == "allow"
+    assert result.permission.message == "Bridge wait approved."
+    assert executed == [{"value": "original"}]
+    assert approval_runtime is not None
+    assert approval_runtime.outcome == "allow"
+    assert approval_runtime.winner_source == "user"
 
 
 def test_tool_runner_falls_back_to_local_permission_decision_when_bridge_times_out(tmp_path: Path) -> None:
