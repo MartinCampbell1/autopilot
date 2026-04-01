@@ -16,6 +16,7 @@ GO_SUBCOMMANDS = {"build", "test", "vet"}
 CARGO_SUBCOMMANDS = {"build", "test", "check", "clippy"}
 READ_ONLY_GIT_SUBCOMMANDS = {"diff", "status", "show", "log", "rev-parse", "ls-files"}
 FORBIDDEN_GIT_FLAGS = {"--exec-path", "--output", "--ext-diff"}
+RUFF_MUTATING_FLAGS = {"--fix", "--unsafe-fixes", "--fix-only"}
 
 
 @dataclass(frozen=True)
@@ -75,6 +76,11 @@ def _validate_package_manager(command_name: str, args: Sequence[str]) -> GateCom
 def _validate_python(command_name: str, args: Sequence[str]) -> GateCommandPolicyResult:
     if len(args) >= 2 and args[0] == "-m" and args[1] == "pytest":
         return _allow("verification_safe")
+    if len(args) >= 2 and args[0] == "-m":
+        return _deny(
+            f"Gate command `{command_name}` only allows `-m pytest`, not `-m {args[1]}`.",
+            "unsafe",
+        )
     return _deny(
         f"Gate command `{command_name}` only allows `-m pytest` execution, not arbitrary inline Python.",
         "unsafe",
@@ -83,6 +89,11 @@ def _validate_python(command_name: str, args: Sequence[str]) -> GateCommandPolic
 
 def _validate_ruff(args: Sequence[str]) -> GateCommandPolicyResult:
     if args and args[0] == "check":
+        if any(flag in RUFF_MUTATING_FLAGS for flag in args[1:]):
+            return _deny(
+                "Gate command `ruff check` cannot use mutating fix flags during verification.",
+                "unsafe",
+            )
         return _allow("verification_safe")
     return _deny("Gate command `ruff` only allows the read-only `check` subcommand.", "unsafe")
 
@@ -142,7 +153,7 @@ def validate_gate_command_policy(argv: Sequence[str]) -> GateCommandPolicyResult
         return _validate_go(args)
     if command_name == "git":
         return _validate_git(args)
-    if command_name in {"grep", "diff", "find"}:
+    if command_name in {"grep", "egrep", "fgrep", "rg", "fd", "diff", "find"}:
         return _allow("read_only")
 
     return _deny(
