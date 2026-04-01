@@ -7,7 +7,7 @@ from typing import Any, Callable, Literal
 
 from pydantic import BaseModel, Field
 
-from autopilot.core.approval_runtime import create_or_reuse_approval_runtime, settle_approval_runtime
+from autopilot.core.approval_runtime import annotate_approval_runtime, create_or_reuse_approval_runtime, settle_approval_runtime
 from autopilot.core.tool_contracts import ToolDef, ToolResult, ToolUseContext
 from autopilot.core.tool_permissions import PermissionDecision
 
@@ -123,7 +123,10 @@ def resolve_hook_permission_decision(
         message = hook_output.message or decision.message or f"Tool `{tool_name}` denied by hook."
         return PermissionDecision(behavior="deny", message=message, reasons=list(decision.reasons) or [message])
     message = hook_output.message or decision.message or f"Tool `{tool_name}` requires approval."
-    return PermissionDecision(behavior="ask", message=message, reasons=list(decision.reasons))
+    reasons = list(decision.reasons) or [message]
+    if message not in reasons:
+        reasons.append(message)
+    return PermissionDecision(behavior="pending_hook", message=message, reasons=reasons)
 
 
 def execute_hooks(
@@ -254,27 +257,63 @@ def execute_permission_request_hooks(
         if output.updated_input:
             updated_input.update(output.updated_input)
         if hook_runtime_key and output.permission_behavior:
-            runtime_record = settle_approval_runtime(
-                use_context.config,
-                key=hook_runtime_key,
-                source=f"hook:{record.hook_name}",
-                outcome=output.permission_behavior,
-                message=output.message or resolved.message,
-                payload={
-                    "hook_name": record.hook_name,
-                    "tool_name": tool.name,
-                    "tool_use_id": str(use_context.metadata.get("tool_use_id") or updated_input.get("tool_use_id") or "").strip(),
-                },
-                mailbox_message_type=f"permission_hook_{output.permission_behavior}",
-            )
-            resolved = resolve_hook_permission_decision(
-                resolved,
-                ToolHookOutput(
-                    permission_behavior=runtime_record.outcome if runtime_record.outcome in {"allow", "ask", "deny"} else None,
-                    message=runtime_record.message,
-                ),
-                tool_name=tool.name,
-            )
+            if output.permission_behavior == "ask":
+                annotate_approval_runtime(
+                    use_context.config,
+                    key=hook_runtime_key,
+                    metadata_updates={
+                        "pending": {
+                            "stage": "pending_hook",
+                            "hook_name": record.hook_name,
+                            "tool_name": tool.name,
+                            "tool_use_id": str(
+                                use_context.metadata.get("tool_use_id") or updated_input.get("tool_use_id") or ""
+                            ).strip(),
+                        }
+                    },
+                    payload_updates={
+                        "pending_hook": {
+                            "hook_name": record.hook_name,
+                            "tool_name": tool.name,
+                            "tool_use_id": str(
+                                use_context.metadata.get("tool_use_id") or updated_input.get("tool_use_id") or ""
+                            ).strip(),
+                            "message": output.message or resolved.message,
+                        }
+                    },
+                    mailbox_message_type="permission_hook_pending",
+                    mailbox_payload={
+                        "hook_name": record.hook_name,
+                        "tool_name": tool.name,
+                        "tool_use_id": str(
+                            use_context.metadata.get("tool_use_id") or updated_input.get("tool_use_id") or ""
+                        ).strip(),
+                        "message": output.message or resolved.message,
+                    },
+                )
+                resolved = resolve_hook_permission_decision(resolved, output, tool_name=tool.name)
+            else:
+                runtime_record = settle_approval_runtime(
+                    use_context.config,
+                    key=hook_runtime_key,
+                    source=f"hook:{record.hook_name}",
+                    outcome=output.permission_behavior,
+                    message=output.message or resolved.message,
+                    payload={
+                        "hook_name": record.hook_name,
+                        "tool_name": tool.name,
+                        "tool_use_id": str(use_context.metadata.get("tool_use_id") or updated_input.get("tool_use_id") or "").strip(),
+                    },
+                    mailbox_message_type=f"permission_hook_{output.permission_behavior}",
+                )
+                resolved = resolve_hook_permission_decision(
+                    resolved,
+                    ToolHookOutput(
+                        permission_behavior=runtime_record.outcome if runtime_record.outcome in {"allow", "ask", "deny"} else None,
+                        message=runtime_record.message,
+                    ),
+                    tool_name=tool.name,
+                )
         else:
             resolved = resolve_hook_permission_decision(resolved, output, tool_name=tool.name)
         if not output.continue_execution and not blocked:

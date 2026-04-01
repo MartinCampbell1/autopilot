@@ -140,6 +140,70 @@ def _materialize_pending_classifier_runtime(
     return approval_runtime.id
 
 
+def _materialize_pending_permission_runtime(
+    tool: ToolDef,
+    use_context: ToolUseContext,
+    *,
+    tool_use_id: str,
+    permission_decision: PermissionDecision,
+    stage: str,
+    specific_message_type: str,
+    source: str,
+) -> str:
+    if use_context.config is None or not str(use_context.project_id or "").strip():
+        return ""
+    approval_runtime = create_or_reuse_approval_runtime(
+        use_context.config,
+        key=f"tool-permission:{use_context.project_id}:{tool.name}:{tool_use_id}",
+        project_id=use_context.project_id,
+        runtime_agent_ids=use_context.runtime_agent_ids,
+        metadata={
+            "kind": "tool_permission_request",
+            "tool_name": tool.name,
+            "tool_use_id": tool_use_id,
+            "actor": use_context.actor,
+            "source": source,
+        },
+        publish_pending=True,
+        pending_message_type="tool_permission_pending",
+        pending_payload={
+            "tool_name": tool.name,
+            "tool_use_id": tool_use_id,
+            "message": permission_decision.message,
+            "behavior": permission_decision.behavior,
+        },
+    )
+    annotate_approval_runtime(
+        use_context.config,
+        approval_runtime_id=approval_runtime.id,
+        metadata_updates={
+            "pending": {
+                "stage": stage,
+                "tool_name": tool.name,
+                "tool_use_id": tool_use_id,
+            }
+        },
+        payload_updates={
+            stage: {
+                "tool_name": tool.name,
+                "tool_use_id": tool_use_id,
+                "message": permission_decision.message,
+                "matched_rule": permission_decision.matched_rule,
+                "reasons": list(permission_decision.reasons),
+            }
+        },
+        mailbox_message_type=specific_message_type,
+        mailbox_payload={
+            "tool_name": tool.name,
+            "tool_use_id": tool_use_id,
+            "message": permission_decision.message,
+            "behavior": permission_decision.behavior,
+            "matched_rule": permission_decision.matched_rule,
+        },
+    )
+    return approval_runtime.id
+
+
 def _tool_permission_runtime_key(
     tool: ToolDef,
     use_context: ToolUseContext,
@@ -543,37 +607,43 @@ def run_tool_use(
             hooks=hook_records,
         )
 
-    if permission_decision.behavior == "ask":
-        approval_runtime_id = ""
-        if use_context.config is not None and str(use_context.project_id or "").strip():
-            approval_runtime = create_or_reuse_approval_runtime(
-                use_context.config,
-                key=f"tool-permission:{use_context.project_id}:{tool.name}:{tool_use_id}",
-                project_id=use_context.project_id,
-                runtime_agent_ids=use_context.runtime_agent_ids,
-                metadata={
-                    "kind": "tool_permission_request",
-                    "tool_name": tool.name,
-                    "tool_use_id": tool_use_id,
-                    "actor": use_context.actor,
-                    "source": permission_source,
-                },
-                publish_pending=True,
-                pending_message_type="tool_permission_pending",
-                pending_payload={
-                    "tool_name": tool.name,
-                    "tool_use_id": tool_use_id,
-                    "message": permission_decision.message,
-                    "behavior": permission_decision.behavior,
-                },
-            )
-            approval_runtime_id = approval_runtime.id
+    if permission_decision.behavior == "pending_hook":
+        approval_runtime_id = _materialize_pending_permission_runtime(
+            tool,
+            use_context,
+            tool_use_id=tool_use_id,
+            permission_decision=permission_decision,
+            stage="pending_hook",
+            specific_message_type="tool_permission_hook_pending",
+            source="tool_runner.pending_hook",
+        )
         return ToolRunResult(
             status="approval_required",
             tool_name=tool.name,
             message=permission_decision.message,
             input=normalized_input,
             permission=permission_decision,
+            approval_runtime_id=approval_runtime_id,
+            hooks=hook_records,
+        )
+
+    if permission_decision.behavior == "ask":
+        pending_user_decision = permission_decision.model_copy(update={"behavior": "pending_user"})
+        approval_runtime_id = _materialize_pending_permission_runtime(
+            tool,
+            use_context,
+            tool_use_id=tool_use_id,
+            permission_decision=pending_user_decision,
+            stage="pending_user",
+            specific_message_type="tool_permission_user_pending",
+            source=permission_source,
+        )
+        return ToolRunResult(
+            status="approval_required",
+            tool_name=tool.name,
+            message=pending_user_decision.message,
+            input=normalized_input,
+            permission=pending_user_decision,
             approval_runtime_id=approval_runtime_id,
             hooks=hook_records,
         )

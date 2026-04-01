@@ -470,7 +470,7 @@ def test_tool_runner_permission_classifier_fails_closed_to_prompt_on_long_transc
 
     assert result.status == "approval_required"
     assert result.permission is not None
-    assert result.permission.behavior == "ask"
+    assert result.permission.behavior == "pending_user"
     assert result.permission.rule_source == "classifier"
     assert result.permission.matched_rule == "classifier:transcript_too_long"
     assert "too long" in result.message.lower()
@@ -582,6 +582,129 @@ def test_tool_runner_classifier_pending_keeps_runtime_open_for_hook_resolution(t
     assert runtime.metadata["classifier"]["stage"] == "pending_classifier"
     assert any(message.message_type == "permission_classifier_pending" for message in mailbox)
     assert any(message.message_type == "permission_hook_deny" for message in mailbox)
+
+
+def test_tool_runner_ask_creates_pending_user_runtime_and_mailbox(tmp_path: Path) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    tool = build_tool(
+        name="demo.pause",
+        description="Pause demo execution.",
+        approval_policy="policy",
+        execute=lambda tool_input, _: ToolResult(status="ok", payload=tool_input),
+    )
+    permission_context = apply_permission_update(
+        get_empty_tool_permission_context(),
+        PermissionUpdate(
+            type="add_rules",
+            destination="session",
+            behavior="ask",
+            rules=[PermissionRuleValue(tool_name="demo.pause")],
+        ),
+    )
+
+    result = run_tool_use(
+        tool,
+        {},
+        ToolUseContext(
+            config=config,
+            actor="tester",
+            project_id="proj_tool_ask",
+            runtime_agent_ids=("proj_tool_ask:1:worker:a", "proj_tool_ask:1:review:b"),
+        ),
+        permission_context=permission_context,
+    )
+
+    runtime = get_approval_runtime(config, approval_runtime_id=result.approval_runtime_id)
+    generic_mailbox = list_agent_mailbox_messages(config, project_id="proj_tool_ask", message_type="tool_permission_pending")
+    user_mailbox = list_agent_mailbox_messages(config, project_id="proj_tool_ask", message_type="tool_permission_user_pending")
+
+    assert result.status == "approval_required"
+    assert result.permission is not None
+    assert result.permission.behavior == "pending_user"
+    assert result.approval_runtime_id
+    assert runtime is not None
+    assert runtime.metadata["tool_name"] == "demo.pause"
+    assert runtime.metadata["tool_use_id"].startswith("toolu_")
+    assert runtime.metadata["pending"]["stage"] == "pending_user"
+    assert runtime.runtime_agent_ids == ["proj_tool_ask:1:review:b", "proj_tool_ask:1:worker:a"]
+    assert len(generic_mailbox) == 2
+    assert len(user_mailbox) == 2
+
+
+def test_tool_runner_hook_ask_creates_pending_hook_runtime_and_mailbox(tmp_path: Path) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    tool = build_tool(
+        name="demo.pause",
+        description="Pause demo execution.",
+        approval_policy="policy",
+        execute=lambda tool_input, _: ToolResult(status="ok", payload=tool_input),
+    )
+    permission_context = apply_permission_update(
+        get_empty_tool_permission_context(),
+        PermissionUpdate(
+            type="add_rules",
+            destination="session",
+            behavior="ask",
+            rules=[PermissionRuleValue(tool_name="demo.pause")],
+        ),
+    )
+
+    result = run_tool_use(
+        tool,
+        {},
+        ToolUseContext(
+            config=config,
+            actor="tester",
+            project_id="proj_hook_pending",
+            runtime_agent_ids=("proj_hook_pending:1:worker:a",),
+            metadata={"tool_use_id": "toolu_hook_pending"},
+        ),
+        permission_context=permission_context,
+        hooks=[
+            ToolHookDefinition(
+                name="ask-hook",
+                event="permission_request",
+                handler=lambda _: {
+                    "permission_behavior": "ask",
+                    "message": "Hook wants explicit user review.",
+                },
+            )
+        ],
+    )
+
+    runtime = get_approval_runtime(
+        config,
+        key="tool-permission:proj_hook_pending:demo.pause:toolu_hook_pending",
+    )
+    generic_mailbox = list_agent_mailbox_messages(
+        config,
+        project_id="proj_hook_pending",
+        runtime_agent_id="proj_hook_pending:1:worker:a",
+        message_type="tool_permission_pending",
+    )
+    hook_mailbox = list_agent_mailbox_messages(
+        config,
+        project_id="proj_hook_pending",
+        runtime_agent_id="proj_hook_pending:1:worker:a",
+        message_type="permission_hook_pending",
+    )
+    hook_pending_mailbox = list_agent_mailbox_messages(
+        config,
+        project_id="proj_hook_pending",
+        runtime_agent_id="proj_hook_pending:1:worker:a",
+        message_type="tool_permission_hook_pending",
+    )
+
+    assert result.status == "approval_required"
+    assert result.permission is not None
+    assert result.permission.behavior == "pending_hook"
+    assert result.approval_runtime_id
+    assert runtime is not None
+    assert runtime.metadata["pending"]["stage"] == "pending_hook"
+    assert runtime.payload["pending_hook"]["message"] == "Hook wants explicit user review."
+    assert len(generic_mailbox) == 1
+    assert len(hook_mailbox) == 1
+    assert len(hook_pending_mailbox) == 1
 
 
 def test_repeated_denials_escalate_to_explicit_approval(tmp_path: Path) -> None:
