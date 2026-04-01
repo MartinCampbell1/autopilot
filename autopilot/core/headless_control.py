@@ -198,6 +198,72 @@ class HeadlessControlSession:
             },
         }
 
+    def _materialize_pending_permission_runtime(
+        self,
+        *,
+        tool: Any,
+        request: Any,
+        decision: Any,
+        stage: str,
+        specific_message_type: str,
+        source: str,
+    ) -> str:
+        """Create or update one explicit pending permission runtime for bridge clients."""
+
+        tool_use_id = str(request.tool_use_id or "").strip()
+        agent_id = str(request.agent_id or "").strip()
+        if not tool_use_id or not agent_id:
+            return ""
+        approval_runtime = create_or_reuse_approval_runtime(
+            self.config,
+            key=f"tool-permission:{self.project_id}:{tool.name}:{tool_use_id}",
+            project_id=self.project_id,
+            runtime_agent_ids=[agent_id],
+            metadata={
+                "kind": "tool_permission_request",
+                "tool_name": tool.name,
+                "tool_use_id": tool_use_id,
+                "source": source,
+            },
+            publish_pending=True,
+            pending_message_type="tool_permission_pending",
+            pending_payload={
+                "tool_name": tool.name,
+                "tool_use_id": tool_use_id,
+                "message": decision.message,
+                "behavior": decision.behavior,
+            },
+        )
+        annotate_approval_runtime(
+            self.config,
+            approval_runtime_id=approval_runtime.id,
+            metadata_updates={
+                "pending": {
+                    "stage": stage,
+                    "tool_name": tool.name,
+                    "tool_use_id": tool_use_id,
+                }
+            },
+            payload_updates={
+                stage: {
+                    "tool_name": tool.name,
+                    "tool_use_id": tool_use_id,
+                    "message": decision.message,
+                    "matched_rule": decision.matched_rule,
+                    "reasons": list(decision.reasons),
+                }
+            },
+            mailbox_message_type=specific_message_type,
+            mailbox_payload={
+                "tool_name": tool.name,
+                "tool_use_id": tool_use_id,
+                "message": decision.message,
+                "behavior": decision.behavior,
+                "matched_rule": decision.matched_rule,
+            },
+        )
+        return approval_runtime.id
+
     def can_use_tool_payload(self, request: Any) -> dict[str, Any]:
         """Evaluate a can_use_tool request under the current permission context."""
 
@@ -230,53 +296,49 @@ class HeadlessControlSession:
             source="headless_control.can_use_tool",
         )
         approval_runtime_id = ""
-        if (
-            decision.behavior == "pending_classifier"
-            and str(request.tool_use_id or "").strip()
-            and str(request.agent_id or "").strip()
-        ):
-            approval_runtime = create_or_reuse_approval_runtime(
-                self.config,
-                key=f"tool-permission:{self.project_id}:{tool.name}:{str(request.tool_use_id).strip()}",
-                project_id=self.project_id,
-                runtime_agent_ids=[str(request.agent_id).strip()],
-                metadata={
-                    "kind": "tool_permission_classifier",
-                    "tool_name": tool.name,
-                    "tool_use_id": str(request.tool_use_id).strip(),
-                    "source": "headless_control.classifier",
-                },
+        if decision.behavior == "pending_classifier":
+            approval_runtime_id = self._materialize_pending_permission_runtime(
+                tool=tool,
+                request=request,
+                decision=decision,
+                stage="pending_classifier",
+                specific_message_type="tool_permission_classifier_pending",
+                source="headless_control.classifier",
             )
-            annotate_approval_runtime(
-                self.config,
-                approval_runtime_id=approval_runtime.id,
-                metadata_updates={
-                    "classifier": {
-                        "stage": "pending_classifier",
-                        "mode": str(request.classifier_mode or "deferred"),
-                        "tool_name": tool.name,
-                        "tool_use_id": str(request.tool_use_id).strip(),
-                    }
-                },
-                payload_updates={
-                    "classifier": {
-                        "message": decision.message,
-                        "matched_rule": decision.matched_rule,
-                        "projected_tool_use": render_projected_tool_use(tool, dict(request.input or {})),
-                        "user_text": str(request.user_text or ""),
-                        "decision_reason": str(request.decision_reason or ""),
-                    }
-                },
-                mailbox_message_type="tool_permission_classifier_pending",
-                mailbox_payload={
-                    "tool_name": tool.name,
-                    "tool_use_id": str(request.tool_use_id).strip(),
-                    "message": decision.message,
-                    "behavior": decision.behavior,
-                    "matched_rule": decision.matched_rule,
-                },
+            if approval_runtime_id:
+                annotate_approval_runtime(
+                    self.config,
+                    approval_runtime_id=approval_runtime_id,
+                    metadata_updates={
+                        "classifier": {
+                            "stage": "pending_classifier",
+                            "mode": str(request.classifier_mode or "deferred"),
+                            "tool_name": tool.name,
+                            "tool_use_id": str(request.tool_use_id).strip(),
+                        }
+                    },
+                    payload_updates={
+                        "classifier": {
+                            "message": decision.message,
+                            "matched_rule": decision.matched_rule,
+                            "projected_tool_use": render_projected_tool_use(tool, dict(request.input or {})),
+                            "user_text": str(request.user_text or ""),
+                            "decision_reason": str(request.decision_reason or ""),
+                        }
+                    },
+                )
+        elif decision.behavior == "ask":
+            pending_user_decision = decision.model_copy(update={"behavior": "pending_user"})
+            approval_runtime_id = self._materialize_pending_permission_runtime(
+                tool=tool,
+                request=request,
+                decision=pending_user_decision,
+                stage="pending_user",
+                specific_message_type="tool_permission_user_pending",
+                source="headless_control.user",
             )
-            approval_runtime_id = approval_runtime.id
+            if approval_runtime_id:
+                decision = pending_user_decision
         return {
             "behavior": decision.behavior,
             "message": decision.message,

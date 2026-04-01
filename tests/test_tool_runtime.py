@@ -1074,6 +1074,81 @@ def test_tool_runner_bridge_ask_keeps_runtime_pending_for_hook_resolution(tmp_pa
     assert approval_runtime.metadata["bridge_decision"]["behavior"] == "ask"
 
 
+def test_tool_runner_bridge_pending_user_keeps_runtime_pending_for_hook_resolution(tmp_path: Path) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    permission_runtime = create_or_reuse_approval_runtime(
+        config,
+        key="tool-permission:proj_bridge_pending_user:demo.write:toolu_bridge_pending_user",
+        project_id="proj_bridge_pending_user",
+        runtime_agent_ids=["proj_bridge_pending_user:1:worker:a"],
+    )
+    runtime = StructuredIO(
+        session_id="sess_bridge",
+        input_stream=io.StringIO(""),
+        output_stream=io.StringIO(),
+        metadata={"permission_bridge_mode": "bridge_first"},
+    )
+    runtime.set_on_control_request_sent(
+        lambda envelope: runtime.inject_control_response(
+            {
+                "type": "control_response",
+                "response": {
+                    "subtype": "success",
+                    "request_id": envelope.request_id,
+                    "response": {
+                        "behavior": "pending_user",
+                        "message": "Bridge wants explicit user review.",
+                        "reasons": ["Bridge requests confirmation."],
+                        "approval_runtime_id": permission_runtime.id,
+                    },
+                },
+            }
+        )
+    )
+    activate_structured_io(runtime)
+    try:
+        tool = build_tool(
+            name="demo.write",
+            description="Write demo payload.",
+            approval_policy="policy",
+            execute=lambda tool_input, _: ToolResult(status="ok", payload=tool_input),
+        )
+        result = run_tool_use(
+            tool,
+            {"value": "original"},
+            ToolUseContext(
+                config=config,
+                actor="tester",
+                project_id="proj_bridge_pending_user",
+                runtime_agent_ids=("proj_bridge_pending_user:1:worker:a",),
+                metadata={"tool_use_id": "toolu_bridge_pending_user"},
+            ),
+            permission_context=get_empty_tool_permission_context(),
+            hooks=[
+                ToolHookDefinition(
+                    name="deny-after-bridge-pending-user",
+                    event="permission_request",
+                    handler=lambda _: {"permission_behavior": "deny", "message": "Hook denied after bridge pending user."},
+                )
+            ],
+        )
+    finally:
+        activate_structured_io(None)
+        runtime.close()
+
+    approval_runtime = get_approval_runtime(
+        config,
+        key="tool-permission:proj_bridge_pending_user:demo.write:toolu_bridge_pending_user",
+    )
+
+    assert result.status == "denied"
+    assert approval_runtime is not None
+    assert approval_runtime.id == permission_runtime.id
+    assert approval_runtime.winner_source == "hook:deny-after-bridge-pending-user"
+    assert approval_runtime.outcome == "deny"
+    assert approval_runtime.metadata["bridge_decision"]["behavior"] == "pending_user"
+
+
 def test_tool_runner_falls_back_to_local_permission_decision_when_bridge_times_out(tmp_path: Path) -> None:
     config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
     runtime = StructuredIO(
