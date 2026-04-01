@@ -186,6 +186,7 @@ export function useControlPlaneLinkedSelection({
         resultIndex: entry.resultIndex,
         approvalId: entry.approvalId,
         issueId: entry.issueId,
+        toolPermissionRuntimeId: entry.toolPermissionRuntimeId,
         runtimeAgentId: entry.runtimeAgentId,
         event: entry.event,
       });
@@ -220,12 +221,26 @@ export function useControlPlaneLinkedSelection({
       issueId,
       runtimeAgentId,
     });
+    const preservesSelectedToolPermissionRuntime = Boolean(
+      selectedSessionToolPermissionRuntime &&
+        (
+          (selectedSessionToolPermissionRuntime.approval_id &&
+            selectedSessionToolPermissionRuntime.approval_id === approvalId) ||
+          (selectedSessionToolPermissionRuntime.issue_id &&
+            selectedSessionToolPermissionRuntime.issue_id === issueId)
+        )
+    );
 
     setSelectedSessionApprovalId(approvalId);
     setSelectedSessionIssueId(issueId);
-    setSelectedSessionToolPermissionRuntimeId("");
+    setSelectedSessionToolPermissionRuntimeId((current) =>
+      preservesSelectedToolPermissionRuntime ? current : ""
+    );
     setSelectedSessionEventKey(matchedEvent?.key || "");
     setSelectedSessionContextKind((current) => {
+      if (preservesSelectedToolPermissionRuntime && selectedSessionToolPermissionRuntime) {
+        return "tool_permission_runtime";
+      }
       if (current === "event" && matchedEvent) return "event";
       if (current === "issue" && issueId) return "issue";
       if (current === "approval" && approvalId) return "approval";
@@ -253,6 +268,7 @@ export function useControlPlaneLinkedSelection({
     setSelectedSessionEventKey,
     setSelectedSessionIssueId,
     setSelectedSessionToolPermissionRuntimeId,
+    selectedSessionToolPermissionRuntime,
   ]);
 
   const openSelectedRunResultInTimeline = useCallback(() => {

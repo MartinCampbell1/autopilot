@@ -16,7 +16,11 @@ import {
   sanitizeOperatorVisibilityState,
   visibleEntriesByOperatorVisibilityState,
 } from "@/lib/control-plane-operator-state";
-import { resolveSessionEventFromContext, withSelectedItem } from "@/lib/control-plane-linking";
+import {
+  resolveRunLinkFromContext,
+  resolveSessionEventFromContext,
+  withSelectedItem,
+} from "@/lib/control-plane-linking";
 import {
   SESSION_LINEAGE_QUEUE_KEYS,
   type LineageQueueKind,
@@ -38,6 +42,7 @@ import type {
   ExecutionIssueRecord,
   ExecutionPlaneCountMap,
   OrchestratorSessionDetail,
+  ToolPermissionRuntimeRecord,
 } from "@/lib/types";
 
 type UseControlPlaneSessionLineageModelArgs = {
@@ -48,6 +53,7 @@ type UseControlPlaneSessionLineageModelArgs = {
   selectedSessionId: string;
   selectedRunId: string;
   selectedRunResultIndex: number;
+  selectedSessionToolPermissionRuntimeId: string;
   sessionLineageFilter: string;
   dismissedLineageQueueKeys: Record<LineageQueueKind, string[]>;
   snoozedLineageQueueUntil: Record<LineageQueueKind, Record<string, number>>;
@@ -57,6 +63,35 @@ type UseControlPlaneSessionLineageModelArgs = {
   setExpandedSessionLineageQueues: Dispatch<SetStateAction<LineageQueueKind[]>>;
 };
 
+function formatToolPermissionStage(value?: string | null): string {
+  const normalized = (value || "").trim();
+  if (normalized === "pending_user") return "Waiting for user";
+  if (normalized === "pending_hook") return "Waiting for hook";
+  if (normalized === "pending_classifier") return "Waiting for classifier";
+  return normalized ? normalized.replaceAll("_", " ") : "Pending";
+}
+
+function extractToolPermissionMessage(runtime: ToolPermissionRuntimeRecord): string {
+  const pendingStage = (runtime.pending_stage || "").trim();
+  const stagePayload =
+    pendingStage &&
+    runtime.payload &&
+    typeof runtime.payload === "object" &&
+    !Array.isArray(runtime.payload)
+      ? runtime.payload[pendingStage]
+      : null;
+  if (
+    stagePayload &&
+    typeof stagePayload === "object" &&
+    !Array.isArray(stagePayload) &&
+    typeof (stagePayload as Record<string, unknown>).message === "string" &&
+    (stagePayload as Record<string, string>).message
+  ) {
+    return (stagePayload as Record<string, string>).message;
+  }
+  return runtime.message || "Tool permission request is waiting for review.";
+}
+
 export function useControlPlaneSessionLineageModel({
   approvalById,
   issueById,
@@ -65,6 +100,7 @@ export function useControlPlaneSessionLineageModel({
   selectedSessionId,
   selectedRunId,
   selectedRunResultIndex,
+  selectedSessionToolPermissionRuntimeId,
   sessionLineageFilter,
   dismissedLineageQueueKeys,
   snoozedLineageQueueUntil,
@@ -104,6 +140,7 @@ export function useControlPlaneSessionLineageModel({
           run.updated_at ||
           run.created_at;
         entries.push({
+          kind: "run_result",
           key: `${run.id}:${resultIndex}`,
           runId: run.id,
           resultIndex,
@@ -122,14 +159,71 @@ export function useControlPlaneSessionLineageModel({
           storyId,
           storyTitle,
           event: relatedEventMatch?.event || null,
+          toolPermissionRuntimeId: "",
+          toolPermissionPendingStage: "",
+          toolPermissionToolUseId: "",
         });
+      });
+    });
+    (selectedSession?.tool_permission_runtimes || []).forEach((runtime) => {
+      const runtimeAgentId = runtime.runtime_agent_ids[0] || "";
+      const relatedRunLink = resolveRunLinkFromContext(linkedRuns, {
+        approvalId: runtime.approval_id,
+        issueId: runtime.issue_id,
+        runtimeAgentId,
+      });
+      const relatedResult = relatedRunLink
+        ? asRecord(relatedRunLink.run.results[relatedRunLink.resultIndex])
+        : null;
+      const relatedEventMatch = resolveSessionEventFromContext(selectedSession?.events || [], {
+        runId: relatedRunLink?.run.id || "",
+        resultIndex: relatedRunLink?.resultIndex ?? 0,
+        approvalId: runtime.approval_id,
+        issueId: runtime.issue_id,
+        toolPermissionRuntimeId: runtime.id,
+        runtimeAgentId,
+      });
+      const projectId = relatedResult ? outcomeProjectId(relatedResult) : runtime.project_id;
+      const projectName = relatedResult ? outcomeProjectName(relatedResult) : "";
+      const storyId = relatedResult ? outcomeStoryId(relatedResult) : null;
+      const storyTitle = relatedResult ? outcomeStoryTitle(relatedResult) : "";
+      const pendingStageLabel = formatToolPermissionStage(runtime.pending_stage);
+      const toolUseId = toStringValue(runtime.tool_use_id, runtime.id);
+      const timestamp =
+        toStringValue(relatedEventMatch?.event?.timestamp) ||
+        runtime.updated_at ||
+        runtime.created_at;
+      entries.push({
+        kind: "tool_permission_runtime",
+        key: `tool-permission:${runtime.id}`,
+        runId: relatedRunLink?.run.id || "",
+        resultIndex: relatedRunLink?.resultIndex ?? 0,
+        timestamp,
+        status: toStringValue(runtime.status, "pending"),
+        title: `${toStringValue(runtime.tool_name, "tool")} permission review`,
+        subtitle: `${pendingStageLabel} · use ${toolUseId}`,
+        message: extractToolPermissionMessage(runtime),
+        approvalId: runtime.approval_id || "",
+        issueId: runtime.issue_id || "",
+        eventKey: relatedEventMatch?.key || "",
+        eventName: toStringValue(relatedEventMatch?.event?.event),
+        runtimeAgentId,
+        projectId,
+        projectName,
+        storyId,
+        storyTitle,
+        event: relatedEventMatch?.event || null,
+        toolPermissionRuntimeId: runtime.id,
+        toolPermissionPendingStage: toStringValue(runtime.pending_stage),
+        toolPermissionToolUseId: toolUseId,
       });
     });
     return entries.sort(
       (left, right) =>
         right.timestamp.localeCompare(left.timestamp) ||
         right.runId.localeCompare(left.runId) ||
-        left.resultIndex - right.resultIndex
+        left.resultIndex - right.resultIndex ||
+        right.key.localeCompare(left.key)
     );
   }, [approvalById, issueById, linkedRuns, selectedSession]);
 
@@ -137,6 +231,7 @@ export function useControlPlaneSessionLineageModel({
     selectedSessionId,
     selectedRunId,
     selectedRunResultIndex,
+    selectedSessionToolPermissionRuntimeId,
     sessionLineageEntries,
     sessionLineageFilter,
     selectedSessionLineageEntryRef,
@@ -195,7 +290,10 @@ export function useControlPlaneSessionLineageModel({
   );
 
   const sessionLineageDecisionCount = useMemo(
-    () => sessionLineageEntries.filter((entry) => entry.approvalId || entry.issueId).length,
+    () =>
+      sessionLineageEntries.filter(
+        (entry) => entry.approvalId || entry.issueId || entry.toolPermissionRuntimeId
+      ).length,
     [sessionLineageEntries]
   );
 

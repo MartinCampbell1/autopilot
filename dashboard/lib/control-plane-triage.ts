@@ -78,6 +78,7 @@ export function isAttentionLineageEntry(entry: SessionLineageEntry): boolean {
   const status = entry.status.toLowerCase();
   const eventStatus = toStringValue(asRecord(entry.event)?.status).toLowerCase();
   return (
+    (Boolean(entry.toolPermissionRuntimeId) && status === "pending") ||
     Boolean(entry.issueId) ||
     ["error", "partial", "pending_approval", "failed", "rejected", "blocked", "not_executable"].includes(
       status
@@ -91,7 +92,9 @@ export function matchesSessionLineageFilter(entry: SessionLineageEntry, filter: 
   if (filter === "attention") {
     return isAttentionLineageEntry(entry);
   }
-  if (filter === "decisions") return Boolean(entry.approvalId || entry.issueId);
+  if (filter === "decisions") {
+    return Boolean(entry.approvalId || entry.issueId || entry.toolPermissionRuntimeId);
+  }
   if (filter === "agent-linked") return Boolean(entry.runtimeAgentId);
   return true;
 }
@@ -101,6 +104,9 @@ export function sessionLineageTraits(entry: SessionLineageEntry | null): Session
   return [
     isAttentionLineageEntry(entry)
       ? { key: "attention", label: "Attention", className: "border-[#f4e0c4] bg-[#fff6e8] text-[#9a6700]" }
+      : null,
+    entry.toolPermissionRuntimeId
+      ? { key: "tool-permission", label: "Tool gate", className: "border-[#f4e0c4] bg-[#fff6e8] text-[#9a6700]" }
       : null,
     entry.approvalId || entry.issueId
       ? { key: "decision", label: "Decision-linked", className: "border-[#d3e5ef] bg-[#eef7fb] text-[#2a6690]" }
@@ -252,6 +258,9 @@ export function sessionLineagePriority(entry: SessionLineageEntry): TriagePriori
   ) {
     return "critical";
   }
+  if (entry.toolPermissionRuntimeId && status === "pending") {
+    return "high";
+  }
   if (entry.approvalId || isAttentionLineageEntry(entry)) {
     return "high";
   }
@@ -289,6 +298,23 @@ export function describeSessionQueueAdvanceReason(entry: SessionLineageEntry): Q
   const priority = sessionLineagePriority(entry);
   const status = entry.status.toLowerCase();
   const eventStatus = toStringValue(asRecord(entry.event)?.status).toLowerCase();
+  if (entry.toolPermissionRuntimeId && status === "pending") {
+    const pendingStage = entry.toolPermissionPendingStage
+      ? entry.toolPermissionPendingStage.replaceAll("_", " ")
+      : "review";
+    return {
+      priority,
+      reason: `Tool-permission runtime stays queued because it is still waiting for ${pendingStage}.`,
+      signals: [
+        queueAdvanceSignal(
+          "tool-gate",
+          "Tool gate",
+          "border-[#f4e0c4] bg-[#fff6e8] text-[#9a6700]",
+          "decisions"
+        ),
+      ],
+    };
+  }
   if (entry.issueId) {
     return {
       priority,

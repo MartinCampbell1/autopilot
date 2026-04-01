@@ -108,7 +108,14 @@ export function useControlPlaneRevealFlows({
   );
 
   const findSessionLineageEntryInSession = useCallback((entry: SessionLineageEntry) => {
-    setEntitySearch(entry.runId || entry.issueId || entry.approvalId || entry.title);
+    setEntitySearch(
+      entry.toolPermissionRuntimeId ||
+        entry.toolPermissionToolUseId ||
+        entry.runId ||
+        entry.issueId ||
+        entry.approvalId ||
+        entry.title
+    );
     if (entry.runId) {
       setSelectedRunId(entry.runId);
       setSelectedRunResultIndex(entry.resultIndex);
@@ -122,6 +129,7 @@ export function useControlPlaneRevealFlows({
         resultIndex: entry.resultIndex,
         approvalId: entry.approvalId,
         issueId: entry.issueId,
+        toolPermissionRuntimeId: entry.toolPermissionRuntimeId,
         runtimeAgentId: entry.runtimeAgentId,
         event: entry.event,
       });

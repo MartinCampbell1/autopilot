@@ -17,6 +17,7 @@ type UseControlPlaneSessionLineageSelectionArgs = {
   selectedSessionId: string;
   selectedRunId: string;
   selectedRunResultIndex: number;
+  selectedSessionToolPermissionRuntimeId: string;
   sessionLineageEntries: SessionLineageEntry[];
   sessionLineageFilter: string;
   selectedSessionLineageEntryRef: MutableRefObject<SessionLineageEntry | null>;
@@ -28,6 +29,7 @@ export function useControlPlaneSessionLineageSelection({
   selectedSessionId,
   selectedRunId,
   selectedRunResultIndex,
+  selectedSessionToolPermissionRuntimeId,
   sessionLineageEntries,
   sessionLineageFilter,
   selectedSessionLineageEntryRef,
@@ -35,6 +37,13 @@ export function useControlPlaneSessionLineageSelection({
   setExpandedSessionLineageQueues,
 }: UseControlPlaneSessionLineageSelectionArgs) {
   const selectedSessionLineageEntry = useMemo(() => {
+    if (selectedSessionToolPermissionRuntimeId) {
+      return (
+        sessionLineageEntries.find(
+          (entry) => entry.toolPermissionRuntimeId === selectedSessionToolPermissionRuntimeId
+        ) ?? null
+      );
+    }
     if (selectedRunId) {
       return (
         sessionLineageEntries.find(
@@ -43,7 +52,12 @@ export function useControlPlaneSessionLineageSelection({
       );
     }
     return sessionLineageEntries[0] ?? null;
-  }, [selectedRunId, selectedRunResultIndex, sessionLineageEntries]);
+  }, [
+    selectedRunId,
+    selectedRunResultIndex,
+    selectedSessionToolPermissionRuntimeId,
+    sessionLineageEntries,
+  ]);
 
   useEffect(() => {
     selectedSessionLineageEntryRef.current = selectedSessionLineageEntry;
