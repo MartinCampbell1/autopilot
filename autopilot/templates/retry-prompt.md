@@ -10,8 +10,10 @@ The previous attempt was rejected or incomplete.
 1. Read .ralph/critic-feedback.md - what exactly is wrong
 2. Read .ralph/progress.md - what has already been tried
 3. Read .ralph/guardrails.md - previous mistakes
-4. Read AGENTS.md if it exists
-5. Read any file from disk before editing it; do not patch from memory or stale snippets.
+4. Read .ralph/team-context.json and .ralph/team-messages.json if they exist.
+5. Treat .ralph/team-messages.json as the explicit teammate channel; do not assume arbitrary notes files are shared.
+6. Read AGENTS.md if it exists
+7. Read any file from disk before editing it; do not patch from memory or stale snippets.
 
 ## Your task
 Fix only the outstanding issues from the previous attempt for story #{story_id}.
