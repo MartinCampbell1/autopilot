@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Project roadmap
+    url: https://github.com/MartinCampbell1/autopilot/blob/main/ROADMAP.md
+    about: Check the current release scope and deferred items before proposing large new systems.
+  - name: Product README
+    url: https://github.com/MartinCampbell1/autopilot/blob/main/README.md
+    about: Start here for quickstart, verification baseline, and product positioning.

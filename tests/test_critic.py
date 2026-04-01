@@ -1,6 +1,17 @@
 """Tests for critic runner."""
 
-from autopilot.core.critic import NON_ACTIONABLE_FEEDBACK, build_critic_prompt, feedback_is_actionable, parse_critic_output
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
+
+from autopilot.core.critic import (
+    NON_ACTIONABLE_FEEDBACK,
+    build_critic_prompt,
+    feedback_is_actionable,
+    parse_critic_output,
+    run_critic,
+    run_review_plan,
+)
 
 
 class TestParseCriticOutput:
@@ -97,3 +108,116 @@ class TestBuildCriticPrompt:
         )
         assert "If you cannot identify at least one concrete blocking issue, respond with APPROVED." in prompt
         assert "<concrete issue" not in prompt
+
+    def test_builds_phase_focused_prompt(self) -> None:
+        prompt = build_critic_prompt(
+            story_title="OAuth login",
+            story_description="Add Google OAuth",
+            diff="+ def oauth_callback():\n+     pass",
+            phase="security",
+        )
+        assert "focused security review" in prompt.lower()
+        assert "ignore non-security concerns" in prompt.lower()
+
+
+class TestRunCritic:
+    @patch("autopilot.core.critic.get_adapter")
+    def test_run_critic_uses_adapter_execution(self, mock_get_adapter: MagicMock, tmp_path: Path) -> None:
+        mock_adapter = MagicMock()
+        mock_adapter.provider_family = "codex"
+        mock_adapter.adapter_id = "codex_local"
+        mock_adapter.execute.return_value = SimpleNamespace(
+            timed_out=False,
+            stderr="",
+            diagnostics=None,
+        )
+        mock_adapter.parse_output.return_value = SimpleNamespace(text="APPROVED", rate_limited=False)
+        mock_get_adapter.return_value = mock_adapter
+
+        result = run_critic(
+            prompt="Review this change",
+            provider="codex",
+            env={"CODEX_HOME": str(tmp_path / ".codex")},
+            workdir=Path(tmp_path),
+        )
+
+        assert result.approved is True
+        request = mock_adapter.execute.call_args.args[0]
+        assert request.mode.value == "critic"
+
+
+class TestRunReviewPlan:
+    @patch("autopilot.core.critic.run_critic")
+    def test_run_review_plan_aggregates_multi_phase_failures(self, mock_run_critic: MagicMock, tmp_path: Path) -> None:
+        mock_run_critic.side_effect = [
+            SimpleNamespace(
+                approved=False,
+                feedback="- secret is committed",
+                raw_output="NEEDS_WORK\n- secret is committed",
+                usage={"provider": "codex", "role": "critic", "invocations": 1, "tracked_invocations": 0, "priced_invocations": 0, "input_tokens": 0, "output_tokens": 0, "cached_tokens": 0, "total_tokens": 0, "estimated_cost_usd": 0.0, "pricing_source": "unconfigured"},
+                elapsed_sec=1.2,
+                profile_used="critic",
+                review_results=[],
+            ),
+            SimpleNamespace(
+                approved=True,
+                feedback="",
+                raw_output="APPROVED",
+                usage={"provider": "codex", "role": "critic", "invocations": 1, "tracked_invocations": 0, "priced_invocations": 0, "input_tokens": 0, "output_tokens": 0, "cached_tokens": 0, "total_tokens": 0, "estimated_cost_usd": 0.0, "pricing_source": "unconfigured"},
+                elapsed_sec=0.8,
+                profile_used="critic",
+                review_results=[],
+            ),
+            SimpleNamespace(
+                approved=False,
+                feedback="- missing regression test",
+                raw_output="NEEDS_WORK\n- missing regression test",
+                usage={"provider": "codex", "role": "critic", "invocations": 1, "tracked_invocations": 0, "priced_invocations": 0, "input_tokens": 0, "output_tokens": 0, "cached_tokens": 0, "total_tokens": 0, "estimated_cost_usd": 0.0, "pricing_source": "unconfigured"},
+                elapsed_sec=0.5,
+                profile_used="critic",
+                review_results=[],
+            ),
+        ]
+
+        result = run_review_plan(
+            story_title="OAuth login",
+            story_description="Add Google OAuth",
+            diff="+ def oauth_callback():\n+     pass",
+            provider="codex",
+            env={"CODEX_HOME": str(tmp_path / ".codex")},
+            workdir=tmp_path,
+            review_phases=["security", "architecture", "tests"],
+        )
+
+        assert result.approved is False
+        assert "- [security] secret is committed" in result.feedback
+        assert "- [tests] missing regression test" in result.feedback
+        assert result.review_phases == ["security", "architecture", "tests"]
+        assert len(result.review_results) == 3
+        assert result.usage["invocations"] == 3
+
+    @patch("autopilot.core.critic.run_critic")
+    def test_run_review_plan_keeps_single_review_path_when_no_phases(self, mock_run_critic: MagicMock, tmp_path: Path) -> None:
+        mock_run_critic.return_value = SimpleNamespace(
+            approved=True,
+            feedback="",
+            raw_output="APPROVED",
+            usage={"provider": "codex", "role": "critic", "invocations": 1, "tracked_invocations": 0, "priced_invocations": 0, "input_tokens": 0, "output_tokens": 0, "cached_tokens": 0, "total_tokens": 0, "estimated_cost_usd": 0.0, "pricing_source": "unconfigured"},
+            elapsed_sec=0.5,
+            profile_used="critic",
+            review_results=[],
+        )
+
+        result = run_review_plan(
+            story_title="OAuth login",
+            story_description="Add Google OAuth",
+            diff="+ def oauth_callback():\n+     pass",
+            provider="codex",
+            env={"CODEX_HOME": str(tmp_path / ".codex")},
+            workdir=tmp_path,
+            review_phases=[],
+        )
+
+        assert result.approved is True
+        assert result.review_results == []
+        assert mock_run_critic.call_count == 1

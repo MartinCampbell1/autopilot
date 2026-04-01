@@ -3,9 +3,14 @@
 from autopilot.core.capability_store import (
     DEFAULT_CONNECTORS,
     DEFAULT_ROUTING_POLICIES,
+    ConnectorActivation,
     LaunchProfile,
     MCPConnector,
     RoutingPolicy,
+    build_tool_activation_catalog,
+    build_tool_contract,
+    normalize_launch_profile,
+    normalize_review_phases,
     activate_connector_set,
     resolve_story_runtime_plan,
 )
@@ -26,6 +31,8 @@ def test_frontend_story_prefers_browser_and_twenty_first_dev() -> None:
     story = runtime["story"]
     assert "browser_devtools" in story["connectors"]
     assert "twenty_first_dev" in story["connectors"]
+    assert runtime["story_pipeline"] == ["research", "implement", "review"]
+    assert runtime["review_phases"] == ["security", "architecture", "tests"]
     assert any(member["execution_role"] == "specialist" for member in runtime["team_members"])
 
 
@@ -94,6 +101,35 @@ def test_invalid_required_connector_blocks_activation() -> None:
     assert blocking_errors == ["Broken HTTP: Missing required field `base_url`."]
 
 
+def test_tool_contract_exposes_public_schema_for_connector() -> None:
+    connector = next(item for item in DEFAULT_CONNECTORS if item.id == "shell_exec")
+
+    contract = build_tool_contract(connector)
+
+    assert contract.tool_id == "shell_exec"
+    assert contract.kind == "shell"
+    assert contract.scope == "workspace"
+    assert contract.approval_policy == "manual"
+
+
+def test_tool_activation_catalog_tracks_runtime_tool_state() -> None:
+    activation = ConnectorActivation(
+        id="browser_devtools",
+        name="Browser DevTools",
+        connector_type="builtin",
+        provider="codex",
+        required=False,
+        status="active",
+        reason="Connector activated for runtime planning.",
+    )
+
+    tools = build_tool_activation_catalog([activation], available_connectors=list(DEFAULT_CONNECTORS))
+
+    assert tools[0].tool_id == "browser_devtools"
+    assert tools[0].kind == "browser_devtools"
+    assert tools[0].status == "active"
+
+
 def test_parallel_preset_normalizes_to_team_parallel_mode() -> None:
     runtime = resolve_story_runtime_plan(
         {
@@ -107,3 +143,75 @@ def test_parallel_preset_normalizes_to_team_parallel_mode() -> None:
 
     assert runtime["launch_profile"]["project_concurrency_mode"] == "parallel"
     assert runtime["launch_profile"]["max_parallel_stories"] == 3
+    assert runtime["launch_profile"]["story_pipeline"] == ["research", "implement", "review"]
+    assert runtime["launch_profile"]["review_phases"] == ["security", "architecture", "tests"]
+
+
+def test_local_provider_defaults_runtime_profile_to_local() -> None:
+    profile = normalize_launch_profile({"preset": "team", "provider": "ollama"})
+
+    assert profile.provider == "ollama"
+    assert profile.runtime_profile_id == "local"
+
+
+def test_local_provider_runtime_plan_uses_selected_provider() -> None:
+    runtime = resolve_story_runtime_plan(
+        {
+            "id": 31,
+            "title": "Local backend slice",
+            "description": "Implement a backend slice on a local runtime.",
+            "tags": ["backend", "api"],
+        },
+        launch_profile={"preset": "team", "provider": "ollama", "runtime_profile_id": "local"},
+    )
+
+    assert runtime["launch_profile"]["provider"] == "ollama"
+    assert runtime["launch_profile"]["runtime_profile_id"] == "local"
+    assert all(member["provider"] == "ollama" for member in runtime["team_members"])
+    assert runtime["activation_errors"] == []
+
+
+def test_story_pipeline_override_can_skip_research_even_in_team_mode() -> None:
+    runtime = resolve_story_runtime_plan(
+        {
+            "id": 4,
+            "title": "Backend fix",
+            "description": "Implement a targeted backend fix.",
+            "tags": ["backend", "api"],
+            "pipeline": ["implement", "review"],
+        },
+        launch_profile={"preset": "team"},
+    )
+
+    assert runtime["story_pipeline"] == ["implement", "review"]
+    assert all(member["execution_role"] != "specialist" for member in runtime["team_members"])
+
+
+def test_story_pipeline_override_can_enable_research_from_fast_profile() -> None:
+    runtime = resolve_story_runtime_plan(
+        {
+            "id": 5,
+            "title": "Landing page refactor",
+            "description": "Improve the frontend shell with prior research.",
+            "tags": ["frontend", "ui"],
+            "pipeline": ["research", "implement", "review"],
+        },
+        launch_profile={"preset": "fast"},
+    )
+
+    assert runtime["story_pipeline"] == ["research", "implement", "review"]
+    assert any(member["execution_role"] == "specialist" for member in runtime["team_members"])
+
+
+def test_fast_preset_defaults_to_single_broad_review() -> None:
+    profile = normalize_launch_profile({"preset": "fast"})
+
+    assert profile.review_phases == []
+
+
+def test_review_phase_normalization_deduplicates_aliases() -> None:
+    assert normalize_review_phases(["sec", "architecture", "qa", "tests"]) == [
+        "security",
+        "architecture",
+        "tests",
+    ]

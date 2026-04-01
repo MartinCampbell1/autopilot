@@ -2,13 +2,20 @@
 
 import time
 
+import pytest
+
 from autopilot.core.models import (
     CriticResult,
     GateResult,
     IterationRecord,
     Profile,
+    ReviewPhaseResult,
+    StoryDependencyError,
     StoryStatus,
     is_rate_limited,
+    normalize_story_blocked_by,
+    resolve_story_blocked_on,
+    validate_story_dependencies,
 )
 
 
@@ -50,12 +57,15 @@ class TestGateResult:
         result = GateResult(name="test", cmd="npm test", passed=False, output="1 failed", required=True)
         assert result.passed is False
         assert result.required is True
+        assert result.regression is False
 
 
 class TestCriticResult:
     def test_approved(self) -> None:
         result = CriticResult(approved=True, feedback="", raw_output="APPROVED\nAll looks good.")
         assert result.approved is True
+        assert result.review_phases == []
+        assert result.review_results == []
 
     def test_needs_work(self) -> None:
         result = CriticResult(
@@ -89,6 +99,22 @@ class TestIterationRecord:
         )
         assert record.story_id == 1
         assert record.critic_approved is False
+        assert record.review_phases == []
+        assert record.review_results == []
+        assert record.quality_regression is False
+
+
+class TestReviewPhaseResult:
+    def test_create(self) -> None:
+        result = ReviewPhaseResult(
+            phase="security",
+            approved=False,
+            feedback="- secret is committed",
+            raw_output="NEEDS_WORK\n- secret is committed",
+        )
+
+        assert result.phase == "security"
+        assert result.approved is False
 
 
 class TestRateLimitDetection:
@@ -101,3 +127,38 @@ class TestRateLimitDetection:
 
     def test_ignores_story_text_that_mentions_limited_scope(self) -> None:
         assert not is_rate_limited("The story is limited to creating README.md and notes.txt.")
+
+
+class TestStoryDependencies:
+    def test_normalize_story_blocked_by_deduplicates_ids(self) -> None:
+        assert normalize_story_blocked_by(["1", 2, 2], story_id=3) == [1, 2]
+
+    def test_validate_story_dependencies_rejects_unknown_reference(self) -> None:
+        with pytest.raises(StoryDependencyError, match="depends on unknown stories"):
+            validate_story_dependencies(
+                [
+                    {"id": 1, "blocked_by": []},
+                    {"id": 2, "blocked_by": [99]},
+                ]
+            )
+
+    def test_validate_story_dependencies_rejects_cycles(self) -> None:
+        with pytest.raises(StoryDependencyError, match="cycle detected"):
+            validate_story_dependencies(
+                [
+                    {"id": 1, "blocked_by": [2]},
+                    {"id": 2, "blocked_by": [1]},
+                ]
+            )
+
+    def test_resolve_story_blocked_on_only_returns_unfinished_dependencies(self) -> None:
+        blocked_on = resolve_story_blocked_on(
+            [1, 2, 3],
+            {
+                "1": {"status": "done"},
+                "2": {"status": "skipped"},
+                "3": {"status": "merge_blocked"},
+            },
+        )
+
+        assert blocked_on == [3]

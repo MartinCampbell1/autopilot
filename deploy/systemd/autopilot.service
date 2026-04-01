@@ -1,0 +1,18 @@
+[Unit]
+Description=Autopilot Headless Runner
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=__WORKDIR__
+Environment=AUTOPILOT_HOME=__AUTOPILOT_HOME__
+ExecStart=/bin/sh -lc 'exec "__PYTHON__" -m autopilot run "__AUTOPILOT_PROJECT_PATH__" --project-id "__AUTOPILOT_PROJECT_ID__" --prd "__AUTOPILOT_PRD__" --headless'
+Restart=on-failure
+RestartSec=10
+KillMode=process
+StandardOutput=append:__LOG_PATH__
+StandardError=append:__LOG_PATH__
+
+[Install]
+WantedBy=default.target

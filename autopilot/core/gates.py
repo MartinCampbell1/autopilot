@@ -2,11 +2,37 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 import time
+from collections.abc import Mapping
 from pathlib import Path
 
 from autopilot.core.models import GateResult
+
+
+def _gate_env(workdir: Path, base_env: Mapping[str, str] | None = None) -> dict[str, str]:
+    """Build a gate environment that can see project-local toolchains first."""
+    env = dict(base_env or os.environ)
+    local_bins = [
+        workdir / ".venv" / "bin",
+        workdir / "venv" / "bin",
+        workdir / "env" / "bin",
+        workdir / ".venv" / "Scripts",
+        workdir / "venv" / "Scripts",
+        workdir / "env" / "Scripts",
+        workdir / "node_modules" / ".bin",
+    ]
+    resolved_bins = [str(path) for path in local_bins if path.exists()]
+    existing_path = env.get("PATH", "")
+    env["PATH"] = os.pathsep.join([*resolved_bins, existing_path] if existing_path else resolved_bins)
+
+    for venv_dir in (workdir / ".venv", workdir / "venv", workdir / "env"):
+        if venv_dir.exists():
+            env.setdefault("VIRTUAL_ENV", str(venv_dir))
+            break
+
+    return env
 
 
 def run_single_gate(
@@ -15,6 +41,7 @@ def run_single_gate(
     workdir: Path,
     required: bool = True,
     timeout: int = 120,
+    base_env: Mapping[str, str] | None = None,
 ) -> GateResult:
     """Run a single gate command and return its structured result."""
     started_at = time.time()
@@ -26,6 +53,7 @@ def run_single_gate(
             capture_output=True,
             text=True,
             timeout=timeout,
+            env=_gate_env(workdir, base_env),
         )
         passed = result.returncode == 0
         output = result.stdout + result.stderr
@@ -46,9 +74,16 @@ def run_single_gate(
     )
 
 
-def run_gates(gates_config: list[dict], workdir: Path) -> tuple[bool, list[GateResult]]:
+def run_gates(
+    gates_config: list[dict],
+    workdir: Path,
+    *,
+    quality_baseline: dict[str, bool] | None = None,
+    base_env: Mapping[str, str] | None = None,
+) -> tuple[bool, list[GateResult]]:
     """Run all configured gates and return overall pass state plus details."""
     results: list[GateResult] = []
+    quality_baseline = quality_baseline or {}
 
     for gate in gates_config:
         result = run_single_gate(
@@ -56,7 +91,11 @@ def run_gates(gates_config: list[dict], workdir: Path) -> tuple[bool, list[GateR
             cmd=gate["cmd"],
             workdir=workdir,
             required=gate.get("required", True),
+            base_env=base_env,
         )
+        baseline_passed = quality_baseline.get(result.name)
+        result.baseline_passed = baseline_passed
+        result.regression = bool(result.required and baseline_passed is True and not result.passed)
         results.append(result)
 
     all_required_passed = all(result.passed for result in results if result.required)

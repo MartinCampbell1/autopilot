@@ -1,22 +1,52 @@
 import type {
+  ApprovalApplyResult,
+  ApprovalDecisionResult,
   CapabilitiesCatalog,
   AccountHealth,
   AccountsByProvider,
   ConnectorValidationResult,
   CreateProjectResult,
+  ExecutionAgentActionBatchResult,
+  ExecutionAgentActionExecuteResult,
+  ExecutionAgentActionRunRecord,
+  IssueResolutionResult,
   IntakeSession,
+  SpecBootstrap,
   LaunchResult,
   LaunchProfile,
   LaunchPreset,
+  ExecutionRuntimeAgentDetail,
+  OrchestratorControlPassRecord,
+  OrchestratorControlPassSummary,
+  OrchestratorSessionControlPlanApplyResult,
+  OrchestratorSessionControlProfile,
+  OrchestratorSessionDetail,
+  OrchestratorSessionRecommendationApplyResult,
+  OrchestratorSessionRecord,
+  OrchestratorSessionSummary,
   PRD,
   ProjectDetail,
+  ProjectRuntimeControl,
   ProjectSummary,
   MCPConnector,
   RoutingPolicy,
   SkillPack,
+  TaskSource,
 } from "@/lib/types";
 
 export const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8420/api";
+
+function buildQuery(
+  params: Record<string, string | number | boolean | null | undefined>
+): string {
+  const query = new URLSearchParams();
+  Object.entries(params).forEach(([key, value]) => {
+    if (value === null || value === undefined || value === "") return;
+    query.set(key, String(value));
+  });
+  const rendered = query.toString();
+  return rendered ? `?${rendered}` : "";
+}
 
 async function parseError(res: Response, fallback: string): Promise<never> {
   let detail = fallback;
@@ -50,10 +80,451 @@ export async function fetchProject(projectId: string): Promise<ProjectDetail> {
   return jsonOrThrow<ProjectDetail>(res, `Failed to fetch project: ${res.status}`);
 }
 
+export async function fetchProjectRuntimeControl(
+  projectId: string,
+  options?: { staleAfterSec?: number }
+): Promise<ProjectRuntimeControl> {
+  const staleAfterSec = options?.staleAfterSec ?? 900;
+  const res = await fetch(
+    `${API_BASE}/projects/${encodeURIComponent(projectId)}/runtime-control?stale_after_sec=${staleAfterSec}`
+  );
+  return jsonOrThrow<ProjectRuntimeControl>(res, `Failed to fetch runtime control state: ${res.status}`);
+}
+
+export async function fetchExecutionPlaneOrchestratorSessions(
+  filters?: {
+    sessionId?: string;
+    projectId?: string;
+    initiativeId?: string;
+    orchestrator?: string;
+    actor?: string;
+    status?: string;
+  }
+): Promise<{ sessions: OrchestratorSessionRecord[] }> {
+  const query = buildQuery({
+    session_id: filters?.sessionId,
+    project_id: filters?.projectId,
+    initiative_id: filters?.initiativeId,
+    orchestrator: filters?.orchestrator,
+    actor: filters?.actor,
+    status: filters?.status,
+  });
+  const res = await fetch(`${API_BASE}/execution-plane/orchestrator-sessions${query}`);
+  return jsonOrThrow<{ sessions: OrchestratorSessionRecord[] }>(
+    res,
+    `Failed to fetch orchestrator sessions: ${res.status}`
+  );
+}
+
+export async function fetchExecutionPlaneOrchestratorSessionSummary(
+  filters?: {
+    projectId?: string;
+    initiativeId?: string;
+    orchestrator?: string;
+    actor?: string;
+    status?: string;
+  }
+): Promise<OrchestratorSessionSummary> {
+  const query = buildQuery({
+    project_id: filters?.projectId,
+    initiative_id: filters?.initiativeId,
+    orchestrator: filters?.orchestrator,
+    actor: filters?.actor,
+    status: filters?.status,
+  });
+  const res = await fetch(`${API_BASE}/execution-plane/orchestrator-sessions/summary${query}`);
+  return jsonOrThrow<OrchestratorSessionSummary>(
+    res,
+    `Failed to fetch orchestrator session summary: ${res.status}`
+  );
+}
+
+export async function fetchExecutionPlaneOrchestratorSession(
+  sessionId: string,
+  options?: { eventLimit?: number }
+): Promise<OrchestratorSessionDetail> {
+  const query = buildQuery({
+    event_limit: options?.eventLimit ?? 25,
+  });
+  const res = await fetch(
+    `${API_BASE}/execution-plane/orchestrator-sessions/${encodeURIComponent(sessionId)}${query}`
+  );
+  return jsonOrThrow<OrchestratorSessionDetail>(
+    res,
+    `Failed to fetch orchestrator session detail: ${res.status}`
+  );
+}
+
+export async function fetchExecutionPlaneAgentDetail(
+  runtimeAgentId: string,
+  options?: { eventLimit?: number }
+): Promise<ExecutionRuntimeAgentDetail> {
+  const query = buildQuery({
+    event_limit: options?.eventLimit ?? 25,
+  });
+  const res = await fetch(
+    `${API_BASE}/execution-plane/agents/${encodeURIComponent(runtimeAgentId)}${query}`
+  );
+  return jsonOrThrow<ExecutionRuntimeAgentDetail>(
+    res,
+    `Failed to fetch runtime agent detail: ${res.status}`
+  );
+}
+
+export async function executeExecutionPlaneAgentAction(payload: {
+  actionKey: string;
+  orchestratorSessionId?: string;
+  actor?: string;
+  mode?: string;
+  reason?: string;
+  idempotencyKey?: string;
+}): Promise<ExecutionAgentActionExecuteResult> {
+  const res = await fetch(`${API_BASE}/execution-plane/agents/actions/execute`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      action_key: payload.actionKey,
+      orchestrator_session_id: payload.orchestratorSessionId ?? "",
+      actor: payload.actor ?? "dashboard-control-plane",
+      mode: payload.mode ?? "auto",
+      reason: payload.reason ?? "",
+      idempotency_key: payload.idempotencyKey ?? "",
+    }),
+  });
+  return jsonOrThrow<ExecutionAgentActionExecuteResult>(
+    res,
+    `Failed to execute runtime agent action: ${res.status}`
+  );
+}
+
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.map((item) => (typeof item === "string" ? item.trim() : "")).filter(Boolean)
+    : [];
+}
+
+function numberValue(value: unknown, fallback: number): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function buildExecutionPreviewApplyPayload(
+  run: ExecutionAgentActionRunRecord,
+  payload?: { actor?: string; reason?: string }
+) {
+  const selectedActionKeys = stringArray(run.selection?.selected_action_keys);
+  const previewId = run.preview_id || run.id;
+  return {
+    action_keys: selectedActionKeys,
+    preview_id: previewId,
+    orchestrator_session_id: run.orchestrator_session_id || "",
+    actor: payload?.actor ?? "dashboard-control-plane",
+    mode: run.mode || "auto",
+    reason:
+      payload?.reason ??
+      (run.approval_required
+        ? `Dashboard requested approval from preview ${previewId}`
+        : `Dashboard applied preview ${previewId}`),
+    policy_profile: run.policy_profile || null,
+    include_non_executable: Boolean(run.selection?.include_non_executable),
+    limit: Math.max(selectedActionKeys.length, numberValue(run.selection?.limit, selectedActionKeys.length || 20)),
+    continue_on_error: true,
+  };
+}
+
+export async function executeExecutionPlaneAgentActionBatch(payload: {
+  actionKeys?: string[];
+  previewId?: string;
+  orchestratorSessionId?: string;
+  actor?: string;
+  mode?: string;
+  reason?: string;
+  policyProfile?: string | null;
+  includeNonExecutable?: boolean;
+  limit?: number;
+  continueOnError?: boolean;
+}): Promise<ExecutionAgentActionBatchResult> {
+  const res = await fetch(`${API_BASE}/execution-plane/agents/actions/execute-batch`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      action_keys: payload.actionKeys ?? [],
+      preview_id: payload.previewId ?? "",
+      orchestrator_session_id: payload.orchestratorSessionId ?? "",
+      actor: payload.actor ?? "dashboard-control-plane",
+      mode: payload.mode ?? "auto",
+      reason: payload.reason ?? "",
+      policy_profile: payload.policyProfile ?? null,
+      include_non_executable: payload.includeNonExecutable ?? false,
+      limit: payload.limit ?? 20,
+      continue_on_error: payload.continueOnError ?? true,
+    }),
+  });
+  return jsonOrThrow<ExecutionAgentActionBatchResult>(
+    res,
+    `Failed to execute runtime agent action batch: ${res.status}`
+  );
+}
+
+export async function executeExecutionPlaneOrchestratorSessionActions(
+  sessionId: string,
+  payload: {
+    actionKeys?: string[];
+    previewId?: string;
+    actor?: string;
+    mode?: string;
+    reason?: string;
+    policyProfile?: string | null;
+    includeNonExecutable?: boolean;
+    limit?: number;
+    continueOnError?: boolean;
+  }
+): Promise<ExecutionAgentActionBatchResult> {
+  const res = await fetch(
+    `${API_BASE}/execution-plane/orchestrator-sessions/${encodeURIComponent(sessionId)}/actions/execute`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action_keys: payload.actionKeys ?? [],
+        preview_id: payload.previewId ?? "",
+        actor: payload.actor ?? "dashboard-control-plane",
+        mode: payload.mode ?? "auto",
+        reason: payload.reason ?? "",
+        policy_profile: payload.policyProfile ?? null,
+        include_non_executable: payload.includeNonExecutable ?? false,
+        limit: payload.limit ?? 20,
+        continue_on_error: payload.continueOnError ?? true,
+      }),
+    }
+  );
+  return jsonOrThrow<ExecutionAgentActionBatchResult>(
+    res,
+    `Failed to execute orchestrator session actions: ${res.status}`
+  );
+}
+
+export async function applyExecutionPlanePreviewRun(
+  run: ExecutionAgentActionRunRecord,
+  payload?: { actor?: string; reason?: string }
+): Promise<ExecutionAgentActionBatchResult> {
+  const request = buildExecutionPreviewApplyPayload(run, payload);
+  if (run.orchestrator_session_id) {
+    return executeExecutionPlaneOrchestratorSessionActions(run.orchestrator_session_id, {
+      actionKeys: request.action_keys,
+      previewId: request.preview_id,
+      actor: request.actor,
+      mode: request.mode,
+      reason: request.reason,
+      policyProfile: request.policy_profile,
+      includeNonExecutable: request.include_non_executable,
+      limit: request.limit,
+      continueOnError: request.continue_on_error,
+    });
+  }
+  return executeExecutionPlaneAgentActionBatch({
+    actionKeys: request.action_keys,
+    previewId: request.preview_id,
+    orchestratorSessionId: request.orchestrator_session_id,
+    actor: request.actor,
+    mode: request.mode,
+    reason: request.reason,
+    policyProfile: request.policy_profile,
+    includeNonExecutable: request.include_non_executable,
+    limit: request.limit,
+    continueOnError: request.continue_on_error,
+  });
+}
+
+export async function fetchExecutionPlaneControlPasses(
+  filters?: {
+    orchestratorSessionId?: string;
+    projectId?: string;
+    initiativeId?: string;
+    orchestrator?: string;
+    actor?: string;
+    profile?: string;
+    status?: string;
+  }
+): Promise<{ control_passes: OrchestratorControlPassRecord[] }> {
+  const query = buildQuery({
+    orchestrator_session_id: filters?.orchestratorSessionId,
+    project_id: filters?.projectId,
+    initiative_id: filters?.initiativeId,
+    orchestrator: filters?.orchestrator,
+    actor: filters?.actor,
+    profile: filters?.profile,
+    status: filters?.status,
+  });
+  const res = await fetch(`${API_BASE}/execution-plane/orchestrator-sessions/control/passes${query}`);
+  return jsonOrThrow<{ control_passes: OrchestratorControlPassRecord[] }>(
+    res,
+    `Failed to fetch control passes: ${res.status}`
+  );
+}
+
+export async function fetchExecutionPlaneControlPassSummary(
+  filters?: {
+    orchestratorSessionId?: string;
+    projectId?: string;
+    initiativeId?: string;
+    orchestrator?: string;
+    actor?: string;
+    profile?: string;
+    status?: string;
+  }
+): Promise<OrchestratorControlPassSummary> {
+  const query = buildQuery({
+    orchestrator_session_id: filters?.orchestratorSessionId,
+    project_id: filters?.projectId,
+    initiative_id: filters?.initiativeId,
+    orchestrator: filters?.orchestrator,
+    actor: filters?.actor,
+    profile: filters?.profile,
+    status: filters?.status,
+  });
+  const res = await fetch(`${API_BASE}/execution-plane/orchestrator-sessions/control/passes/summary${query}`);
+  return jsonOrThrow<OrchestratorControlPassSummary>(
+    res,
+    `Failed to fetch control pass summary: ${res.status}`
+  );
+}
+
+export async function fetchExecutionPlaneOrchestratorSessionControlProfiles(): Promise<{
+  profiles: OrchestratorSessionControlProfile[];
+}> {
+  const res = await fetch(`${API_BASE}/execution-plane/orchestrator-sessions/control/profiles`);
+  return jsonOrThrow<{ profiles: OrchestratorSessionControlProfile[] }>(
+    res,
+    `Failed to fetch orchestrator session control profiles: ${res.status}`
+  );
+}
+
+export async function applyExecutionPlaneOrchestratorSessionRecommendation(
+  sessionId: string,
+  payload: {
+    recommendationKind: string;
+    actor?: string;
+    reason?: string;
+    idempotencyKey?: string;
+  }
+): Promise<OrchestratorSessionRecommendationApplyResult> {
+  const res = await fetch(
+    `${API_BASE}/execution-plane/orchestrator-sessions/${encodeURIComponent(sessionId)}/control/apply`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        recommendation_kind: payload.recommendationKind,
+        actor: payload.actor ?? "dashboard-control-plane",
+        reason: payload.reason ?? "",
+        idempotency_key: payload.idempotencyKey ?? "",
+      }),
+    }
+  );
+  return jsonOrThrow<OrchestratorSessionRecommendationApplyResult>(
+    res,
+    `Failed to apply session recommendation: ${res.status}`
+  );
+}
+
+export async function applyExecutionPlaneOrchestratorSessionControlPlan(
+  sessionId: string,
+  payload: {
+    profile: string;
+    actor?: string;
+    reason?: string;
+    recommendationKinds?: string[];
+    maxOperations?: number;
+    continueOnError?: boolean;
+  }
+): Promise<OrchestratorSessionControlPlanApplyResult> {
+  const res = await fetch(
+    `${API_BASE}/execution-plane/orchestrator-sessions/${encodeURIComponent(sessionId)}/control/apply-plan`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        profile: payload.profile,
+        actor: payload.actor ?? "dashboard-control-plane",
+        reason: payload.reason ?? "",
+        recommendation_kinds: payload.recommendationKinds ?? [],
+        max_operations: payload.maxOperations ?? 10,
+        continue_on_error: payload.continueOnError ?? true,
+      }),
+    }
+  );
+  return jsonOrThrow<OrchestratorSessionControlPlanApplyResult>(
+    res,
+    `Failed to apply session control plan: ${res.status}`
+  );
+}
+
+export async function approveExecutionPlaneApproval(
+  approvalId: string,
+  payload?: { actor?: string; note?: string }
+): Promise<ApprovalDecisionResult> {
+  const res = await fetch(`${API_BASE}/execution-plane/approvals/${encodeURIComponent(approvalId)}/approve`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      actor: payload?.actor ?? "dashboard-control-plane",
+      note: payload?.note ?? "",
+    }),
+  });
+  return jsonOrThrow<ApprovalDecisionResult>(res, `Failed to approve control-plane approval: ${res.status}`);
+}
+
+export async function rejectExecutionPlaneApproval(
+  approvalId: string,
+  payload?: { actor?: string; note?: string }
+): Promise<ApprovalDecisionResult> {
+  const res = await fetch(`${API_BASE}/execution-plane/approvals/${encodeURIComponent(approvalId)}/reject`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      actor: payload?.actor ?? "dashboard-control-plane",
+      note: payload?.note ?? "",
+    }),
+  });
+  return jsonOrThrow<ApprovalDecisionResult>(res, `Failed to reject control-plane approval: ${res.status}`);
+}
+
+export async function applyExecutionPlaneApproval(
+  approvalId: string,
+  payload?: { actor?: string; note?: string }
+): Promise<ApprovalApplyResult> {
+  const res = await fetch(`${API_BASE}/execution-plane/approvals/${encodeURIComponent(approvalId)}/apply`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      actor: payload?.actor ?? "dashboard-control-plane",
+      note: payload?.note ?? "",
+    }),
+  });
+  return jsonOrThrow<ApprovalApplyResult>(res, `Failed to apply control-plane approval: ${res.status}`);
+}
+
+export async function resolveExecutionPlaneIssue(
+  issueId: string,
+  payload?: { actor?: string; note?: string }
+): Promise<IssueResolutionResult> {
+  const res = await fetch(`${API_BASE}/execution-plane/issues/${encodeURIComponent(issueId)}/resolve`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      actor: payload?.actor ?? "dashboard-control-plane",
+      note: payload?.note ?? "",
+    }),
+  });
+  return jsonOrThrow<IssueResolutionResult>(res, `Failed to resolve control-plane issue: ${res.status}`);
+}
+
 export async function createProjectFromPrd(
   prd: object,
   projectName?: string,
-  projectPath?: string
+  projectPath?: string,
+  taskSource?: TaskSource | null
 ): Promise<CreateProjectResult> {
   const res = await fetch(`${API_BASE}/projects/`, {
     method: "POST",
@@ -62,6 +533,7 @@ export async function createProjectFromPrd(
       prd,
       project_name: projectName || null,
       project_path: projectPath || null,
+      task_source: taskSource ?? null,
     }),
   });
   return jsonOrThrow<CreateProjectResult>(res, `Project creation failed: ${res.status}`);
@@ -101,6 +573,47 @@ export async function skipStory(projectId: string, storyId: number) {
   return jsonOrThrow<{ status: string; message: string }>(res, `Skip failed: ${res.status}`);
 }
 
+export async function recoverStoryCheckout(
+  projectId: string,
+  storyId: number,
+  options?: { cleanup_worktree?: boolean; reopen_story?: boolean }
+) {
+  const res = await fetch(
+    `${API_BASE}/projects/${encodeURIComponent(projectId)}/stories/${storyId}/recover-checkout`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        cleanup_worktree: options?.cleanup_worktree ?? true,
+        reopen_story: options?.reopen_story ?? false,
+      }),
+    }
+  );
+  return jsonOrThrow<{ status: string; project_id: string; story_id: number; cleanup_performed: boolean; reopened: boolean }>(
+    res,
+    `Checkout recovery failed: ${res.status}`
+  );
+}
+
+export async function recoverStaleProjectCheckouts(
+  projectId: string,
+  options?: { cleanup_worktrees?: boolean; reopen_stories?: boolean; stale_after_sec?: number }
+) {
+  const res = await fetch(`${API_BASE}/projects/${encodeURIComponent(projectId)}/runtime-control/recover-stale`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      cleanup_worktrees: options?.cleanup_worktrees ?? true,
+      reopen_stories: options?.reopen_stories ?? true,
+      stale_after_sec: options?.stale_after_sec ?? 900,
+    }),
+  });
+  return jsonOrThrow<{ status: string; project_id: string; stale_after_sec: number; recovered: Array<{ story_id: number; cleanup_performed: boolean; reopened: boolean }> }>(
+    res,
+    `Stale checkout recovery failed: ${res.status}`
+  );
+}
+
 export async function addStoryGuidance(projectId: string, storyId: number, payload: string) {
   const res = await fetch(
     `${API_BASE}/projects/${encodeURIComponent(projectId)}/stories/${storyId}/guidance`,
@@ -136,10 +649,26 @@ export async function sendIntakeMessage(message: string, sessionId?: string | nu
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ message, session_id: sessionId }),
   });
-  return jsonOrThrow<{ session_id: string; response: string; prd_ready: boolean; prd: PRD | null }>(
+  return jsonOrThrow<{
+    session_id: string;
+    response: string;
+    prd_ready: boolean;
+    prd: PRD | null;
+    spec_bootstrap: SpecBootstrap | null;
+    can_generate_prd: boolean;
+  }>(
     res,
     `Intake failed: ${res.status}`
   );
+}
+
+export async function generatePrdFromIntakeSession(sessionId: string): Promise<{ prd: PRD }> {
+  const res = await fetch(`${API_BASE}/intake/generate-prd`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ session_id: sessionId }),
+  });
+  return jsonOrThrow<{ prd: PRD }>(res, `Intake PRD generation failed: ${res.status}`);
 }
 
 export async function fetchIntakeSessions(): Promise<{ sessions: IntakeSession[] }> {

@@ -38,6 +38,19 @@ function formatTimestamp(value?: string | null) {
   }).format(new Date(value));
 }
 
+function formatTaskSource(project: ProjectSummary) {
+  const taskSource = project.task_source;
+  if (!taskSource) return "Task source not recorded";
+  const parts = [taskSource.source_kind];
+  if (taskSource.external_id) parts.push(taskSource.external_id);
+  if (taskSource.repo) parts.push(taskSource.repo);
+  return parts.filter(Boolean).join(" / ");
+}
+
+function formatPhrase(value?: string | null) {
+  return value ? value.replaceAll("_", " ") : "unknown";
+}
+
 export function PortfolioProjectCard({
   project,
   busy = false,
@@ -48,6 +61,12 @@ export function PortfolioProjectCard({
   const progress = project.stories_total > 0
     ? Math.round((project.stories_done / project.stories_total) * 100)
     : 0;
+  const deliveryStatus = project.delivery_status;
+  const handoffArtifact = project.delivery_loop?.artifact;
+  const handoffTitle = handoffArtifact?.ref_label
+    || (project.latest_handoff?.number
+      ? `PR #${project.latest_handoff.number}`
+      : project.latest_handoff?.head_branch || project.latest_handoff?.story_title || "");
 
   return (
     <article className="rounded-[14px] border border-[#e5e5e3] bg-white p-5 shadow-[0_1px_3px_rgba(15,15,15,0.08),0_0_1px_rgba(15,15,15,0.04)]">
@@ -82,6 +101,56 @@ export function PortfolioProjectCard({
             <span>{project.stories_done}/{project.stories_total} stories done</span>
             <span>•</span>
             <span>{formatTimestamp(project.last_activity_at)}</span>
+          </div>
+          <div className="mt-3 grid gap-3 md:grid-cols-3">
+            <div className="rounded-[10px] border border-[#ecebe8] bg-[#fbfbf9] px-3 py-3">
+              <p className="text-[11px] uppercase tracking-[0.08em] text-[#9b9a97]">Task source</p>
+              <p className="mt-1 text-[13px] font-medium text-[#37352f]">{formatTaskSource(project)}</p>
+              <p className="mt-2 text-[12px] text-[#787774]">
+                Branch policy: {project.task_source?.branch_policy || "shared_main"}
+              </p>
+            </div>
+            <div className="rounded-[10px] border border-[#ecebe8] bg-[#fbfbf9] px-3 py-3">
+              <p className="text-[11px] uppercase tracking-[0.08em] text-[#9b9a97]">Delivery loop</p>
+              {deliveryStatus ? (
+                <>
+                  <p className="mt-1 text-[13px] font-medium text-[#37352f]">{deliveryStatus.headline}</p>
+                  <p className="mt-2 text-[12px] text-[#787774]">
+                    {formatPhrase(deliveryStatus.stage)} / {formatPhrase(deliveryStatus.status)}
+                  </p>
+                  <p className="mt-1 text-[12px] text-[#787774]">{deliveryStatus.next_step}</p>
+                </>
+              ) : (
+                <p className="mt-1 text-[12px] text-[#787774]">
+                  Delivery state has not been synthesized yet.
+                </p>
+              )}
+            </div>
+            <div className="rounded-[10px] border border-[#ecebe8] bg-[#fbfbf9] px-3 py-3">
+              <p className="text-[11px] uppercase tracking-[0.08em] text-[#9b9a97]">Latest handoff</p>
+              {project.latest_handoff ? (
+                <>
+                  <p className="mt-1 text-[13px] font-medium text-[#37352f]">
+                    {handoffTitle}
+                  </p>
+                  <p className="mt-2 text-[12px] text-[#787774]">
+                    {project.latest_handoff.handoff_status} / {project.latest_handoff.merge_state}
+                  </p>
+                  <p className="mt-1 text-[12px] text-[#787774]">
+                    Review: {project.latest_handoff.review_status} - CI: {project.latest_handoff.ci_status}
+                  </p>
+                  {handoffArtifact?.path && (
+                    <p className="mt-1 line-clamp-2 break-all text-[12px] text-[#787774]">
+                      Artifact: {handoffArtifact.path}
+                    </p>
+                  )}
+                </>
+              ) : (
+                <p className="mt-1 text-[12px] text-[#787774]">
+                  No PR or handoff artifact recorded yet.
+                </p>
+              )}
+            </div>
           </div>
           {project.last_message && (
             <p className="mt-3 line-clamp-2 text-[13px] leading-relaxed text-[#6b6b6b]">

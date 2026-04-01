@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 
 from autopilot.api.routes import capabilities as capabilities_routes
 from autopilot.core.config import AutopilotConfig
+from autopilot.core.config import NotificationChannelConfig, TrackerConfig
 
 
 def _build_client(config: AutopilotConfig, monkeypatch) -> TestClient:
@@ -25,11 +26,77 @@ def test_capabilities_catalog_lists_defaults(tmp_path: Path, monkeypatch) -> Non
     assert response.status_code == 200
     payload = response.json()
     assert any(connector["id"] == "browser_devtools" for connector in payload["connectors"])
+    assert any(tool["tool_id"] == "browser_devtools" for tool in payload["tools"])
     assert any(skill_pack["id"] == "fastapi-backend" for skill_pack in payload["skill_packs"])
     assert any(role["id"] == "backend_worker" for role in payload["roles"])
     assert any(connector_type["id"] == "mcp_server" for connector_type in payload["connector_types"])
     assert any(policy["role_id"] == "frontend_worker" for policy in payload["routing_policies"])
     assert any(preset["id"] == "parallel" for preset in payload["launch_presets"])
+    assert any(provider["family"] == "codex" for provider in payload["provider_configs"])
+    assert any(profile["id"] == "local" for profile in payload["runtime_profiles"])
+    assert any(tracker["extension_id"] == "project_state" for tracker in payload["extensions"]["trackers"])
+
+
+def test_capabilities_routes_list_provider_and_runtime_contracts(tmp_path: Path, monkeypatch) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    client = _build_client(config, monkeypatch)
+
+    providers_response = client.get("/api/capabilities/providers")
+    runtime_profiles_response = client.get("/api/capabilities/runtime-profiles")
+
+    assert providers_response.status_code == 200
+    assert runtime_profiles_response.status_code == 200
+    assert any(provider["family"] == "codex" for provider in providers_response.json()["provider_configs"])
+    assert any(profile["id"] == "cloud" for profile in runtime_profiles_response.json()["runtime_profiles"])
+
+
+def test_capabilities_routes_list_tools_and_extensions(tmp_path: Path, monkeypatch) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    client = _build_client(config, monkeypatch)
+
+    tools_response = client.get("/api/capabilities/tools")
+    extensions_response = client.get("/api/capabilities/extensions")
+
+    assert tools_response.status_code == 200
+    assert extensions_response.status_code == 200
+    assert any(tool["tool_id"] == "shell_exec" for tool in tools_response.json()["tools"])
+    assert any(item["extension_id"] == "project_state" for item in extensions_response.json()["trackers"])
+
+
+def test_capabilities_extensions_include_configured_tracker_and_notifier_entries(tmp_path: Path, monkeypatch) -> None:
+    config = AutopilotConfig(
+        autopilot_home_override=str(tmp_path / ".autopilot"),
+        trackers=[
+            TrackerConfig(
+                id="linear",
+                display_name="Linear",
+                kind="issue_tracker",
+                transport="webhook",
+                endpoint="https://linear.example.com/hooks/autopilot",
+                auth_strategy="bearer",
+                event_kinds=["issue.created"],
+            )
+        ],
+        notifications=[
+            NotificationChannelConfig(
+                name="ops-webhook",
+                kind="webhook",
+                events=["run_failed"],
+                webhook_url="https://notify.example.com/autopilot",
+            )
+        ],
+    )
+    client = _build_client(config, monkeypatch)
+
+    response = client.get("/api/capabilities/extensions")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert any(item["extension_id"] == "linear" for item in payload["trackers"])
+    assert any(item["extension_id"] == "ops-webhook" for item in payload["notifiers"])
+    linear = next(item for item in payload["trackers"] if item["extension_id"] == "linear")
+    assert linear["metadata"]["supports_ingest"] is True
+    assert linear["metadata"]["endpoint"] == "https://linear.example.com/hooks/autopilot"
 
 
 def test_create_and_update_connector_and_skill_pack(tmp_path: Path, monkeypatch) -> None:

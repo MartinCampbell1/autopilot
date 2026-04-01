@@ -2,20 +2,30 @@
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import time
+from dataclasses import asdict
 from pathlib import Path
 
+from autopilot.core.adapters import get_adapter, list_provider_families
+from autopilot.core.config import AutopilotConfig
 from autopilot.core.models import Profile
 
 
 class AccountManager:
     """Manage CLI profiles across providers with round-robin rotation."""
 
-    def __init__(self, profiles_dir: Path, cooldown_base: int = 300):
+    def __init__(
+        self,
+        profiles_dir: Path,
+        cooldown_base: int = 300,
+        config: AutopilotConfig | None = None,
+    ):
         self.profiles_dir = profiles_dir
         self.cooldown_base = cooldown_base
+        self.config = config
         self.pools: dict[str, list[Profile]] = {}
         self._indexes: dict[str, int] = {}
 
@@ -24,39 +34,83 @@ class AccountManager:
         self.pools.clear()
         self._indexes.clear()
 
-        for provider in ("codex", "claude", "gemini"):
+        for provider in self._configured_provider_families():
+            adapter = get_adapter(provider)
             provider_dir = self.profiles_dir / provider
-            if not provider_dir.exists():
-                continue
 
             profiles: list[Profile] = []
-            for account_dir in sorted(provider_dir.iterdir()):
-                if not account_dir.is_dir() or not account_dir.name.startswith("acc"):
-                    continue
-
-                if provider == "codex":
-                    has_codex_files = (account_dir / "config.toml").exists() or (account_dir / "auth.json").exists()
-                    if not has_codex_files:
+            if provider_dir.exists():
+                for account_dir in sorted(provider_dir.iterdir()):
+                    if not account_dir.is_dir() or not account_dir.name.startswith("acc"):
                         continue
-                elif not (account_dir / "home").exists():
-                    continue
 
-                profiles.append(
-                    Profile(
-                        name=account_dir.name,
-                        provider=provider,
-                        path=str(account_dir),
+                    if not adapter.profile_is_valid(account_dir):
+                        continue
+
+                    profiles.append(
+                        Profile(
+                            name=account_dir.name,
+                            provider=provider,
+                            adapter_id=adapter.adapter_id,
+                            path=str(account_dir),
+                        )
                     )
-                )
+
+            profiles.extend(self._stateless_profiles(provider))
 
             if profiles:
                 self.pools[provider] = profiles
                 self._indexes[provider] = 0
 
-    def get_next(self, provider: str) -> Profile | None:
+    def _configured_provider_families(self) -> list[str]:
+        if self.config is None:
+            return list_provider_families()
+        families = self.config.configured_provider_families()
+        return families or list_provider_families()
+
+    def _stateless_profiles(self, provider: str) -> list[Profile]:
+        adapter = get_adapter(provider)
+        if adapter.requires_managed_profile:
+            return []
+
+        provider_configs = self.config.provider_configs_for_family(provider) if self.config is not None else []
+        if not provider_configs and self.config is not None and provider in set(self.config.providers_order):
+            provider_configs = [self.config.default_provider_config(provider)]
+        if not provider_configs:
+            return []
+
+        base_dir = (
+            (self.config.autopilot_home if self.config is not None else self.profiles_dir.parent) / "providers"
+        )
+        profiles: list[Profile] = []
+        for provider_config in provider_configs:
+            profiles.append(
+                Profile(
+                    name=provider_config.id,
+                    provider=provider,
+                    adapter_id=adapter.adapter_id,
+                    path=str(base_dir / provider_config.id),
+                )
+            )
+        return profiles
+
+    def get_next(self, provider: str, preferred_name: str | None = None) -> Profile | None:
         """Get the next available profile using round-robin."""
         profiles = self.pools.get(provider, [])
         if not profiles:
+            return None
+
+        if preferred_name:
+            for idx, profile in enumerate(profiles):
+                if profile.name != preferred_name:
+                    continue
+                profile.check_available()
+                if not profile.is_available:
+                    return None
+                self._indexes[provider] = (idx + 1) % len(profiles)
+                profile.last_used = time.time()
+                profile.requests_made += 1
+                return profile
             return None
 
         start_idx = self._indexes.get(provider, 0)
@@ -123,27 +177,8 @@ class AccountManager:
     def build_env(self, profile: Profile) -> dict[str, str]:
         """Build environment variables for a CLI invocation using this profile."""
         env = os.environ.copy()
-        real_home = str(Path.home())
-
-        if profile.provider == "codex":
-            env["CODEX_HOME"] = profile.path
-            return env
-
-        if profile.provider in ("claude", "gemini"):
-            env["HOME"] = str(Path(profile.path) / "home")
-            env["PATH"] = ":".join(
-                [
-                    "/opt/homebrew/bin",
-                    "/opt/homebrew/sbin",
-                    "/usr/local/bin",
-                    "/usr/bin",
-                    "/bin",
-                    f"{real_home}/.npm-global/bin",
-                    f"{real_home}/.local/bin",
-                    f"{real_home}/.cargo/bin",
-                    f"{real_home}/.bun/bin",
-                    env.get("PATH", ""),
-                ]
-            )
-
-        return env
+        adapter = get_adapter(profile.resolved_adapter_id)
+        if self.config is not None and not adapter.requires_managed_profile:
+            provider_config = self.config.resolve_provider_config(profile.provider, profile.name)
+            env["AUTOPILOT_PROVIDER_CONFIG_JSON"] = json.dumps(asdict(provider_config))
+        return adapter.build_env(profile, env)

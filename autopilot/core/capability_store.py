@@ -20,7 +20,7 @@ class MCPConnector(BaseModel):
     description: str = ""
     transport: str = "builtin"
     tags: list[str] = Field(default_factory=list)
-    providers: list[str] = Field(default_factory=lambda: ["codex", "claude", "gemini"])
+    providers: list[str] = Field(default_factory=lambda: ["codex", "claude", "gemini", "ollama"])
     risk_level: str = "medium"
     scopes: list[str] = Field(default_factory=list)
     enabled: bool = True
@@ -106,9 +106,14 @@ class LaunchProfile(BaseModel):
     """Runtime launch profile chosen by the user for a project run."""
 
     preset: str = "fast"
+    provider: str = "codex"
+    provider_config_id: str | None = None
+    runtime_profile_id: str = "cloud"
     story_execution_mode: str = "solo"
     project_concurrency_mode: str = "sequential"
     max_parallel_stories: int = 1
+    story_pipeline: list[str] = Field(default_factory=list)
+    review_phases: list[str] = Field(default_factory=list)
 
 
 class LaunchPreset(BaseModel):
@@ -133,6 +138,40 @@ class ConnectorActivation(BaseModel):
     config: dict = Field(default_factory=dict)
 
 
+class ToolContract(BaseModel):
+    """Public tool-layer contract derived from the connector registry."""
+
+    tool_id: str
+    connector_id: str
+    name: str
+    kind: str
+    transport: str
+    scope: str
+    approval_policy: str
+    provider_compatibility: list[str] = Field(default_factory=list)
+    description: str = ""
+    enabled: bool = True
+    built_in: bool = False
+    validation_status: str = "unknown"
+
+
+class ToolActivation(BaseModel):
+    """Resolved runtime state for one public tool contract."""
+
+    tool_id: str
+    connector_id: str
+    name: str
+    kind: str
+    transport: str
+    scope: str
+    approval_policy: str
+    provider_compatibility: list[str] = Field(default_factory=list)
+    provider: str
+    required: bool = False
+    status: str = "disabled"
+    reason: str = ""
+
+
 class TeamMemberAssignment(BaseModel):
     """Resolved runtime assignment for one member of a story team."""
 
@@ -145,6 +184,46 @@ class TeamMemberAssignment(BaseModel):
     planned_connectors: list[str] = Field(default_factory=list)
     active_connectors: list[ConnectorActivation] = Field(default_factory=list)
     specialist: bool = False
+    pipeline_stage: str = "implement"
+    pipeline_order: int = 2
+
+
+PIPELINE_STAGE_ORDER: tuple[str, ...] = ("research", "implement", "review")
+PIPELINE_STAGE_ALIASES: dict[str, str] = {
+    "research": "research",
+    "discovery": "research",
+    "discover": "research",
+    "plan": "research",
+    "planning": "research",
+    "implement": "implement",
+    "implementation": "implement",
+    "build": "implement",
+    "execute": "implement",
+    "review": "review",
+    "critic": "review",
+    "qa": "review",
+    "test": "review",
+}
+DEFAULT_STORY_PIPELINES: dict[str, list[str]] = {
+    "solo": ["implement", "review"],
+    "team": ["research", "implement", "review"],
+}
+REVIEW_PHASE_ORDER: tuple[str, ...] = ("security", "architecture", "tests")
+REVIEW_PHASE_ALIASES: dict[str, str] = {
+    "security": "security",
+    "sec": "security",
+    "architecture": "architecture",
+    "arch": "architecture",
+    "design": "architecture",
+    "tests": "tests",
+    "test": "tests",
+    "qa": "tests",
+    "verification": "tests",
+}
+DEFAULT_REVIEW_PHASES: dict[str, list[str]] = {
+    "solo": [],
+    "team": ["security", "architecture", "tests"],
+}
 
 
 DEFAULT_CONNECTOR_TYPES: list[ConnectorTypeSchema] = [
@@ -598,9 +677,13 @@ DEFAULT_LAUNCH_PRESETS: list[LaunchPreset] = [
         description="One primary worker per story, sequential project execution.",
         launch_profile=LaunchProfile(
             preset="fast",
+            provider="codex",
+            runtime_profile_id="cloud",
             story_execution_mode="solo",
             project_concurrency_mode="sequential",
             max_parallel_stories=1,
+            story_pipeline=["implement", "review"],
+            review_phases=[],
         ),
     ),
     LaunchPreset(
@@ -609,9 +692,13 @@ DEFAULT_LAUNCH_PRESETS: list[LaunchPreset] = [
         description="Primary worker plus critic and optional specialist, sequential stories.",
         launch_profile=LaunchProfile(
             preset="team",
+            provider="codex",
+            runtime_profile_id="cloud",
             story_execution_mode="team",
             project_concurrency_mode="sequential",
             max_parallel_stories=1,
+            story_pipeline=["research", "implement", "review"],
+            review_phases=["security", "architecture", "tests"],
         ),
     ),
     LaunchPreset(
@@ -620,9 +707,13 @@ DEFAULT_LAUNCH_PRESETS: list[LaunchPreset] = [
         description="Story teams with multiple stories active in parallel worktrees.",
         launch_profile=LaunchProfile(
             preset="parallel",
+            provider="codex",
+            runtime_profile_id="cloud",
             story_execution_mode="team",
             project_concurrency_mode="parallel",
             max_parallel_stories=3,
+            story_pipeline=["research", "implement", "review"],
+            review_phases=["security", "architecture", "tests"],
         ),
     ),
 ]
@@ -782,6 +873,8 @@ def get_connector_type_schema(connector_type: str) -> ConnectorTypeSchema | None
 
 
 def normalize_launch_profile(profile: dict | LaunchProfile | None = None) -> LaunchProfile:
+    from autopilot.core.adapters import get_adapter
+
     if isinstance(profile, LaunchProfile):
         raw = profile.model_dump()
     else:
@@ -790,6 +883,23 @@ def normalize_launch_profile(profile: dict | LaunchProfile | None = None) -> Lau
     preset = str(raw.get("preset") or "fast").strip().lower() or "fast"
     preset_match = next((item for item in DEFAULT_LAUNCH_PRESETS if item.id == preset), DEFAULT_LAUNCH_PRESETS[0])
     resolved = preset_match.launch_profile.model_copy(deep=True)
+
+    provider = str(raw.get("provider") or resolved.provider or "codex").strip().lower() or "codex"
+    try:
+        adapter = get_adapter(provider)
+        resolved.provider = adapter.provider_family
+    except ValueError:
+        adapter = get_adapter("codex")
+        resolved.provider = "codex"
+
+    provider_config_id = str(raw.get("provider_config_id") or "").strip()
+    resolved.provider_config_id = provider_config_id or None
+
+    runtime_profile_id = str(raw.get("runtime_profile_id") or "").strip()
+    if runtime_profile_id:
+        resolved.runtime_profile_id = runtime_profile_id
+    else:
+        resolved.runtime_profile_id = "local" if adapter.provider_mode == "local" else "cloud"
 
     if "story_execution_mode" in raw and raw["story_execution_mode"]:
         resolved.story_execution_mode = str(raw["story_execution_mode"]).strip().lower()
@@ -800,11 +910,88 @@ def normalize_launch_profile(profile: dict | LaunchProfile | None = None) -> Lau
             resolved.max_parallel_stories = max(1, int(raw["max_parallel_stories"]))
         except (TypeError, ValueError):
             resolved.max_parallel_stories = preset_match.launch_profile.max_parallel_stories
+    resolved.story_pipeline = normalize_story_pipeline(
+        raw.get("story_pipeline"),
+        default=resolved.story_pipeline,
+        story_execution_mode=resolved.story_execution_mode,
+    )
+    resolved.review_phases = normalize_review_phases(
+        raw.get("review_phases"),
+        default=resolved.review_phases,
+        story_execution_mode=resolved.story_execution_mode,
+    )
 
     resolved.preset = preset_match.id
     if resolved.project_concurrency_mode != "parallel":
         resolved.max_parallel_stories = 1
     return resolved
+
+
+def normalize_story_pipeline(
+    pipeline: object,
+    *,
+    default: list[str] | None = None,
+    story_execution_mode: str = "solo",
+) -> list[str]:
+    if isinstance(pipeline, str):
+        raw_items = [item.strip() for item in pipeline.split(",") if item.strip()]
+    elif isinstance(pipeline, list):
+        raw_items = [str(item).strip() for item in pipeline if str(item).strip()]
+    else:
+        raw_items = []
+
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for raw_item in raw_items:
+        stage = PIPELINE_STAGE_ALIASES.get(raw_item.lower())
+        if not stage or stage in seen:
+            continue
+        normalized.append(stage)
+        seen.add(stage)
+
+    if not normalized:
+        for stage in default or DEFAULT_STORY_PIPELINES.get(story_execution_mode, DEFAULT_STORY_PIPELINES["solo"]):
+            if stage not in seen:
+                normalized.append(stage)
+                seen.add(stage)
+
+    for required_stage in ("implement", "review"):
+        if required_stage not in seen:
+            normalized.append(required_stage)
+            seen.add(required_stage)
+
+    return [stage for stage in PIPELINE_STAGE_ORDER if stage in seen]
+
+
+def normalize_review_phases(
+    phases: object,
+    *,
+    default: list[str] | None = None,
+    story_execution_mode: str = "solo",
+) -> list[str]:
+    if isinstance(phases, str):
+        raw_items = [item.strip() for item in phases.split(",") if item.strip()]
+    elif isinstance(phases, list):
+        raw_items = [str(item).strip() for item in phases if str(item).strip()]
+    else:
+        raw_items = []
+
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for raw_item in raw_items:
+        phase = REVIEW_PHASE_ALIASES.get(raw_item.lower())
+        if not phase or phase in seen:
+            continue
+        normalized.append(phase)
+        seen.add(phase)
+
+    if not normalized:
+        for phase in default or DEFAULT_REVIEW_PHASES.get(story_execution_mode, DEFAULT_REVIEW_PHASES["solo"]):
+            if phase not in seen:
+                normalized.append(phase)
+                seen.add(phase)
+
+    return [phase for phase in REVIEW_PHASE_ORDER if phase in seen]
 
 
 def validate_connector_config(connector: MCPConnector) -> ConnectorValidationResult:
@@ -872,6 +1059,130 @@ def validate_connector_config(connector: MCPConnector) -> ConnectorValidationRes
         log="Validation completed successfully.",
         checked_fields=checked_fields,
     )
+
+
+TOOL_KIND_BY_CONNECTOR_ID: dict[str, str] = {
+    "shell_exec": "shell",
+    "python_exec": "workspace",
+    "browser_devtools": "browser_devtools",
+    "http_api": "http_api",
+    "postgres": "database",
+    "neo4j": "database",
+}
+TOOL_KIND_BY_CONNECTOR_TYPE: dict[str, str] = {
+    "builtin": "workspace",
+    "mcp_server": "mcp_server",
+    "http_api": "http_api",
+    "neo4j": "database",
+    "postgres": "database",
+    "custom": "custom",
+}
+APPROVAL_POLICY_BY_RISK_LEVEL: dict[str, str] = {
+    "low": "auto",
+    "medium": "policy",
+    "high": "manual",
+}
+
+
+def tool_kind_for_connector(connector: MCPConnector) -> str:
+    """Map an internal connector to the public tool kind used in the product surface."""
+
+    return TOOL_KIND_BY_CONNECTOR_ID.get(
+        connector.id,
+        TOOL_KIND_BY_CONNECTOR_TYPE.get(connector.connector_type, connector.connector_type or "custom"),
+    )
+
+
+def tool_scope_for_connector(connector: MCPConnector) -> str:
+    """Return the primary scope shown in the public tool contract."""
+
+    for scope in connector.scopes:
+        normalized = str(scope).strip()
+        if normalized:
+            return normalized
+    return "workspace"
+
+
+def tool_approval_policy_for_connector(connector: MCPConnector) -> str:
+    """Derive the operator approval policy from the connector risk level."""
+
+    return APPROVAL_POLICY_BY_RISK_LEVEL.get(str(connector.risk_level or "").strip().lower(), "policy")
+
+
+def build_tool_contract(connector: MCPConnector) -> ToolContract:
+    """Convert one connector registry entry into the public tool-layer contract."""
+
+    return ToolContract(
+        tool_id=connector.id,
+        connector_id=connector.id,
+        name=connector.name,
+        kind=tool_kind_for_connector(connector),
+        transport=connector.transport,
+        scope=tool_scope_for_connector(connector),
+        approval_policy=tool_approval_policy_for_connector(connector),
+        provider_compatibility=list(connector.providers),
+        description=connector.description,
+        enabled=connector.enabled,
+        built_in=connector.built_in,
+        validation_status=connector.validation_status,
+    )
+
+
+def build_tool_catalog(connectors: list[MCPConnector]) -> list[ToolContract]:
+    """Expose the current connector registry as a user-facing tool catalog."""
+
+    return [build_tool_contract(connector) for connector in connectors]
+
+
+def build_tool_activation_catalog(
+    activations: list[ConnectorActivation],
+    *,
+    available_connectors: list[MCPConnector] | None = None,
+) -> list[ToolActivation]:
+    """Expose runtime connector activation through the stable public tool contract."""
+
+    connectors_by_id = {connector.id: connector for connector in (available_connectors or list(DEFAULT_CONNECTORS))}
+    tools: list[ToolActivation] = []
+    for raw_activation in activations:
+        activation = (
+            raw_activation
+            if isinstance(raw_activation, ConnectorActivation)
+            else ConnectorActivation.model_validate(raw_activation)
+        )
+        connector = connectors_by_id.get(activation.id)
+        if connector is not None:
+            contract = build_tool_contract(connector)
+        else:
+            contract = ToolContract(
+                tool_id=activation.id,
+                connector_id=activation.id,
+                name=activation.name,
+                kind=activation.connector_type or "custom",
+                transport="builtin",
+                scope="workspace",
+                approval_policy="policy",
+                provider_compatibility=[activation.provider] if activation.provider else [],
+                enabled=False,
+                built_in=False,
+                validation_status="unknown",
+            )
+        tools.append(
+            ToolActivation(
+                tool_id=contract.tool_id,
+                connector_id=contract.connector_id,
+                name=contract.name,
+                kind=contract.kind,
+                transport=contract.transport,
+                scope=contract.scope,
+                approval_policy=contract.approval_policy,
+                provider_compatibility=contract.provider_compatibility,
+                provider=activation.provider,
+                required=activation.required,
+                status=activation.status,
+                reason=activation.reason,
+            )
+        )
+    return tools
 
 
 TAG_KEYWORDS: dict[str, tuple[str, ...]] = {
@@ -1179,7 +1490,7 @@ def resolve_story_runtime_plan(
     story: dict,
     *,
     launch_profile: dict | LaunchProfile | None = None,
-    provider: str = "codex",
+    provider: str | None = None,
     connectors: list[MCPConnector] | None = None,
     skill_packs: list[SkillPack] | None = None,
     routing_policies: list[RoutingPolicy] | None = None,
@@ -1194,6 +1505,17 @@ def resolve_story_runtime_plan(
         routing_policies=policies,
     )
     profile = normalize_launch_profile(launch_profile)
+    selected_provider = str(provider or profile.provider or "codex")
+    story_pipeline = normalize_story_pipeline(
+        story.get("pipeline") or story.get("story_pipeline"),
+        default=profile.story_pipeline,
+        story_execution_mode=profile.story_execution_mode,
+    )
+    review_phases = normalize_review_phases(
+        story.get("review_phases"),
+        default=profile.review_phases,
+        story_execution_mode=profile.story_execution_mode,
+    )
     role_id = str(normalized_story.get("role") or "backend_worker")
     policy = _policy_for_role(role_id, policies)
     explicit_connector_override = bool(story.get("connectors"))
@@ -1222,7 +1544,7 @@ def resolve_story_runtime_plan(
 
     primary_activations, activation_errors = activate_connector_set(
         planned_connectors,
-        provider=provider,
+        provider=selected_provider,
         available_connectors=available_connectors,
         required_connectors=required_connectors,
     )
@@ -1232,18 +1554,20 @@ def resolve_story_runtime_plan(
             label="Primary Worker",
             execution_role="primary_worker",
             role_id=role_id,
-            provider=provider,
+            provider=selected_provider,
             skill_packs=selected_skill_packs,
             planned_connectors=planned_connectors,
             active_connectors=primary_activations,
+            pipeline_stage="implement",
+            pipeline_order=PIPELINE_STAGE_ORDER.index("implement") + 1,
         ),
-        TeamMemberAssignment(
-            member_id="critic",
-            label="Critic",
-            execution_role="critic",
-            role_id="qa_reviewer",
-            provider=provider,
-            skill_packs=_collect_skill_packs("qa_reviewer", normalized_story.get("tags", []), available_skill_packs, routing_policies=policies),
+            TeamMemberAssignment(
+                member_id="critic",
+                label="Critic",
+                execution_role="critic",
+                role_id="qa_reviewer",
+                provider=selected_provider,
+                skill_packs=_collect_skill_packs("qa_reviewer", normalized_story.get("tags", []), available_skill_packs, routing_policies=policies),
             planned_connectors=_collect_connectors(
                 "qa_reviewer",
                 normalized_story.get("tags", []),
@@ -1261,14 +1585,16 @@ def resolve_story_runtime_plan(
                     available_skill_packs,
                     routing_policies=policies,
                 ),
-                provider=provider,
+                provider=selected_provider,
                 available_connectors=available_connectors,
             )[0],
+            pipeline_stage="review",
+            pipeline_order=PIPELINE_STAGE_ORDER.index("review") + 1,
         ),
     ]
 
     specialist = _specialist_blueprint(normalized_story.get("tags", []))
-    if profile.story_execution_mode == "team" and specialist:
+    if "research" in story_pipeline and specialist:
         specialist_connectors = list(dict.fromkeys(specialist["connectors"]))  # type: ignore[index]
         team_members.append(
             TeamMemberAssignment(
@@ -1276,23 +1602,30 @@ def resolve_story_runtime_plan(
                 label=str(specialist["label"]),
                 execution_role="specialist",
                 role_id=str(specialist["role_id"]),
-                provider=provider,
+                provider=selected_provider,
                 skill_packs=list(specialist["skill_packs"]),  # type: ignore[arg-type]
                 planned_connectors=specialist_connectors,
                 active_connectors=activate_connector_set(
                     specialist_connectors,
-                    provider=provider,
+                    provider=selected_provider,
                     available_connectors=available_connectors,
                 )[0],
                 specialist=True,
+                pipeline_stage="research",
+                pipeline_order=PIPELINE_STAGE_ORDER.index("research") + 1,
             )
         )
+
+    team_members.sort(key=lambda member: (member.pipeline_order, member.label.lower()))
+    resolved_team_mode = "team" if any(member.pipeline_stage == "research" for member in team_members) else profile.story_execution_mode
 
     return {
         "story": normalized_story,
         "launch_profile": profile.model_dump(),
-        "team_mode": profile.story_execution_mode,
+        "team_mode": resolved_team_mode,
         "team_members": [member.model_dump() for member in team_members],
+        "story_pipeline": story_pipeline,
+        "review_phases": review_phases,
         "planned_connectors": planned_connectors,
         "active_connectors": [activation.model_dump() for activation in primary_activations],
         "activation_errors": activation_errors,

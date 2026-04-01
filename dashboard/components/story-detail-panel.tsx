@@ -42,6 +42,22 @@ function formatTimestamp(value?: string | null) {
   }).format(new Date(value));
 }
 
+function sentenceCase(value?: string | null) {
+  return value ? value.replaceAll("_", " ") : "Unknown";
+}
+
+function formatTaskSource(event: TimelineEvent) {
+  const taskSource = event.task_source;
+  if (!taskSource) return "";
+  return [taskSource.source_kind, taskSource.external_id, taskSource.repo].filter(Boolean).join(" / ");
+}
+
+function formatArtifactSourceLabel(story: Story) {
+  const taskSource = story.handoff_artifact?.task_source;
+  if (!taskSource) return "No source preserved";
+  return [taskSource.source_kind, taskSource.external_id, taskSource.repo].filter(Boolean).join(" / ");
+}
+
 export function StoryDetailPanel({
   projectId,
   projectStatus,
@@ -148,14 +164,128 @@ export function StoryDetailPanel({
               </div>
               <div>
                 <p className="text-[11px] uppercase tracking-[0.08em] text-[#9b9a97]">Branch</p>
-                <p className="mt-1 text-[#37352f]">{story.branch_name || "main"}</p>
+                <p className="mt-1 text-[#37352f]">{story.branch_name || story.github_pr?.head_branch || "main"}</p>
               </div>
             </div>
 
             <div className="mt-4 space-y-3 rounded-xl border border-[#ecebe8] bg-[#fbfbf9] p-4 text-[13px] text-[#6b6b6b]">
+              <p className="text-[11px] uppercase tracking-[0.08em] text-[#9b9a97]">GitHub Handoff</p>
               <div>
-                <p className="text-[11px] uppercase tracking-[0.08em] text-[#9b9a97]">Planned Connectors</p>
-                <p className="mt-1 text-[#37352f]">{story.connectors?.join(", ") || "None"}</p>
+                <p className="text-[11px] uppercase tracking-[0.08em] text-[#9b9a97]">Pull Request</p>
+                {story.github_pr?.url ? (
+                  <a
+                    href={story.github_pr.url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="mt-1 inline-flex text-[#2a6690] underline-offset-2 hover:underline"
+                  >
+                    {story.github_pr.number ? `PR #${story.github_pr.number}` : story.github_pr.title || story.github_pr.url}
+                  </a>
+                ) : (
+                  <p className="mt-1 text-[#37352f]">Not opened yet</p>
+                )}
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <p className="text-[11px] uppercase tracking-[0.08em] text-[#9b9a97]">PR State</p>
+                  <p className="mt-1 text-[#37352f]">{sentenceCase(story.github_pr?.state)}</p>
+                </div>
+                <div>
+                  <p className="text-[11px] uppercase tracking-[0.08em] text-[#9b9a97]">CI State</p>
+                  <p className="mt-1 text-[#37352f]">{sentenceCase(story.github_pr?.ci_status)}</p>
+                </div>
+                <div>
+                  <p className="text-[11px] uppercase tracking-[0.08em] text-[#9b9a97]">Review State</p>
+                  <p className="mt-1 text-[#37352f]">{sentenceCase(story.github_pr?.review_status)}</p>
+                </div>
+                <div>
+                  <p className="text-[11px] uppercase tracking-[0.08em] text-[#9b9a97]">Handoff</p>
+                  <p className="mt-1 text-[#37352f]">{sentenceCase(story.github_pr?.handoff_status)}</p>
+                </div>
+              </div>
+              <div>
+                <p className="text-[11px] uppercase tracking-[0.08em] text-[#9b9a97]">Merge State</p>
+                <p className="mt-1 text-[#37352f]">{sentenceCase(story.github_pr?.merge_state)}</p>
+              </div>
+            </div>
+
+            {story.handoff_artifact && (
+              <div className="mt-4 space-y-3 rounded-xl border border-[#ecebe8] bg-[#fbfbf9] p-4 text-[13px] text-[#6b6b6b]">
+                <p className="text-[11px] uppercase tracking-[0.08em] text-[#9b9a97]">Delivery Artifact</p>
+                <div>
+                  <p className="text-[11px] uppercase tracking-[0.08em] text-[#9b9a97]">Artifact Ref</p>
+                  {story.handoff_artifact.handoff.url ? (
+                    <a
+                      href={story.handoff_artifact.handoff.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="mt-1 inline-flex text-[#2a6690] underline-offset-2 hover:underline"
+                    >
+                      {story.handoff_artifact.ref_label}
+                    </a>
+                  ) : (
+                    <p className="mt-1 text-[#37352f]">{story.handoff_artifact.ref_label}</p>
+                  )}
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <p className="text-[11px] uppercase tracking-[0.08em] text-[#9b9a97]">Artifact Type</p>
+                    <p className="mt-1 text-[#37352f]">{sentenceCase(story.handoff_artifact.artifact_type)}</p>
+                  </div>
+                  <div>
+                    <p className="text-[11px] uppercase tracking-[0.08em] text-[#9b9a97]">Status</p>
+                    <p className="mt-1 text-[#37352f]">
+                      {sentenceCase(story.handoff_artifact.handoff.handoff_status)}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-[11px] uppercase tracking-[0.08em] text-[#9b9a97]">Merge State</p>
+                    <p className="mt-1 text-[#37352f]">{sentenceCase(story.handoff_artifact.handoff.merge_state)}</p>
+                  </div>
+                  <div>
+                    <p className="text-[11px] uppercase tracking-[0.08em] text-[#9b9a97]">Source</p>
+                    <p className="mt-1 text-[#37352f]">{formatArtifactSourceLabel(story)}</p>
+                  </div>
+                </div>
+                <div>
+                  <p className="text-[11px] uppercase tracking-[0.08em] text-[#9b9a97]">Artifact File</p>
+                  <p className="mt-1 break-all text-[#37352f]">
+                    {story.handoff_artifact.path}
+                    {story.handoff_artifact.present ? "" : " (pending write)"}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-[11px] uppercase tracking-[0.08em] text-[#9b9a97]">Brief Ref</p>
+                  <p className="mt-1 break-all text-[#37352f]">
+                    {story.handoff_artifact.brief.relpath || "No brief reference"}
+                  </p>
+                </div>
+              </div>
+            )}
+
+            <div className="mt-4 space-y-3 rounded-xl border border-[#ecebe8] bg-[#fbfbf9] p-4 text-[13px] text-[#6b6b6b]">
+              <div>
+                <p className="text-[11px] uppercase tracking-[0.08em] text-[#9b9a97]">Planned Tools</p>
+                {story.tools?.length ? (
+                  <div className="mt-2 space-y-2">
+                    {story.tools.map((tool) => (
+                      <div key={tool.tool_id} className="rounded-[10px] border border-[#ecebe8] bg-white px-3 py-3">
+                        <div className="flex items-center justify-between gap-3">
+                          <p className="text-[13px] font-medium text-[#37352f]">{tool.name}</p>
+                          <span className="rounded-full bg-[#f1f1ef] px-2.5 py-1 text-[11px] text-[#787774]">
+                            {tool.kind}
+                          </span>
+                        </div>
+                        <p className="mt-1 text-[12px] text-[#787774]">{tool.tool_id}</p>
+                        <p className="mt-2 text-[12px] text-[#6b6b6b]">
+                          Scope: {tool.scope} · Approval: {tool.approval_policy}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="mt-1 text-[#37352f]">{story.connectors?.join(", ") || "None"}</p>
+                )}
               </div>
               <div>
                 <p className="text-[11px] uppercase tracking-[0.08em] text-[#9b9a97]">Activation Errors</p>
@@ -191,8 +321,23 @@ export function StoryDetailPanel({
             </div>
 
             <div className="mt-4 space-y-3 rounded-xl border border-[#ecebe8] bg-[#fbfbf9] p-4 text-[13px] text-[#6b6b6b]">
-              <p className="text-[11px] uppercase tracking-[0.08em] text-[#9b9a97]">Runtime-Active Connectors</p>
-              {story.connector_activation?.length ? (
+              <p className="text-[11px] uppercase tracking-[0.08em] text-[#9b9a97]">Runtime-Active Tools</p>
+              {story.active_tools?.length ? (
+                story.active_tools.map((tool) => (
+                  <div key={tool.tool_id} className="rounded-[10px] border border-[#ecebe8] bg-white px-3 py-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <p className="text-[13px] font-medium text-[#37352f]">{tool.name}</p>
+                      <span className="rounded-full bg-[#f1f1ef] px-2.5 py-1 text-[11px] text-[#787774]">
+                        {tool.status}
+                      </span>
+                    </div>
+                    <p className="mt-1 text-[12px] text-[#787774]">{tool.tool_id}</p>
+                    <p className="mt-2 text-[12px] text-[#6b6b6b]">
+                      {tool.kind} · {tool.scope} · {tool.reason || "No activation note."}
+                    </p>
+                  </div>
+                ))
+              ) : story.connector_activation?.length ? (
                 story.connector_activation.map((connector) => (
                   <div key={connector.id} className="rounded-[10px] border border-[#ecebe8] bg-white px-3 py-3">
                     <div className="flex items-center justify-between gap-3">
@@ -206,7 +351,7 @@ export function StoryDetailPanel({
                   </div>
                 ))
               ) : (
-                <p className="text-[#9b9a97]">No connector activation recorded yet.</p>
+                <p className="text-[#9b9a97]">No tool activation recorded yet.</p>
               )}
             </div>
           </TabsContent>
@@ -227,6 +372,32 @@ export function StoryDetailPanel({
                       <span className="text-[11px] text-[#9b9a97]">{formatTimestamp(event.timestamp)}</span>
                     </div>
                     <p className="mt-2 text-[13px] leading-relaxed text-[#37352f]">{event.message}</p>
+                    {(event.task_source || event.handoff) && (
+                      <div className="mt-3 grid gap-3 md:grid-cols-2">
+                        {event.task_source && (
+                          <div className="rounded-[10px] border border-[#ecebe8] bg-[#fbfbf9] px-3 py-3">
+                            <p className="text-[11px] uppercase tracking-[0.08em] text-[#9b9a97]">Source</p>
+                            <p className="mt-1 text-[12px] font-medium text-[#37352f]">{formatTaskSource(event)}</p>
+                            <p className="mt-2 text-[11px] text-[#787774]">
+                              Branch policy: {event.task_source.branch_policy}
+                            </p>
+                          </div>
+                        )}
+                        {event.handoff && (
+                          <div className="rounded-[10px] border border-[#ecebe8] bg-[#fbfbf9] px-3 py-3">
+                            <p className="text-[11px] uppercase tracking-[0.08em] text-[#9b9a97]">Handoff</p>
+                            <p className="mt-1 text-[12px] font-medium text-[#37352f]">
+                              {event.handoff.number
+                                ? `PR #${event.handoff.number}`
+                                : event.handoff.head_branch || event.handoff.story_title}
+                            </p>
+                            <p className="mt-2 text-[11px] text-[#787774]">
+                              {sentenceCase(event.handoff.handoff_status)} / {sentenceCase(event.handoff.merge_state)}
+                            </p>
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
                 ))
               )}

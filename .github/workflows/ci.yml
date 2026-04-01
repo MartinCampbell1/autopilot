@@ -1,0 +1,103 @@
+name: CI
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  python-checks:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev,api]"
+
+      - name: Run pytest
+        run: python -m pytest -q
+
+      - name: Run Ruff
+        run: ruff check autopilot tests
+
+      - name: Smoke `autopilot live --once`
+        run: HOME="$(mktemp -d)" autopilot live --once
+
+      - name: Smoke `autopilot status`
+        run: HOME="$(mktemp -d)" autopilot status
+
+  dashboard-checks:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: dashboard/package-lock.json
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev,api]"
+
+      - name: Install dashboard dependencies
+        working-directory: dashboard
+        run: npm ci
+
+      - name: Run dashboard lint
+        working-directory: dashboard
+        run: npm run lint
+
+      - name: Run dashboard build
+        working-directory: dashboard
+        run: npm run build
+
+      - name: Smoke `autopilot dashboard --no-browser`
+        env:
+          AUTOPILOT_PYTHON_BIN: python
+        run: |
+          set -euo pipefail
+          autopilot dashboard --no-browser > /tmp/autopilot-dashboard.log 2>&1 &
+          dashboard_pid=$!
+
+          cleanup() {
+            kill "$dashboard_pid" 2>/dev/null || true
+            wait "$dashboard_pid" 2>/dev/null || true
+          }
+
+          trap cleanup EXIT
+
+          for _ in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8420/api/health >/dev/null && \
+              curl -fsS http://127.0.0.1:3020/ >/dev/null && \
+              curl -fsS http://127.0.0.1:3020/control-plane >/dev/null; then
+              exit 0
+            fi
+            sleep 2
+          done
+
+          cat /tmp/autopilot-dashboard.log
+          exit 1
