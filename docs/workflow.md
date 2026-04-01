@@ -57,7 +57,7 @@ CLI:
 
 ## Related Guides
 
-- [docs/examples/local-only-project.md](/Users/martin/Desktop/autopilot/docs/examples/local-only-project.md)
-- [docs/examples/cloud-multi-provider-project.md](/Users/martin/Desktop/autopilot/docs/examples/cloud-multi-provider-project.md)
-- [docs/examples/issue-driven-flow.md](/Users/martin/Desktop/autopilot/docs/examples/issue-driven-flow.md)
-- [docs/troubleshooting.md](/Users/martin/Desktop/autopilot/docs/troubleshooting.md)
+- [docs/examples/local-only-project.md](examples/local-only-project.md)
+- [docs/examples/cloud-multi-provider-project.md](examples/cloud-multi-provider-project.md)
+- [docs/examples/issue-driven-flow.md](examples/issue-driven-flow.md)
+- [docs/troubleshooting.md](troubleshooting.md)

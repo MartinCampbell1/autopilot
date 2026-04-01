@@ -52,6 +52,6 @@ Healthy responses should include:
 
 ## If The Baseline Fails
 
-- use [docs/troubleshooting.md](/Users/martin/Desktop/autopilot/docs/troubleshooting.md) for common local setup and runtime issues
+- use [docs/troubleshooting.md](troubleshooting.md) for common local setup and runtime issues
 - record the failing command, environment details, and any provider configuration differences
 - do not treat a release candidate as green until the full baseline is repeatable from a clean checkout

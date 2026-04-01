@@ -48,7 +48,7 @@ Use the pull request template in `.github/pull_request_template.md`.
 ## Issues And Roadmap
 
 - use the issue templates for bugs and feature requests
-- check [ROADMAP.md](/Users/martin/Desktop/autopilot/ROADMAP.md) before proposing large new systems
+- check [ROADMAP.md](ROADMAP.md) before proposing large new systems
 - treat deferred items as out of scope unless there is a concrete failure mode
 
 ## License
@@ -57,4 +57,4 @@ By contributing, you agree that your contributions will be licensed under the MI
 
 ## Conduct
 
-Participation in this project is governed by [CODE_OF_CONDUCT.md](/Users/martin/Desktop/autopilot/CODE_OF_CONDUCT.md).
+Participation in this project is governed by [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).

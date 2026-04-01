@@ -62,10 +62,10 @@ Late stabilization fixes that were required to reach that state:
 
 The branch handoff docs were updated so they no longer instruct the next agent to repeat already-closed work:
 
-- [2026-03-31-pr-summary.md](/Users/martin/Desktop/autopilot/docs/2026-03-31-pr-summary.md)
-- [2026-03-31-merged-handoff-and-plan.md](/Users/martin/Desktop/autopilot/docs/2026-03-31-merged-handoff-and-plan.md)
-- [2026-03-31-control-plane-handoff.md](/Users/martin/Desktop/autopilot/docs/2026-03-31-control-plane-handoff.md)
-- [2026-03-31-engineering-backlog.md](/Users/martin/Desktop/autopilot/docs/2026-03-31-engineering-backlog.md)
+- [2026-03-31-pr-summary.md](2026-03-31-pr-summary.md)
+- [2026-03-31-merged-handoff-and-plan.md](2026-03-31-merged-handoff-and-plan.md)
+- [2026-03-31-control-plane-handoff.md](2026-03-31-control-plane-handoff.md)
+- [2026-03-31-engineering-backlog.md](2026-03-31-engineering-backlog.md)
 
 ## Intentional Non-Goals
 

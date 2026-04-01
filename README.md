@@ -15,13 +15,13 @@ Current branch truth:
 
 The canonical next-step handoff is:
 
-- [docs/2026-03-31-next-product-plan.md](/Users/martin/Desktop/autopilot/docs/2026-03-31-next-product-plan.md)
+- [docs/2026-03-31-next-product-plan.md](docs/2026-03-31-next-product-plan.md)
 
 Release hygiene docs:
 
-- [docs/release-checklist.md](/Users/martin/Desktop/autopilot/docs/release-checklist.md)
-- [docs/release-notes-template.md](/Users/martin/Desktop/autopilot/docs/release-notes-template.md)
-- [CHANGELOG.md](/Users/martin/Desktop/autopilot/CHANGELOG.md)
+- [docs/release-checklist.md](docs/release-checklist.md)
+- [docs/release-notes-template.md](docs/release-notes-template.md)
+- [CHANGELOG.md](CHANGELOG.md)
 
 Current capabilities include:
 
@@ -46,7 +46,7 @@ Compared with adjacent categories:
 - swarm tools optimize for autonomous agent collaboration; Autopilot optimizes for founder-visible execution control
 - coding copilots optimize for interactive coding help; Autopilot optimizes for tracked execution loops across projects, stories, reviews, and handoffs
 
-For the public category-level comparison, see [docs/comparison.md](/Users/martin/Desktop/autopilot/docs/comparison.md).
+For the public category-level comparison, see [docs/comparison.md](docs/comparison.md).
 
 ## Architecture
 
@@ -60,10 +60,10 @@ At a high level, the system is:
 
 Key docs:
 
-- [docs/execution-brief-bridge.md](/Users/martin/Desktop/autopilot/docs/execution-brief-bridge.md)
-- [docs/phase3-founderos-execution-plane.md](/Users/martin/Desktop/autopilot/docs/phase3-founderos-execution-plane.md)
-- [docs/phase4-approval-foundation.md](/Users/martin/Desktop/autopilot/docs/phase4-approval-foundation.md)
-- [docs/workflow.md](/Users/martin/Desktop/autopilot/docs/workflow.md)
+- [docs/execution-brief-bridge.md](docs/execution-brief-bridge.md)
+- [docs/phase3-founderos-execution-plane.md](docs/phase3-founderos-execution-plane.md)
+- [docs/phase4-approval-foundation.md](docs/phase4-approval-foundation.md)
+- [docs/workflow.md](docs/workflow.md)
 
 ## Quickstart
 
@@ -88,7 +88,7 @@ autopilot dashboard
 
 Canonical getting-started guide:
 
-- [docs/quickstart.md](/Users/martin/Desktop/autopilot/docs/quickstart.md)
+- [docs/quickstart.md](docs/quickstart.md)
 
 Useful patterns:
 
@@ -98,7 +98,7 @@ Useful patterns:
 - `autopilot trace` shows the structured worker/runtime history for a project
 - `autopilot live` renders an SSH-friendly snapshot of accounts, projects, stories, and recent events
 
-For the operator-facing path from source item or brief to final PR or handoff artifact, see [docs/workflow.md](/Users/martin/Desktop/autopilot/docs/workflow.md).
+For the operator-facing path from source item or brief to final PR or handoff artifact, see [docs/workflow.md](docs/workflow.md).
 
 ## Product Surface
 
@@ -156,19 +156,19 @@ Then validate and use it:
 ./.venv/bin/autopilot run /path/to/project
 ```
 
-The intake dashboard now lets you choose both `Execution Provider` and `Runtime Profile` before launch. For the full local-first contract, examples, and behavior notes, see [docs/local-first-runtime.md](/Users/martin/Desktop/autopilot/docs/local-first-runtime.md).
+The intake dashboard now lets you choose both `Execution Provider` and `Runtime Profile` before launch. For the full local-first contract, examples, and behavior notes, see [docs/local-first-runtime.md](docs/local-first-runtime.md).
 
 ## Examples
 
-- [local-only project](/Users/martin/Desktop/autopilot/docs/examples/local-only-project.md)
-- [cloud multi-provider project](/Users/martin/Desktop/autopilot/docs/examples/cloud-multi-provider-project.md)
-- [issue-driven flow](/Users/martin/Desktop/autopilot/docs/examples/issue-driven-flow.md)
-- [quickstart guide](/Users/martin/Desktop/autopilot/docs/quickstart.md)
-- [smoke and evaluation story](/Users/martin/Desktop/autopilot/docs/smoke-story.md)
+- [local-only project](docs/examples/local-only-project.md)
+- [cloud multi-provider project](docs/examples/cloud-multi-provider-project.md)
+- [issue-driven flow](docs/examples/issue-driven-flow.md)
+- [quickstart guide](docs/quickstart.md)
+- [smoke and evaluation story](docs/smoke-story.md)
 
 ## Comparison
 
-- [product comparison](/Users/martin/Desktop/autopilot/docs/comparison.md)
+- [product comparison](docs/comparison.md)
 
 ## Tool Layer And Extensions
 
@@ -178,7 +178,7 @@ Autopilot now exposes one user-facing tools layer over the local connector regis
 - project and story payloads surface both connector activation and the derived public tool activation state
 - the capability catalog also exposes extension slots for providers, runtimes, trackers, and notifiers with a shared lifecycle of `register -> validate -> expose -> audit`
 
-Current documented extension examples live in [docs/extensions.md](/Users/martin/Desktop/autopilot/docs/extensions.md).
+Current documented extension examples live in [docs/extensions.md](docs/extensions.md).
 
 Custom tracker and notifier registrations now have a config-driven path:
 
@@ -187,12 +187,12 @@ Custom tracker and notifier registrations now have a config-driven path:
 
 ## Open Source Surface
 
-- [LICENSE](/Users/martin/Desktop/autopilot/LICENSE)
-- [CONTRIBUTING.md](/Users/martin/Desktop/autopilot/CONTRIBUTING.md)
-- [CODE_OF_CONDUCT.md](/Users/martin/Desktop/autopilot/CODE_OF_CONDUCT.md)
-- [ROADMAP.md](/Users/martin/Desktop/autopilot/ROADMAP.md)
-- [pull request template](/Users/martin/Desktop/autopilot/.github/pull_request_template.md)
-- [issue templates](/Users/martin/Desktop/autopilot/.github/ISSUE_TEMPLATE)
+- [LICENSE](LICENSE)
+- [CONTRIBUTING.md](CONTRIBUTING.md)
+- [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)
+- [ROADMAP.md](ROADMAP.md)
+- [pull request template](.github/pull_request_template.md)
+- [issue templates](.github/ISSUE_TEMPLATE)
 
 The repository now carries a minimal public contribution surface for external engineers:
 
@@ -203,7 +203,7 @@ The repository now carries a minimal public contribution surface for external en
 
 ## Troubleshooting
 
-For fresh-user setup failures, provider validation issues, dashboard smoke checks, and delivery-loop debugging, see [docs/troubleshooting.md](/Users/martin/Desktop/autopilot/docs/troubleshooting.md).
+For fresh-user setup failures, provider validation issues, dashboard smoke checks, and delivery-loop debugging, see [docs/troubleshooting.md](docs/troubleshooting.md).
 
 ## Official Verification Baseline
 
@@ -217,12 +217,12 @@ For fresh-user setup failures, provider validation issues, dashboard smoke check
 ./.venv/bin/autopilot status
 ```
 
-For clean-checkout setup, dashboard smoke steps, and expected outcomes, see [docs/verification-baseline.md](/Users/martin/Desktop/autopilot/docs/verification-baseline.md).
+For clean-checkout setup, dashboard smoke steps, and expected outcomes, see [docs/verification-baseline.md](docs/verification-baseline.md).
 
-For the minimal public adoption and release-candidate evaluation path, see [docs/smoke-story.md](/Users/martin/Desktop/autopilot/docs/smoke-story.md).
+For the minimal public adoption and release-candidate evaluation path, see [docs/smoke-story.md](docs/smoke-story.md).
 
 Supporting architecture docs:
 
-- [docs/execution-brief-bridge.md](/Users/martin/Desktop/autopilot/docs/execution-brief-bridge.md)
-- [docs/phase3-founderos-execution-plane.md](/Users/martin/Desktop/autopilot/docs/phase3-founderos-execution-plane.md)
-- [docs/phase4-approval-foundation.md](/Users/martin/Desktop/autopilot/docs/phase4-approval-foundation.md)
+- [docs/execution-brief-bridge.md](docs/execution-brief-bridge.md)
+- [docs/phase3-founderos-execution-plane.md](docs/phase3-founderos-execution-plane.md)
+- [docs/phase4-approval-foundation.md](docs/phase4-approval-foundation.md)

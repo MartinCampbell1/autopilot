@@ -18,9 +18,9 @@ Choose one of the public entry paths:
 - local idea to project:
   - `autopilot init /path/to/project --idea "Build a FastAPI bug tracker"`
 - local-first runtime:
-  - configure `providers:` and `runtime_profiles:` as described in [docs/local-first-runtime.md](/Users/martin/Desktop/autopilot/docs/local-first-runtime.md)
+  - configure `providers:` and `runtime_profiles:` as described in [docs/local-first-runtime.md](local-first-runtime.md)
 - issue-driven execution:
-  - use the source-item path in [docs/examples/issue-driven-flow.md](/Users/martin/Desktop/autopilot/docs/examples/issue-driven-flow.md)
+  - use the source-item path in [docs/examples/issue-driven-flow.md](examples/issue-driven-flow.md)
 
 ## 3. Validate The Runtime
 
@@ -65,12 +65,12 @@ Run the public release-gate commands before treating the environment as healthy:
 ./.venv/bin/autopilot status
 ```
 
-For the full clean-checkout contract, including dashboard smoke steps, see [docs/verification-baseline.md](/Users/martin/Desktop/autopilot/docs/verification-baseline.md).
-For the repeatable public adoption check that sits above those raw commands, see [docs/smoke-story.md](/Users/martin/Desktop/autopilot/docs/smoke-story.md).
+For the full clean-checkout contract, including dashboard smoke steps, see [docs/verification-baseline.md](verification-baseline.md).
+For the repeatable public adoption check that sits above those raw commands, see [docs/smoke-story.md](smoke-story.md).
 
 ## 6. Follow-On Guides
 
-- [docs/workflow.md](/Users/martin/Desktop/autopilot/docs/workflow.md)
-- [docs/local-first-runtime.md](/Users/martin/Desktop/autopilot/docs/local-first-runtime.md)
-- [docs/extensions.md](/Users/martin/Desktop/autopilot/docs/extensions.md)
-- [docs/troubleshooting.md](/Users/martin/Desktop/autopilot/docs/troubleshooting.md)
+- [docs/workflow.md](workflow.md)
+- [docs/local-first-runtime.md](local-first-runtime.md)
+- [docs/extensions.md](extensions.md)
+- [docs/troubleshooting.md](troubleshooting.md)
