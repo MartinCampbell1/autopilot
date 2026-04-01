@@ -125,6 +125,22 @@ Custom tracker and notifier registrations now have a config-driven path:
 - add `trackers:` entries in `config.yaml` to register an inbound tracker contract and ingest items through `/api/integrations/tracker-items`
 - add `notifications:` entries in `config.yaml` to register real notifier channels that also appear in the extension registry with readiness and target metadata
 
+## Open Source Surface
+
+- [LICENSE](/Users/martin/Desktop/autopilot/LICENSE)
+- [CONTRIBUTING.md](/Users/martin/Desktop/autopilot/CONTRIBUTING.md)
+- [CODE_OF_CONDUCT.md](/Users/martin/Desktop/autopilot/CODE_OF_CONDUCT.md)
+- [ROADMAP.md](/Users/martin/Desktop/autopilot/ROADMAP.md)
+- [pull request template](/Users/martin/Desktop/autopilot/.github/pull_request_template.md)
+- [issue templates](/Users/martin/Desktop/autopilot/.github/ISSUE_TEMPLATE)
+
+The repository now carries a minimal public contribution surface for external engineers:
+
+- MIT license for the codebase
+- contributor setup and verification expectations
+- roadmap for pre-release scope versus explicitly deferred work
+- bug and feature request templates oriented around operator-visible product behavior
+
 ## Official Verification Baseline
 
 ```bash
