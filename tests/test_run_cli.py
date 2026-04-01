@@ -341,6 +341,46 @@ def test_write_team_context_includes_shared_discoveries(tmp_path: Path) -> None:
     assert payload["team_mode"] == "team"
     assert payload["shared_discovery_summary"]["warning"] == 1
     assert payload["shared_discoveries"][0]["title"] == "Rate limit"
+    assert payload["team_messages_path"] == ".ralph/team-messages.json"
+    assert payload["communication_law"]["explicit_teammate_channel"] == ".ralph/team-messages.json"
+    assert payload["communication_law"]["non_channel_artifacts"] == [".ralph/specialist-notes.md"]
+
+
+def test_write_team_context_summarizes_explicit_team_messages(tmp_path: Path) -> None:
+    from autopilot.cli.run import _write_team_context
+    from autopilot.core.team_messages import upsert_team_message
+
+    project_dir = tmp_path / "project"
+    project_dir.mkdir(parents=True)
+    upsert_team_message(
+        project_dir,
+        dedupe_key="story:7:specialist:notes",
+        story_id=7,
+        source_role="specialist",
+        target_role="worker",
+        message_type="specialist_notes",
+        title="Implementation notes",
+        content="Prefer the existing callback validator.",
+    )
+    upsert_team_message(
+        project_dir,
+        dedupe_key="story:7:specialist:warning",
+        story_id=7,
+        source_role="specialist",
+        target_role="worker",
+        message_type="specialist_warning",
+        title="Rate limit risk",
+        content="Do not burst the upstream provider.",
+    )
+
+    _write_team_context(project_dir, {"team_mode": "team"})
+
+    payload = json.loads((project_dir / ".ralph" / "team-context.json").read_text())
+
+    assert payload["shared_message_summary"] == {
+        "specialist_notes": 1,
+        "specialist_warning": 1,
+    }
 
 
 def test_project_branch_policy_uses_task_source_contract() -> None:

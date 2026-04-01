@@ -75,6 +75,11 @@ from autopilot.core.runtime_control import (
     release_work_item_lease,
 )
 from autopilot.core.scheduler import format_interval, parse_schedule_spec, run_scheduled_job
+from autopilot.core.team_messages import (
+    load_team_messages,
+    team_messages_path,
+    upsert_team_message,
+)
 from autopilot.core.worktree import create_worktree, merge_worktree, remove_worktree, worktree_path
 
 console = Console()
@@ -226,12 +231,28 @@ def _write_team_context(
     for marker in discovery_board:
         kind = str(marker.get("kind") or "note")
         kind_counts[kind] = kind_counts.get(kind, 0) + 1
+    message_counts: dict[str, int] = {}
+    for message in load_team_messages(project_path):
+        message_type = str(message.message_type or "note").strip() or "note"
+        message_counts[message_type] = message_counts.get(message_type, 0) + 1
     context_path.write_text(
         json.dumps(
             {
                 **runtime_plan,
                 "shared_discoveries": discovery_board,
                 "shared_discovery_summary": kind_counts,
+                "team_messages_path": str(
+                    team_messages_path(project_path).relative_to(project_path)
+                ),
+                "shared_message_summary": message_counts,
+                "communication_law": {
+                    "explicit_teammate_channel": ".ralph/team-messages.json",
+                    "non_channel_artifacts": [".ralph/specialist-notes.md"],
+                    "rule": (
+                        "Only team-messages.json is guaranteed teammate-visible. "
+                        "Do not assume arbitrary notes files are shared."
+                    ),
+                },
             },
             indent=2,
         )
@@ -243,6 +264,28 @@ def _write_specialist_notes(project_path: Path, specialist_output: str) -> None:
     ralph_dir.mkdir(parents=True, exist_ok=True)
     notes_path = ralph_dir / "specialist-notes.md"
     notes_path.write_text(specialist_output.strip() or "No specialist notes generated.")
+
+
+def _publish_specialist_team_message(
+    project_path: Path,
+    *,
+    story: dict[str, Any],
+    message_type: str,
+    title: str,
+    content: str,
+    metadata: dict[str, Any] | None = None,
+) -> None:
+    upsert_team_message(
+        project_path,
+        dedupe_key=f"story:{int(story['id'])}:specialist:{message_type}",
+        story_id=int(story["id"]),
+        source_role="specialist",
+        target_role="worker",
+        message_type=message_type,
+        title=title,
+        content=content,
+        metadata=metadata,
+    )
 
 
 def _pipeline_state_for_runtime_plan(runtime_plan: dict[str, Any]) -> list[dict[str, Any]]:
@@ -966,6 +1009,21 @@ def _run_impl(
 
         specialist_profile = reserve_specialist_profile()
         if specialist_profile is None:
+            _publish_specialist_team_message(
+                execution_path,
+                story=story,
+                message_type="specialist_skipped",
+                title="Specialist preflight unavailable",
+                content="No specialist account was available. Proceed without specialist guidance.",
+            )
+            _write_team_context(
+                execution_path,
+                runtime_plan,
+                discoveries=build_story_discovery_context(
+                    load_project_state(config, project_id),
+                    story_id=int(story["id"]),
+                ),
+            )
             sync_event(
                 event="specialist_skipped",
                 status="warning",
@@ -1025,6 +1083,25 @@ def _run_impl(
             profile=specialist_profile,
         )
         if rate_limited:
+            _publish_specialist_team_message(
+                execution_path,
+                story=story,
+                message_type="specialist_rate_limited",
+                title="Specialist preflight rate limited",
+                content="Specialist preflight hit a rate limit. Continue without specialist confidence.",
+                metadata={
+                    "provider": specialist_profile.provider,
+                    "profile": specialist_profile.name,
+                },
+            )
+            _write_team_context(
+                execution_path,
+                runtime_plan,
+                discoveries=build_story_discovery_context(
+                    load_project_state(config, project_id),
+                    story_id=int(story["id"]),
+                ),
+            )
             mark_profile_rate_limited(specialist_profile)
             completed_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
             sync_event(
@@ -1054,6 +1131,19 @@ def _run_impl(
         if success:
             mark_profile_success(specialist_profile)
             _write_specialist_notes(execution_path, output)
+            _publish_specialist_team_message(
+                execution_path,
+                story=story,
+                message_type="specialist_notes",
+                title=f"{specialist['label']} implementation notes",
+                content=output,
+                metadata={
+                    "role": specialist.get("label"),
+                    "member_id": specialist.get("member_id"),
+                    "provider": specialist_profile.provider,
+                    "profile": specialist_profile.name,
+                },
+            )
             recorded_discoveries = record_discovery_markers(
                 config,
                 project_id,
@@ -1091,6 +1181,15 @@ def _run_impl(
                         ),
                     },
                 )
+            else:
+                _write_team_context(
+                    execution_path,
+                    runtime_plan,
+                    discoveries=build_story_discovery_context(
+                        load_project_state(config, project_id),
+                        story_id=int(story["id"]),
+                    ),
+                )
             completed_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
             sync_event(
                 event="specialist_ready",
@@ -1117,6 +1216,21 @@ def _run_impl(
             return
 
         _write_specialist_notes(execution_path, output)
+        _publish_specialist_team_message(
+            execution_path,
+            story=story,
+            message_type="specialist_failed",
+            title="Specialist preflight failed",
+            content=output.strip() or "Specialist preflight failed without output.",
+        )
+        _write_team_context(
+            execution_path,
+            runtime_plan,
+            discoveries=build_story_discovery_context(
+                load_project_state(config, project_id),
+                story_id=int(story["id"]),
+            ),
+        )
         completed_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         sync_event(
             event="specialist_failed",

@@ -20,7 +20,7 @@ You are an autonomous coding agent. Your task is to complete the work for exactl
 - Run Summary: {{RUN_META_PATH}}
 - Critic Feedback: .ralph/critic-feedback.md
 - Team Context: .ralph/team-context.json
-- Specialist Notes: .ralph/specialist-notes.md
+- Team Messages: .ralph/team-messages.json
 
 ## Global Quality Gates (apply to every story)
 {{QUALITY_GATES}}
@@ -60,28 +60,29 @@ If the story details are empty or missing, STOP and report that the PRD story fo
 2. Read {{ERRORS_LOG_PATH}} for repeated failures to avoid.
 3. Read `.ralph/critic-feedback.md` if it exists and is non-empty.
 4. Read `.ralph/team-context.json` if it exists and use it as the current story execution plan.
-5. Read `.ralph/specialist-notes.md` if it exists and fold the research guidance into your implementation plan.
-6. Read {{PRD_PATH}} for global context and acceptance requirements. Do not edit it.
-7. Fully audit and read all necessary files to understand the task end to end before implementing. Do not assume missing functionality.
-8. Keep edits grounded in the exact text you just read, and prefer the smallest precise change that satisfies the story.
-9. If {{AGENTS_PATH}} exists, follow its build and test instructions.
-10. Identify the concrete production files you will add or change before you start editing.
-11. Implement only the tasks that belong to {{STORY_ID}}.
-12. Run verification commands listed in the story, the global quality gates, and {{AGENTS_PATH}} if required.
-13. If the project has a build or dev workflow, run what applies:
+5. Read `.ralph/team-messages.json` if it exists and treat it as the explicit teammate-visible coordination channel.
+6. Do not assume arbitrary sidecar files are teammate-visible. `.ralph/specialist-notes.md` is a human artifact, not the guaranteed worker handoff channel.
+7. Read {{PRD_PATH}} for global context and acceptance requirements. Do not edit it.
+8. Fully audit and read all necessary files to understand the task end to end before implementing. Do not assume missing functionality.
+9. Keep edits grounded in the exact text you just read, and prefer the smallest precise change that satisfies the story.
+10. If {{AGENTS_PATH}} exists, follow its build and test instructions.
+11. Identify the concrete production files you will add or change before you start editing.
+12. Implement only the tasks that belong to {{STORY_ID}}.
+13. Run verification commands listed in the story, the global quality gates, and {{AGENTS_PATH}} if required.
+14. If the project has a build or dev workflow, run what applies:
    - Build step such as `npm run build` if defined.
    - Test step such as `pytest`, `npm test`, or a project-specific smoke check when available.
    - If no test/build tooling exists yet, run the lightest meaningful verification you can add and execute for this story.
    - Confirm no runtime or build errors in the console for frontend stories.
-14. Perform a brief audit before committing:
+15. Perform a brief audit before committing:
    - Security: check for obvious vulnerabilities or unsafe handling introduced by your changes.
    - Performance: check for avoidable regressions such as heavy loops, unnecessary re-renders, or repeated network calls.
    - Regression: verify existing behavior that could be impacted still works.
-15. If No-commit is false, commit changes using the `$commit` skill.
+16. If No-commit is false, commit changes using the `$commit` skill.
     - Stage everything with `git add -A`.
     - Confirm the tree is clean apart from the active `.ralph/runs/run-*.log` file with `git status --porcelain`.
     - Capture the commit hash and subject with `git show -s --format="%h %s" HEAD`.
-16. Append a progress entry to {{PROGRESS_PATH}} with run, verification, and file-change details.
+17. Append a progress entry to {{PROGRESS_PATH}} with run, verification, and file-change details.
     If No-commit is true, skip committing and note it in the progress entry.
 
 ## Progress Entry Format (Append Only)

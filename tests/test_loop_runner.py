@@ -69,6 +69,8 @@ class TestLoopRunner:
         assert ".ralph/critic-feedback.md" in prompt
         assert "Read each file from disk before editing it." in prompt
         assert "Do not peek at unfinished sub-work" in prompt
+        assert ".ralph/team-messages.json" in prompt
+        assert ".ralph/specialist-notes.md` is a human artifact" in prompt
         assert 'str(v)' in loop_script.read_text()
         assert 'ACTIVITY_CMD=".agents/ralph/log-activity.sh"' in config_script.read_text()
 
@@ -217,6 +219,8 @@ class TestLoopRunner:
         assert "Fix login" in prompt
         assert "OAuth callback validation" in prompt
         assert ".ralph/critic-feedback.md" in prompt
+        assert ".ralph/team-messages.json" in prompt
+        assert "explicit teammate channel" in prompt
         assert "do not patch from memory or stale snippets" in prompt.lower()
         assert "launch or delegate background work" in prompt
 
@@ -226,6 +230,8 @@ class TestLoopRunner:
         assert "smallest precise change" in prompt
         assert "report it as launched/running" in prompt
         assert "invent fork results" in prompt
+        assert ".ralph/team-messages.json" in prompt
+        assert "do not assume arbitrary notes files are shared" in prompt
 
     @patch("autopilot.core.loop_runner.get_adapter")
     def test_run_retry_iteration_success(self, mock_get_adapter: MagicMock, tmp_path: Path) -> None:
