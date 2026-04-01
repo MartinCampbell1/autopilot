@@ -46,6 +46,38 @@ class ToolRunResult(BaseModel):
     hooks: list[HookExecutionRecord] = Field(default_factory=list)
 
 
+def _permission_classifier_context_from_use_context(use_context: ToolUseContext) -> dict[str, Any]:
+    raw = dict(use_context.metadata.get("permission_classifier") or {})
+    enabled = raw.get("enabled")
+    if enabled is None:
+        enabled = True if raw else bool(use_context.metadata.get("permission_classifier_enabled"))
+    user_text = str(
+        raw.get("user_text")
+        or use_context.metadata.get("permission_classifier_user_text")
+        or ""
+    ).strip()
+    decision_reason = str(
+        raw.get("decision_reason")
+        or use_context.metadata.get("permission_decision_reason")
+        or ""
+    ).strip()
+    fail_open = raw.get("fail_open")
+    if fail_open is None:
+        fail_open = bool(use_context.metadata.get("permission_classifier_fail_open"))
+    max_user_text_chars = raw.get("max_user_text_chars")
+    if not enabled and not raw:
+        return {}
+    payload: dict[str, Any] = {
+        "enabled": bool(enabled),
+        "user_text": user_text,
+        "decision_reason": decision_reason,
+        "fail_open": bool(fail_open),
+    }
+    if max_user_text_chars is not None:
+        payload["max_user_text_chars"] = max_user_text_chars
+    return payload
+
+
 def _tool_permission_runtime_key(
     tool: ToolDef,
     use_context: ToolUseContext,
@@ -145,6 +177,7 @@ def _bridge_permission_decision(
         permission_source="tool_runner.bridge",
     )
     request_id = f"perm_{tool_use_id}"
+    classifier_context = _permission_classifier_context_from_use_context(use_context)
 
     def _wait_for_runtime_from_mailbox_or_disk() -> tuple[PermissionDecision | None, str]:
         if not runtime_key or use_context.config is None:
@@ -190,6 +223,9 @@ def _bridge_permission_decision(
                 "description": tool.description,
                 "display_name": tool.name,
                 "decision_reason": str(use_context.metadata.get("permission_decision_reason") or "").strip() or None,
+                "user_text": str(classifier_context.get("user_text") or "").strip() or None,
+                "classifier_enabled": bool(classifier_context.get("enabled")),
+                "classifier_fail_open": bool(classifier_context.get("fail_open")),
                 "agent_id": use_context.runtime_agent_ids[0] if use_context.runtime_agent_ids else None,
             },
             timeout=timeout,
@@ -290,12 +326,14 @@ def run_tool_use(
     hook_records: list[HookExecutionRecord] = []
     tool_use_id = _resolve_tool_use_id(use_context, normalized_input)
     bridge_decision, permission_source = _bridge_permission_decision(tool, normalized_input, use_context)
+    classifier_context = _permission_classifier_context_from_use_context(use_context)
 
     permission_decision = resolve_tool_permission_decision(
         tool,
         normalized_input,
         resolved_permission_context,
         precomputed_decision=bridge_decision,
+        classifier_context=classifier_context,
         config=use_context.config,
         project_id=use_context.project_id,
         record_denial=True,

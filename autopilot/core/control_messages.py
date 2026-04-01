@@ -82,6 +82,9 @@ class ControlPermissionRequest(BaseModel):
     tool_use_id: str
     agent_id: str | None = None
     description: str | None = None
+    user_text: str | None = None
+    classifier_enabled: bool | None = None
+    classifier_fail_open: bool | None = None
 
 
 class ControlSetPermissionModeRequest(BaseModel):

@@ -369,6 +369,67 @@ def test_tool_runner_returns_denied_for_explicit_rule() -> None:
     assert "demo.delete" in result.message
 
 
+def test_tool_runner_permission_classifier_can_auto_allow_safe_explicit_request() -> None:
+    tool = build_tool(
+        name="demo.read",
+        description="Read demo payload.",
+        approval_policy="ask",
+        execute=lambda tool_input, _: ToolResult(status="ok", payload={"path": tool_input["path"]}),
+    )
+
+    result = run_tool_use(
+        tool,
+        {"path": "README.md"},
+        ToolUseContext(
+            actor="tester",
+            metadata={
+                "permission_classifier": {
+                    "enabled": True,
+                    "user_text": "Please inspect the README and show me the current contents.",
+                }
+            },
+        ),
+        permission_context=get_empty_tool_permission_context(),
+    )
+
+    assert result.status == "ok"
+    assert result.permission is not None
+    assert result.permission.behavior == "allow"
+    assert result.permission.rule_source == "classifier"
+    assert result.permission.matched_rule == "classifier:safe_explicit_intent"
+
+
+def test_tool_runner_permission_classifier_fails_closed_to_prompt_on_long_transcript() -> None:
+    tool = build_tool(
+        name="demo.read",
+        description="Read demo payload.",
+        approval_policy="ask",
+        execute=lambda tool_input, _: ToolResult(status="ok", payload=tool_input),
+    )
+
+    result = run_tool_use(
+        tool,
+        {"path": "README.md"},
+        ToolUseContext(
+            actor="tester",
+            metadata={
+                "permission_classifier": {
+                    "enabled": True,
+                    "user_text": "x" * 5000,
+                }
+            },
+        ),
+        permission_context=get_empty_tool_permission_context(),
+    )
+
+    assert result.status == "approval_required"
+    assert result.permission is not None
+    assert result.permission.behavior == "ask"
+    assert result.permission.rule_source == "classifier"
+    assert result.permission.matched_rule == "classifier:transcript_too_long"
+    assert "too long" in result.message.lower()
+
+
 def test_repeated_denials_escalate_to_explicit_approval(tmp_path: Path) -> None:
     tool = build_tool(
         name="demo.pause",
