@@ -17,6 +17,7 @@ from autopilot.core.structured_io import StructuredIO
 from autopilot.core.structured_runtime import activate_structured_io
 from autopilot.core.tool_contracts import ToolResult, ToolUseContext, build_tool, get_empty_tool_permission_context
 from autopilot.core.tool_hooks import ToolHookDefinition
+from autopilot.core.tool_permission_runtime import resolve_tool_permission_runtime
 from autopilot.core.tool_permissions import (
     PermissionContextOverlay,
     PermissionRuleValue,
@@ -841,6 +842,108 @@ def test_tool_runner_ask_creates_approval_runtime_and_pending_mailbox(tmp_path: 
     assert runtime.metadata["tool_use_id"].startswith("toolu_")
     assert runtime.runtime_agent_ids == ["proj_tool_ask:1:review:b", "proj_tool_ask:1:worker:a"]
     assert len(mailbox) == 2
+
+
+def test_tool_runner_reuses_existing_tool_permission_runtime_for_same_tool_use_id(tmp_path: Path) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    save_project_state(config, "proj_tool_reuse", {"status": "running"})
+    executed: list[dict[str, object]] = []
+    tool = build_tool(
+        name="demo.pause",
+        description="Pause demo execution.",
+        approval_policy="policy",
+        execute=lambda tool_input, _: executed.append(dict(tool_input)) or ToolResult(status="ok", payload=tool_input),
+    )
+    permission_context = apply_permission_update(
+        get_empty_tool_permission_context(),
+        PermissionUpdate(
+            type="add_rules",
+            destination="session",
+            behavior="ask",
+            rules=[PermissionRuleValue(tool_name="demo.pause")],
+        ),
+    )
+
+    def _run():
+        return run_tool_use(
+            tool,
+            {},
+            ToolUseContext(
+                config=config,
+                actor="tester",
+                project_id="proj_tool_reuse",
+                runtime_agent_ids=("proj_tool_reuse:1:worker:a",),
+                metadata={"tool_use_id": "toolu_reuse"},
+            ),
+            permission_context=permission_context,
+        )
+
+    first = _run()
+    generic_pending_before = list_agent_mailbox_messages(
+        config,
+        project_id="proj_tool_reuse",
+        runtime_agent_id="proj_tool_reuse:1:worker:a",
+        message_type="tool_permission_pending",
+    )
+    user_pending_before = list_agent_mailbox_messages(
+        config,
+        project_id="proj_tool_reuse",
+        runtime_agent_id="proj_tool_reuse:1:worker:a",
+        message_type="tool_permission_user_pending",
+    )
+    second = _run()
+    generic_pending_after = list_agent_mailbox_messages(
+        config,
+        project_id="proj_tool_reuse",
+        runtime_agent_id="proj_tool_reuse:1:worker:a",
+        message_type="tool_permission_pending",
+    )
+    user_pending_after = list_agent_mailbox_messages(
+        config,
+        project_id="proj_tool_reuse",
+        runtime_agent_id="proj_tool_reuse:1:worker:a",
+        message_type="tool_permission_user_pending",
+    )
+
+    assert first.status == "approval_required"
+    assert first.approval_runtime_id
+    assert second.status == "approval_required"
+    assert second.approval_runtime_id == first.approval_runtime_id
+    assert len(generic_pending_before) == 1
+    assert len(user_pending_before) == 1
+    assert len(generic_pending_after) == 1
+    assert len(user_pending_after) == 1
+
+    resolve_tool_permission_runtime(
+        config,
+        first.approval_runtime_id,
+        outcome="allow",
+        actor="founderos",
+        note="Approved for continuation.",
+        source="user",
+    )
+
+    third = _run()
+    generic_pending_final = list_agent_mailbox_messages(
+        config,
+        project_id="proj_tool_reuse",
+        runtime_agent_id="proj_tool_reuse:1:worker:a",
+        message_type="tool_permission_pending",
+    )
+    user_pending_final = list_agent_mailbox_messages(
+        config,
+        project_id="proj_tool_reuse",
+        runtime_agent_id="proj_tool_reuse:1:worker:a",
+        message_type="tool_permission_user_pending",
+    )
+
+    assert third.status == "ok"
+    assert third.permission is not None
+    assert third.permission.behavior == "allow"
+    assert third.permission.message == "Approved for continuation."
+    assert executed == [{}]
+    assert len(generic_pending_final) == 1
+    assert len(user_pending_final) == 1
 
 
 def test_tool_runner_uses_bridge_permission_decision_when_enabled(tmp_path: Path) -> None:

@@ -33,11 +33,14 @@ from autopilot.core.structured_io import StructuredIO
 from autopilot.core.tool_contracts import ToolResult, build_tool
 from autopilot.core.tool_permission_runtime import (
     get_tool_permission_runtime,
+    get_tool_permission_runtime_decision,
     list_tool_permission_runtimes,
     resolve_tool_permission_runtime,
     serialize_tool_permission_runtime,
+    tool_permission_runtime_key,
 )
 from autopilot.core.tool_permissions import (
+    PermissionDecision,
     PermissionContextOverlay,
     load_tool_permission_context,
     resolve_tool_permission_decision,
@@ -270,6 +273,27 @@ class HeadlessControlSession:
         )
         return approval_runtime.id
 
+    def _serialize_permission_decision_payload(
+        self,
+        *,
+        request: Any,
+        decision: PermissionDecision,
+        approval_runtime_id: str = "",
+    ) -> dict[str, Any]:
+        return {
+            "behavior": decision.behavior,
+            "message": decision.message,
+            "reasons": list(decision.reasons),
+            "rule_source": decision.rule_source,
+            "matched_rule": decision.matched_rule,
+            "denial_count": decision.denial_count,
+            "escalation_required": decision.escalation_required,
+            "tool_use_id": str(request.tool_use_id),
+            "tool_name": str(request.tool_name),
+            "permission_mode": self.resolved_permission_mode(),
+            "approval_runtime_id": approval_runtime_id,
+        }
+
     def can_use_tool_payload(self, request: Any) -> dict[str, Any]:
         """Evaluate a can_use_tool request under the current permission context."""
 
@@ -284,6 +308,36 @@ class HeadlessControlSession:
                 "rule_content": str((request.input or {}).get("rule_content") or "").strip(),
             },
         )
+        runtime_key = tool_permission_runtime_key(
+            self.project_id,
+            tool.name,
+            str(request.tool_use_id or ""),
+        )
+        if runtime_key:
+            existing_runtime = get_tool_permission_runtime(self.config, key=runtime_key)
+            if existing_runtime is not None:
+                agent_id = str(request.agent_id or "").strip()
+                if agent_id:
+                    create_or_reuse_approval_runtime(
+                        self.config,
+                        key=runtime_key,
+                        project_id=self.project_id,
+                        runtime_agent_ids=[agent_id],
+                        metadata={
+                            "kind": str(existing_runtime.metadata.get("kind") or "tool_permission_request"),
+                            "tool_name": tool.name,
+                            "tool_use_id": str(request.tool_use_id or "").strip(),
+                            "source": "headless_control.runtime_reuse",
+                        },
+                    )
+                observed = get_tool_permission_runtime_decision(self.config, key=runtime_key)
+                if observed is not None:
+                    runtime_record, runtime_decision = observed
+                    return self._serialize_permission_decision_payload(
+                        request=request,
+                        decision=runtime_decision,
+                        approval_runtime_id=runtime_record.id,
+                    )
         decision = resolve_tool_permission_decision(
             tool,
             dict(request.input or {}),
@@ -345,19 +399,11 @@ class HeadlessControlSession:
             )
             if approval_runtime_id:
                 decision = pending_user_decision
-        return {
-            "behavior": decision.behavior,
-            "message": decision.message,
-            "reasons": list(decision.reasons),
-            "rule_source": decision.rule_source,
-            "matched_rule": decision.matched_rule,
-            "denial_count": decision.denial_count,
-            "escalation_required": decision.escalation_required,
-            "tool_use_id": str(request.tool_use_id),
-            "tool_name": str(request.tool_name),
-            "permission_mode": self.resolved_permission_mode(),
-            "approval_runtime_id": approval_runtime_id,
-        }
+        return self._serialize_permission_decision_payload(
+            request=request,
+            decision=decision,
+            approval_runtime_id=approval_runtime_id,
+        )
 
     def interrupt_status_payload(self) -> dict[str, Any]:
         """Return the current structured interrupt state for the runtime."""
