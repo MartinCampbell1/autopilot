@@ -107,6 +107,8 @@ class AutopilotConfig:
     codex_timeout_sec: int = 1800
     cooldown_base_sec: int = 300
     max_retries_per_provider: int = 3
+    tool_result_inline_bytes_limit: int = 16384
+    tool_result_preview_chars: int = 1200
     providers_order: list[str] = field(default_factory=lambda: ["codex", "claude", "gemini"])
     autopilot_home_override: str | None = None
     profiles_dir_override: str | None = None
@@ -196,6 +198,10 @@ class AutopilotConfig:
     @property
     def tool_permission_denials_json_path(self) -> Path:
         return self.control_plane_state_dir / "tool-permission-denials.json"
+
+    @property
+    def tool_results_dir(self) -> Path:
+        return self.control_plane_state_dir / "tool-results"
 
     def plugin_data_dir(self, plugin_id: str) -> Path:
         normalized = str(plugin_id or "").strip().lower() or "unknown-plugin"

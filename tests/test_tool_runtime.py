@@ -208,3 +208,36 @@ def test_tool_runner_denial_breaker_escalates_to_approval(tmp_path: Path) -> Non
     assert second.status == "denied"
     assert third.status == "approval_required"
     assert "explicit approval" in third.message
+
+
+def test_tool_runner_stores_large_results_on_disk(tmp_path: Path) -> None:
+    config = AutopilotConfig(
+        autopilot_home_override=str(tmp_path / ".autopilot"),
+        tool_result_inline_bytes_limit=256,
+        tool_result_preview_chars=120,
+    )
+    tool = build_tool(
+        name="demo.search",
+        description="Return a large search payload.",
+        approval_policy="policy",
+        execute=lambda tool_input, _: ToolResult(
+            status="ok",
+            message="Search completed",
+            payload={"matches": ["x" * 80 for _ in range(12)], "query": tool_input["query"]},
+        ),
+    )
+
+    result = run_tool_use(
+        tool,
+        {"query": "needle"},
+        ToolUseContext(config=config, actor="tester", project_id="proj_large"),
+    )
+
+    assert result.status == "ok"
+    assert result.tool_result is not None
+    assert result.tool_result.payload["stored_result"] is True
+    stored_path = Path(result.tool_result.payload["stored_result_path"])
+    assert stored_path.exists()
+    stored_payload = stored_path.read_text()
+    assert '"query": "needle"' in stored_payload
+    assert result.tool_result.metadata["stored_result"] is True
