@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -510,10 +511,23 @@ def create_execution_command_issue(
 
     root_cause = policy_reasons[0] if policy_reasons else (reason.strip() or f"Approval requested for `{command}`.")
     dedupe_key = f"{project_id}:{command}:approval"
+    request_id = f"issreq_{uuid.uuid4().hex[:12]}"
+
+    def _can_reuse_issue_sync(record: Any) -> bool:
+        issue_payload = dict(record.payload.get("issue") or {})
+        issue_id = str(issue_payload.get("id") or "").strip()
+        if not issue_id:
+            return False
+        issue_record = get_issue(config, issue_id)
+        return issue_record is not None and issue_record.status == "open"
+
     sync_record = resolve_permission_sync(
         config,
         sync_key=f"execution-command-issue:{dedupe_key}",
+        request_id=request_id,
         metadata={"project_id": project_id, "command": command, "kind": "issue"},
+        reuse_checker=_can_reuse_issue_sync,
+        allow_failed_retries=True,
         resolver=lambda: {
             "issue": create_issue(
                 config,
@@ -3945,6 +3959,15 @@ def create_execution_command_approval(
         if normalized_issue_id
         else f"execution-command-approval:{project_id}:{command}:{payload_hash}"
     )
+    request_id = f"aprreq_{uuid.uuid4().hex[:12]}"
+
+    def _can_reuse_approval_sync(record: Any) -> bool:
+        approval_payload = dict(record.payload.get("approval") or {})
+        approval_id = str(approval_payload.get("id") or "").strip()
+        if not approval_id:
+            return False
+        approval_record = get_approval(config, approval_id)
+        return approval_record is not None and approval_record.status == "pending"
 
     def _resolve_approval_payload() -> dict[str, Any]:
         existing_pending = (
@@ -3978,6 +4001,7 @@ def create_execution_command_approval(
     sync_record = resolve_permission_sync(
         config,
         sync_key=sync_key,
+        request_id=request_id,
         metadata={
             "project_id": project_id,
             "command": command,
@@ -3985,6 +4009,8 @@ def create_execution_command_approval(
             "payload_hash": payload_hash,
             "kind": "approval",
         },
+        reuse_checker=_can_reuse_approval_sync,
+        allow_failed_retries=True,
         resolver=_resolve_approval_payload,
     )
     approval_payload = dict(sync_record.payload.get("approval") or {})
