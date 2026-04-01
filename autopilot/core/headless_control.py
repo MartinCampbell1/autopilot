@@ -10,6 +10,11 @@ from pathlib import Path
 from typing import Any
 
 from autopilot.core.capability_store import load_connectors_registry
+from autopilot.core.command_permissions import (
+    headless_permission_mode_allowed,
+    normalize_permission_mode,
+    sanitize_permission_context_for_mode,
+)
 from autopilot.core.config import AutopilotConfig
 from autopilot.core.control_messages import (
     ControlRequestEnvelope,
@@ -100,7 +105,7 @@ class HeadlessControlSession:
         mode = self.resolved_permission_mode()
         if context.mode != mode:
             context = context.model_copy(update={"mode": mode})
-        return context
+        return sanitize_permission_context_for_mode(context)
 
     def _available_models(self) -> list[dict[str, Any]]:
         current_model = self.current_model()
@@ -372,11 +377,30 @@ class HeadlessControlSession:
                 session_id=self.session_id,
             )
         if subtype == "set_permission_mode":
+            try:
+                normalized_mode = normalize_permission_mode(str(request.request.mode))
+            except ValueError as exc:
+                return make_control_error_response(
+                    request.request_id,
+                    error=str(exc),
+                    session_id=self.session_id,
+                )
+            if not headless_permission_mode_allowed(normalized_mode):
+                return make_control_error_response(
+                    request.request_id,
+                    error=f"Permission mode `{normalized_mode}` is not available from structured headless control.",
+                    session_id=self.session_id,
+                )
             with self._lock:
-                self.permission_mode = str(request.request.mode)
+                self.permission_mode = normalized_mode
+            sanitized = self._permission_context()
+            transition = dict(sanitized.metadata.get("mode_transition") or {})
             return make_control_success_response(
                 request.request_id,
-                response={"mode": self.resolved_permission_mode()},
+                response={
+                    "mode": self.resolved_permission_mode(),
+                    "stripped_allow_rules": list(transition.get("stripped_allow_rules") or []),
+                },
                 session_id=self.session_id,
             )
         if subtype == "can_use_tool":
