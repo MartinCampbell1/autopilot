@@ -337,6 +337,66 @@ export function useControlPlanePageController(
     ]
   );
 
+  const waitForAsyncTaskSettlement = useCallback(
+    async (task: { id?: string | null; project_id?: string | null; runtime_agent_ids?: string[] }) => {
+      const taskId = toStringValue(task.id);
+      if (!taskId) return;
+      setBusyActionKey(`async-task-wait:${taskId}`);
+      setNotice("");
+      setErrorMessage("");
+      try {
+        const projectId = toStringValue(task.project_id);
+        const runtimeProject = projects.find(
+          (project) =>
+            project.id === projectId
+            && Boolean(project.runtime_control_available)
+            && Boolean(toStringValue(project.runtime_session_id))
+        );
+        if (!runtimeProject) {
+          throw new Error("No active runtime control session is available for this task.");
+        }
+        const settledTask = await requestGetRuntimeAgentTask(runtimeProject.id, taskId, {
+          waitForAsyncSettlement: true,
+          runtimeAgentId: toStringValue((task.runtime_agent_ids || [])[0]),
+          waitTimeoutMs: 5000,
+        });
+        if (selectedSessionId) {
+          await loadSessionDetail(selectedSessionId);
+        }
+        const selectedOrTaskAgentId =
+          (selectedAgentId &&
+          (settledTask.runtime_agent_ids || task.runtime_agent_ids || []).includes(selectedAgentId))
+            ? selectedAgentId
+            : toStringValue((settledTask.runtime_agent_ids || task.runtime_agent_ids || [])[0]);
+        if (selectedOrTaskAgentId) {
+          await loadAgentDetail(selectedOrTaskAgentId);
+        }
+        setNotice(
+          toStringValue(settledTask.terminal) === "true" || settledTask.terminal
+            ? `Task ${taskId} settled with status ${toStringValue(settledTask.status, "unknown")}.`
+            : `Task ${taskId} is still waiting on async follow-through.`
+        );
+      } catch (error) {
+        setErrorMessage(
+          error instanceof Error ? error.message : "Failed to wait for async task settlement."
+        );
+      } finally {
+        setBusyActionKey("");
+      }
+    },
+    [
+      loadAgentDetail,
+      loadSessionDetail,
+      projects,
+      requestGetRuntimeAgentTask,
+      selectedAgentId,
+      selectedSessionId,
+      setBusyActionKey,
+      setErrorMessage,
+      setNotice,
+    ]
+  );
+
   const {
     refresh,
     recordTriageInboxFeedback,
@@ -1470,6 +1530,7 @@ export function useControlPlanePageController(
     loadAsyncTaskOutputArtifact,
     loadAsyncTaskTranscriptArtifact,
     refreshAsyncTask,
+    waitForAsyncTaskSettlement,
   });
 
   const headerSectionProps = buildHeaderSectionProps({

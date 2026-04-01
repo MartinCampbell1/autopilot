@@ -733,15 +733,23 @@ export function useProjectRuntimeControlClient({
     async (
       projectId: string,
       taskId: string,
-      options?: { timeoutMs?: number }
+      options?: {
+        waitForAsyncSettlement?: boolean;
+        runtimeAgentId?: string | null;
+        waitTimeoutMs?: number;
+        timeoutMs?: number;
+      }
     ): Promise<ExecutionRuntimeAgentTaskRecord> => {
       const message = await requestControlResponse(
         projectId,
         {
           subtype: "get_runtime_agent_task",
           task_id: taskId,
+          wait_for_async_settlement: Boolean(options?.waitForAsyncSettlement),
+          runtime_agent_id: options?.runtimeAgentId ?? null,
+          wait_timeout_ms: options?.waitTimeoutMs ?? null,
         },
-        { timeoutMs: options?.timeoutMs }
+        { timeoutMs: options?.timeoutMs ?? options?.waitTimeoutMs }
       );
       if (message.response.subtype === "error") {
         throw new Error(message.response.error);

@@ -118,6 +118,7 @@ type BuildSessionDrilldownSectionPropsArgs = {
     task: ExecutionRuntimeAgentTaskRecord
   ) => Promise<ExecutionRuntimeAgentTaskTranscriptArtifact>;
   refreshAsyncTask: (task: ExecutionRuntimeAgentTaskRecord) => Promise<void>;
+  waitForAsyncTaskSettlement: (task: ExecutionRuntimeAgentTaskRecord) => Promise<void>;
 };
 
 export function buildSessionDrilldownSectionProps({
@@ -194,6 +195,7 @@ export function buildSessionDrilldownSectionProps({
   loadAsyncTaskOutputArtifact,
   loadAsyncTaskTranscriptArtifact,
   refreshAsyncTask,
+  waitForAsyncTaskSettlement,
 }: BuildSessionDrilldownSectionPropsArgs): SessionDrilldownSectionProps {
   return {
     selectedSessionId,
@@ -417,6 +419,9 @@ export function buildSessionDrilldownSectionProps({
       onLoadAsyncTaskTranscriptArtifact: (task) => loadAsyncTaskTranscriptArtifact(task),
       onRefreshAsyncTask: (task) => {
         void refreshAsyncTask(task);
+      },
+      onWaitForAsyncTaskSettlement: (task) => {
+        void waitForAsyncTaskSettlement(task);
       },
       onAdvanceCurrentQueue:
         currentSessionLineageQueue && selectedSessionLineageEntry
