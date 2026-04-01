@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import io
 import json
 from pathlib import Path
 
 from autopilot.core.config import AutopilotConfig
 from autopilot.core.permission_audit import read_permission_audit_entries
+from autopilot.core.structured_io import StructuredIO
+from autopilot.core.structured_runtime import activate_structured_io
 from autopilot.core.tool_contracts import ToolResult, ToolUseContext, build_tool, get_empty_tool_permission_context
 from autopilot.core.tool_hooks import ToolHookDefinition
 from autopilot.core.tool_permissions import (
@@ -386,6 +389,107 @@ def test_tool_runner_denial_breaker_escalates_to_approval(tmp_path: Path) -> Non
     assert second.status == "denied"
     assert third.status == "approval_required"
     assert "explicit approval" in third.message
+
+
+def test_tool_runner_uses_bridge_permission_decision_when_enabled(tmp_path: Path) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    runtime = StructuredIO(
+        session_id="sess_bridge",
+        input_stream=io.StringIO(""),
+        output_stream=io.StringIO(),
+        metadata={"permission_bridge_mode": "bridge_first"},
+    )
+    runtime.set_on_control_request_sent(
+        lambda envelope: runtime.inject_control_response(
+            {
+                "type": "control_response",
+                "response": {
+                    "subtype": "success",
+                    "request_id": envelope.request_id,
+                    "response": {
+                        "behavior": "deny",
+                        "message": "Bridge denied this tool.",
+                        "reasons": ["Bridge policy"],
+                        "rule_source": "session",
+                        "matched_rule": "demo.write",
+                    },
+                },
+            }
+        )
+    )
+    activate_structured_io(runtime)
+    try:
+        tool = build_tool(
+            name="demo.write",
+            description="Write demo payload.",
+            approval_policy="policy",
+            execute=lambda tool_input, _: ToolResult(status="ok", payload=tool_input),
+        )
+
+        result = run_tool_use(
+            tool,
+            {"value": "ignored"},
+            ToolUseContext(config=config, actor="tester", project_id="proj_bridge"),
+            permission_context=get_empty_tool_permission_context(),
+        )
+    finally:
+        activate_structured_io(None)
+        runtime.close()
+
+    entries = read_permission_audit_entries(config, "proj_bridge")
+
+    assert result.status == "denied"
+    assert result.message == "Bridge denied this tool."
+    assert entries[-1]["source"] == "tool_runner.bridge"
+    assert entries[-1]["rule_source"] == "session"
+
+
+def test_tool_runner_falls_back_to_local_permission_decision_when_bridge_times_out(tmp_path: Path) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    runtime = StructuredIO(
+        session_id="sess_bridge",
+        input_stream=io.StringIO(""),
+        output_stream=io.StringIO(),
+        metadata={"permission_bridge_mode": "bridge_first"},
+    )
+    activate_structured_io(runtime)
+    try:
+        tool = build_tool(
+            name="demo.delete",
+            description="Delete demo payload.",
+            approval_policy="policy",
+            execute=lambda tool_input, _: ToolResult(status="ok", payload=tool_input),
+        )
+        permission_context = apply_permission_update(
+            get_empty_tool_permission_context(),
+            PermissionUpdate(
+                type="add_rules",
+                destination="session",
+                behavior="deny",
+                rules=[PermissionRuleValue(tool_name="demo.delete")],
+            ),
+        )
+
+        result = run_tool_use(
+            tool,
+            {"value": "ignored"},
+            ToolUseContext(
+                config=config,
+                actor="tester",
+                project_id="proj_bridge_fallback",
+                metadata={"permission_bridge_timeout_sec": 0.01},
+            ),
+            permission_context=permission_context,
+        )
+    finally:
+        activate_structured_io(None)
+        runtime.close()
+
+    entries = read_permission_audit_entries(config, "proj_bridge_fallback")
+
+    assert result.status == "denied"
+    assert "demo.delete" in result.message
+    assert entries[-1]["source"] == "tool_runner.bridge_fallback"
 
 
 def test_plan_mode_strips_dangerous_allow_rules_into_approval(tmp_path: Path) -> None:

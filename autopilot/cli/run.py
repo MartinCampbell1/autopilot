@@ -2160,7 +2160,10 @@ def run(
     with structured_headless_runtime(
         enabled=resolved_headless and resolved_structured,
         session_id=build_headless_session_id(session_label),
-        metadata={"mode": "run"},
+        metadata={
+            "mode": "run",
+            "permission_bridge_mode": "bridge_first",
+        },
     ):
         if resolved_schedule:
             summary = _run_on_schedule(

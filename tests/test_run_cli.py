@@ -174,6 +174,45 @@ def test_run_headless_structured_emits_result_envelope(monkeypatch, capsys) -> N
     assert payload["is_error"] is False
 
 
+def test_run_headless_structured_enables_bridge_first_permission_mode(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class _StructuredRuntimeStub:
+        def __enter__(self):
+            return None
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr(
+        "autopilot.cli.run._run_impl",
+        lambda *args, **kwargs: {
+            "kind": "run_summary",
+            "project_id": "demo",
+            "exit_code": 0,
+        },
+    )
+
+    def _structured_runtime_stub(*, enabled: bool, session_id: str | None = None, metadata: dict[str, object] | None = None):
+        captured["enabled"] = enabled
+        captured["session_id"] = session_id
+        captured["metadata"] = dict(metadata or {})
+        return _StructuredRuntimeStub()
+
+    monkeypatch.setattr("autopilot.cli.run.structured_headless_runtime", _structured_runtime_stub)
+
+    from autopilot.cli.run import run
+
+    exit_code = run("/tmp/demo", ".agents/tasks/prd.json", "demo", headless=True, structured=True)
+
+    assert exit_code == 0
+    assert captured["enabled"] is True
+    assert captured["metadata"] == {
+        "mode": "run",
+        "permission_bridge_mode": "bridge_first",
+    }
+
+
 def test_run_all_headless_returns_exit_code_and_emits_summary(monkeypatch, capsys) -> None:
     monkeypatch.setattr(
         "autopilot.cli.run._run_all_impl",

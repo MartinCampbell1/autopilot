@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import threading
 import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -13,15 +12,12 @@ from typing import Any
 import typer
 
 from autopilot.core.structured_io import StructuredIO
+from autopilot.core.structured_runtime import activate_structured_io, get_active_structured_io
 
 RUN_EXIT_SUCCESS = 0
 RUN_EXIT_FAILED = 1
 RUN_EXIT_PRECHECK_FAILED = 2
 RUN_EXIT_PAUSED = 3
-
-_STRUCTURED_IO_LOCK = threading.RLock()
-_ACTIVE_STRUCTURED_IO: StructuredIO | None = None
-
 
 def _utcnow_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -32,22 +28,6 @@ def build_headless_session_id(prefix: str = "run") -> str:
 
     normalized = prefix.strip().replace(" ", "_") or "run"
     return f"{normalized}_{uuid.uuid4().hex[:12]}"
-
-
-def get_active_structured_io() -> StructuredIO | None:
-    """Return the current global structured headless runtime, if any."""
-
-    with _STRUCTURED_IO_LOCK:
-        return _ACTIVE_STRUCTURED_IO
-
-
-def activate_structured_io(io: StructuredIO | None) -> None:
-    """Register or clear the global structured headless runtime."""
-
-    global _ACTIVE_STRUCTURED_IO
-    with _STRUCTURED_IO_LOCK:
-        _ACTIVE_STRUCTURED_IO = io
-
 
 @contextmanager
 def structured_headless_runtime(

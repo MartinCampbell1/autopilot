@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import uuid
 from typing import Any
 
 from pydantic import BaseModel, Field
 
+from autopilot.core.structured_runtime import get_active_structured_io
 from autopilot.core.tool_contracts import (
     ToolDef,
     ToolPermissionContext,
@@ -36,6 +38,73 @@ class ToolRunResult(BaseModel):
     hooks: list[HookExecutionRecord] = Field(default_factory=list)
 
 
+def _bridge_permission_decision(
+    tool: ToolDef,
+    tool_input: dict[str, Any],
+    use_context: ToolUseContext,
+) -> tuple[PermissionDecision | None, str]:
+    """Try resolving tool permissions through the active structured bridge first."""
+
+    runtime = get_active_structured_io()
+    if runtime is None:
+        return None, "tool_runner"
+
+    bridge_mode = str(runtime.metadata.get("permission_bridge_mode") or "").strip().lower()
+    if bridge_mode != "bridge_first":
+        return None, "tool_runner"
+
+    timeout_raw = use_context.metadata.get("permission_bridge_timeout_sec", runtime.metadata.get("permission_bridge_timeout_sec", 0.5))
+    try:
+        timeout = float(timeout_raw)
+    except (TypeError, ValueError):
+        timeout = 0.5
+    if timeout <= 0:
+        timeout = 0.5
+
+    tool_use_id = str(
+        use_context.metadata.get("tool_use_id")
+        or tool_input.get("tool_use_id")
+        or f"toolu_{uuid.uuid4().hex[:12]}"
+    ).strip()
+    request_id = f"perm_{tool_use_id}"
+    try:
+        response = runtime.send_request(
+            {
+                "subtype": "can_use_tool",
+                "tool_name": tool.name,
+                "input": dict(tool_input),
+                "tool_use_id": tool_use_id,
+                "description": tool.description,
+                "display_name": tool.name,
+                "decision_reason": str(use_context.metadata.get("permission_decision_reason") or "").strip() or None,
+                "agent_id": use_context.runtime_agent_ids[0] if use_context.runtime_agent_ids else None,
+            },
+            timeout=timeout,
+            request_id=request_id,
+        )
+    except (TimeoutError, RuntimeError, ValueError):
+        return None, "tool_runner.bridge_fallback"
+
+    behavior = str(response.get("behavior") or "").strip().lower()
+    if behavior not in {"allow", "ask", "deny"}:
+        return None, "tool_runner.bridge_fallback"
+
+    try:
+        decision = PermissionDecision(
+            behavior=behavior,
+            message=str(response.get("message") or ""),
+            reasons=[str(reason) for reason in response.get("reasons") or [] if str(reason).strip()],
+            rule_source=response.get("rule_source"),
+            matched_rule=response.get("matched_rule"),
+            denial_count=int(response.get("denial_count") or 0),
+            escalation_required=bool(response.get("escalation_required")),
+        )
+    except Exception:
+        return None, "tool_runner.bridge_fallback"
+
+    return decision, "tool_runner.bridge"
+
+
 def run_tool_use(
     tool: ToolDef,
     tool_input: dict[str, Any] | None,
@@ -49,16 +118,18 @@ def run_tool_use(
     normalized_input = dict(tool_input or {})
     resolved_permission_context = permission_context or get_empty_tool_permission_context()
     hook_records: list[HookExecutionRecord] = []
+    bridge_decision, permission_source = _bridge_permission_decision(tool, normalized_input, use_context)
 
     permission_decision = resolve_tool_permission_decision(
         tool,
         normalized_input,
         resolved_permission_context,
+        precomputed_decision=bridge_decision,
         config=use_context.config,
         project_id=use_context.project_id,
         record_denial=True,
         actor=use_context.actor,
-        source="tool_runner",
+        source=permission_source,
     )
     if permission_decision.behavior == "ask":
         permission_hook_result = execute_permission_request_hooks(

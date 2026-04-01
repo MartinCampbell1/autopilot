@@ -829,6 +829,7 @@ def resolve_tool_permission_decision(
     tool_input: dict[str, Any] | None,
     permission_context: ToolPermissionContext,
     *,
+    precomputed_decision: PermissionDecision | None = None,
     config: AutopilotConfig | None = None,
     project_id: str = "",
     record_denial: bool,
@@ -837,7 +838,7 @@ def resolve_tool_permission_decision(
 ) -> PermissionDecision:
     """Resolve one permission decision, including repeated-denial escalation."""
 
-    decision = has_permissions_to_use_tool(tool, tool_input, permission_context)
+    decision = precomputed_decision or has_permissions_to_use_tool(tool, tool_input, permission_context)
     if config is None:
         return decision
 
