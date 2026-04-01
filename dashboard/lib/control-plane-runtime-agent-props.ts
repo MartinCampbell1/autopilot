@@ -57,6 +57,8 @@ type BuildRuntimeAgentSectionPropsArgs = {
     command: Record<string, unknown>,
     mode: "execute_now" | "request_approval"
   ) => Promise<void>;
+  onAllowToolPermissionRuntime: RuntimeAgentSectionProps["onAllowToolPermissionRuntime"];
+  onDenyToolPermissionRuntime: RuntimeAgentSectionProps["onDenyToolPermissionRuntime"];
   agentScopedRuns: ExecutionAgentActionRunRecord[];
   agentActivitySearch: string;
   setAgentActivitySearch: (value: string) => void;
@@ -146,6 +148,8 @@ export function buildRuntimeAgentSectionProps({
   onCopyAgentLink,
   focusRuntimeAgent,
   runAgentSuggestedCommand,
+  onAllowToolPermissionRuntime,
+  onDenyToolPermissionRuntime,
   agentScopedRuns,
   agentActivitySearch,
   setAgentActivitySearch,
@@ -349,6 +353,8 @@ export function buildRuntimeAgentSectionProps({
     onFocusRuntimeAgent: (runtimeAgentId) => {
       focusRuntimeAgent(runtimeAgentId, true);
     },
+    onAllowToolPermissionRuntime,
+    onDenyToolPermissionRuntime,
     onRunSuggestedCommand: (command, mode) => {
       void runAgentSuggestedCommand(command, mode);
     },

@@ -33,6 +33,7 @@ import type {
   RoutingPolicy,
   SkillPack,
   TaskSource,
+  ToolPermissionRuntimeRecord,
 } from "@/lib/types";
 
 export const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8420/api";
@@ -510,6 +511,50 @@ export async function rejectExecutionPlaneApproval(
     }),
   });
   return jsonOrThrow<ApprovalDecisionResult>(res, `Failed to reject control-plane approval: ${res.status}`);
+}
+
+export async function allowExecutionPlaneToolPermissionRuntime(
+  approvalRuntimeId: string,
+  payload?: { actor?: string; note?: string; source?: "user" | "channel" }
+): Promise<{ status: string; runtime: ToolPermissionRuntimeRecord }> {
+  const res = await fetch(
+    `${API_BASE}/execution-plane/tool-permission-runtimes/${encodeURIComponent(approvalRuntimeId)}/allow`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        actor: payload?.actor ?? "dashboard-control-plane",
+        note: payload?.note ?? "",
+        source: payload?.source ?? "user",
+      }),
+    }
+  );
+  return jsonOrThrow<{ status: string; runtime: ToolPermissionRuntimeRecord }>(
+    res,
+    `Failed to allow tool permission runtime: ${res.status}`
+  );
+}
+
+export async function denyExecutionPlaneToolPermissionRuntime(
+  approvalRuntimeId: string,
+  payload?: { actor?: string; note?: string; source?: "user" | "channel" }
+): Promise<{ status: string; runtime: ToolPermissionRuntimeRecord }> {
+  const res = await fetch(
+    `${API_BASE}/execution-plane/tool-permission-runtimes/${encodeURIComponent(approvalRuntimeId)}/deny`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        actor: payload?.actor ?? "dashboard-control-plane",
+        note: payload?.note ?? "",
+        source: payload?.source ?? "user",
+      }),
+    }
+  );
+  return jsonOrThrow<{ status: string; runtime: ToolPermissionRuntimeRecord }>(
+    res,
+    `Failed to deny tool permission runtime: ${res.status}`
+  );
 }
 
 export async function applyExecutionPlaneApproval(

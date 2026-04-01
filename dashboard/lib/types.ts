@@ -830,6 +830,10 @@ export interface ExecutionRuntimeAgentHistorySummary {
   open_issue_count: number;
   approval_count: number;
   pending_approval_count: number;
+  tool_permission_runtime_count?: number;
+  pending_tool_permission_runtime_count?: number;
+  async_task_count?: number;
+  active_async_task_count?: number;
   event_count: number;
   last_event_at?: string | null;
 }
@@ -854,6 +858,8 @@ export interface ExecutionRuntimeAgentDetail {
   history: ExecutionRuntimeAgentHistorySummary;
   issues: ExecutionIssueRecord[];
   approvals: ExecutionApprovalRecord[];
+  tool_permission_runtimes?: ToolPermissionRuntimeRecord[];
+  async_tasks?: Array<Record<string, unknown>>;
   events: ExecutionPlaneEvent[];
 }
 
@@ -898,6 +904,8 @@ export interface OrchestratorSessionDetail extends OrchestratorSessionRecord {
   control_passes: OrchestratorControlPassRecord[];
   approvals: ExecutionApprovalRecord[];
   issues: ExecutionIssueRecord[];
+  tool_permission_runtimes?: ToolPermissionRuntimeRecord[];
+  async_tasks?: Array<Record<string, unknown>>;
   events: ExecutionPlaneEvent[];
   control: OrchestratorSessionControl;
   summary: {
@@ -907,6 +915,10 @@ export interface OrchestratorSessionDetail extends OrchestratorSessionRecord {
     pending_approval_count: number;
     issue_count: number;
     open_issue_count: number;
+    tool_permission_runtime_count?: number;
+    pending_tool_permission_runtime_count?: number;
+    async_task_count?: number;
+    active_async_task_count?: number;
     event_count: number;
     event_limit: number;
     latest_event_at?: string | null;

@@ -4,7 +4,9 @@ import {
   applyExecutionPlaneApproval,
   applyExecutionPlaneOrchestratorSessionControlPlan,
   applyExecutionPlaneOrchestratorSessionRecommendation,
+  allowExecutionPlaneToolPermissionRuntime,
   approveExecutionPlaneApproval,
+  denyExecutionPlaneToolPermissionRuntime,
   executeExecutionPlaneAgentAction,
   rejectExecutionPlaneApproval,
   resolveExecutionPlaneIssue,
@@ -27,6 +29,7 @@ import type {
   ExecutionRuntimeAgentDetail,
   OrchestratorSessionControlProfile,
   OrchestratorSessionControlRecommendation,
+  ToolPermissionRuntimeRecord,
 } from "@/lib/types";
 
 const DEFAULT_CONTROL_ACTOR = "dashboard-control-plane";
@@ -441,6 +444,33 @@ export function useControlPlaneActions({
     [runDecisionAction, selectedSessionId]
   );
 
+  const resolveToolPermissionRuntime = useCallback(
+    async (runtime: ToolPermissionRuntimeRecord, outcome: "allow" | "deny") => {
+      if (!selectedAgent) return;
+      const actionLabel = outcome === "allow" ? "allow" : "deny";
+      await runDecisionAction(
+        `tool-permission-${actionLabel}:${runtime.id}`,
+        async () => {
+          const payload =
+            outcome === "allow"
+              ? await allowExecutionPlaneToolPermissionRuntime(runtime.id, {
+                  actor: DEFAULT_CONTROL_ACTOR,
+                  note: `Dashboard allowed ${runtime.tool_name || runtime.id} for ${selectedAgent.runtime_agent_id}`,
+                  source: "user",
+                })
+              : await denyExecutionPlaneToolPermissionRuntime(runtime.id, {
+                  actor: DEFAULT_CONTROL_ACTOR,
+                  note: `Dashboard denied ${runtime.tool_name || runtime.id} for ${selectedAgent.runtime_agent_id}`,
+                  source: "user",
+                });
+          return `Tool permission ${payload.runtime.id} marked ${payload.runtime.status}.`;
+        },
+        { autoAdvanceQueue: true }
+      );
+    },
+    [runDecisionAction, selectedAgent]
+  );
+
   const runAgentSuggestedCommand = useCallback(
     async (command: Record<string, unknown>, mode: "execute_now" | "request_approval") => {
       if (!selectedAgent) return;
@@ -542,6 +572,7 @@ export function useControlPlaneActions({
     rejectApproval,
     applyApproval,
     resolveIssue,
+    resolveToolPermissionRuntime,
     applyPreviewRun,
     runAgentSuggestedCommand,
     applyControlPlan,

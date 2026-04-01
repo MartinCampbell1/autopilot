@@ -207,6 +207,7 @@ export function useControlPlanePageController(
     rejectApproval,
     applyApproval,
     resolveIssue,
+    resolveToolPermissionRuntime,
     applyPreviewRun,
     runAgentSuggestedCommand,
     applyControlPlan,
@@ -1052,6 +1053,12 @@ export function useControlPlanePageController(
       },
       focusRuntimeAgent,
       runAgentSuggestedCommand,
+      onAllowToolPermissionRuntime: (runtime) => {
+        void resolveToolPermissionRuntime(runtime, "allow");
+      },
+      onDenyToolPermissionRuntime: (runtime) => {
+        void resolveToolPermissionRuntime(runtime, "deny");
+      },
       agentScopedRuns,
       agentActivitySearch,
       setAgentActivitySearch,
