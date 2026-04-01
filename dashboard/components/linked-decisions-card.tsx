@@ -16,7 +16,9 @@ import {
 } from "@/lib/control-plane-ui";
 import type {
   ExecutionApprovalRecord,
+  ExecutionAgentActionRunRecord,
   ExecutionIssueRecord,
+  ExecutionRuntimeAgentTaskRecord,
   OrchestratorSessionDetail,
   ToolPermissionRuntimeRecord,
 } from "@/lib/types";
@@ -47,8 +49,24 @@ function extractToolPermissionMessage(runtime: ToolPermissionRuntimeRecord): str
   return runtime.message || "Tool permission request is waiting for review.";
 }
 
+function asyncTaskStatusClass(status: string): string {
+  switch (status) {
+    case "running":
+    case "queued":
+      return "border-[#d3e5ef] bg-[#eef7fb] text-[#2a6690]";
+    case "completed":
+      return "border-[#d6e9dc] bg-[#eef8f1] text-[#2b6e3f]";
+    case "failed":
+    case "cancelled":
+      return "border-[#f0d0c9] bg-[#fff0ed] text-[#93370d]";
+    default:
+      return "border-[#e5e5e3] bg-[#f7f7f5] text-[#787774]";
+  }
+}
+
 type LinkedDecisionsCardProps = {
   selectedSession: OrchestratorSessionDetail | null;
+  linkedRuns: ExecutionAgentActionRunRecord[];
   linkedApprovals: ExecutionApprovalRecord[];
   filteredApprovals: ExecutionApprovalRecord[];
   visibleSessionApprovals: ExecutionApprovalRecord[];
@@ -66,6 +84,7 @@ type LinkedDecisionsCardProps = {
   ) => string;
   onSearchEntity: (value: string) => void;
   onFocusRuntimeAgent: (runtimeAgentId: string) => void;
+  onInspectRun: (runId: string) => void;
   onInspectApproval: (approval: ExecutionApprovalRecord) => void;
   onInspectIssue: (issue: ExecutionIssueRecord) => void;
   onInspectToolPermissionRuntime: (runtime: ToolPermissionRuntimeRecord) => void;
@@ -79,6 +98,7 @@ type LinkedDecisionsCardProps = {
 
 export function LinkedDecisionsCard({
   selectedSession,
+  linkedRuns,
   linkedApprovals,
   filteredApprovals,
   visibleSessionApprovals,
@@ -93,6 +113,7 @@ export function LinkedDecisionsCard({
   sessionContextRowDomId,
   onSearchEntity,
   onFocusRuntimeAgent,
+  onInspectRun,
   onInspectApproval,
   onInspectIssue,
   onInspectToolPermissionRuntime,
@@ -110,6 +131,113 @@ export function LinkedDecisionsCard({
       if (updatedDelta !== 0) return updatedDelta;
       return right.id.localeCompare(left.id);
     });
+  const activeAsyncTasks = (selectedSession?.async_tasks || [])
+    .filter((task) => task.status === "queued" || task.status === "running" || task.active)
+    .sort((left, right) => {
+      const updatedDelta = Date.parse(right.updated_at) - Date.parse(left.updated_at);
+      if (updatedDelta !== 0) return updatedDelta;
+      return right.id.localeCompare(left.id);
+    });
+
+  const renderAsyncTaskRow = (task: ExecutionRuntimeAgentTaskRecord) => {
+    const relatedRun = task.agent_action_run_id
+      ? linkedRuns.find((run) => run.id === task.agent_action_run_id) || null
+      : null;
+    const runtimeAgentIds =
+      task.runtime_agent_ids.length > 0
+        ? task.runtime_agent_ids.slice(0, 2)
+        : task.runtime_agent_id
+          ? [task.runtime_agent_id]
+          : [];
+    return (
+      <div
+        key={`${selectedSession?.id || "session"}-async-task-${task.id}`}
+        className="rounded-xl border border-[#ecebe8] bg-white p-3"
+      >
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <div className="flex flex-wrap items-center gap-2">
+              <p className="font-mono text-[11px] text-[#37352f]">{task.id}</p>
+              <Badge
+                variant="outline"
+                className={`rounded-full px-2.5 py-1 text-[11px] font-semibold capitalize ${asyncTaskStatusClass(task.status)}`}
+              >
+                {task.status}
+              </Badge>
+              <Badge
+                variant="outline"
+                className="rounded-full border-[#e5e5e3] bg-[#fafaf9] px-2.5 py-1 text-[11px] font-medium text-[#37352f]"
+              >
+                {task.command || "task"}
+              </Badge>
+              {relatedRun && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-7 rounded-lg border-[#e5e5e3] bg-white px-2 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
+                  onClick={() => {
+                    onInspectRun(relatedRun.id);
+                  }}
+                >
+                  Inspect run
+                </Button>
+              )}
+            </div>
+            <p className="mt-2 text-[13px] text-[#6b6b6b]">
+              {task.title || task.reason || task.result_summary || "Background follow-through is still active."}
+            </p>
+            <p className="mt-2 text-[12px] text-[#9b9a97]">
+              {task.actor || "unknown actor"} · {formatTimestamp(task.updated_at)}
+            </p>
+            {(runtimeAgentIds.length > 0 ||
+              task.output_artifact_ref ||
+              task.transcript_artifact_ref ||
+              task.resume_contract) && (
+              <div className="mt-2 flex flex-wrap gap-2">
+                {runtimeAgentIds.map((runtimeAgentId) => (
+                  <Button
+                    key={`${task.id}-${runtimeAgentId}`}
+                    size="sm"
+                    variant="outline"
+                    className="h-7 rounded-full border-[#e5e5e3] bg-white px-2.5 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
+                    onClick={() => {
+                      onFocusRuntimeAgent(runtimeAgentId);
+                    }}
+                  >
+                    {runtimeAgentId}
+                  </Button>
+                ))}
+                {task.output_artifact_ref && (
+                  <Badge
+                    variant="outline"
+                    className="rounded-full border-[#d6e9dc] bg-[#eef8f1] px-2.5 py-1 text-[11px] font-medium text-[#2b6e3f]"
+                  >
+                    output ready
+                  </Badge>
+                )}
+                {task.transcript_artifact_ref && (
+                  <Badge
+                    variant="outline"
+                    className="rounded-full border-[#d3e5ef] bg-[#eef7fb] px-2.5 py-1 text-[11px] font-medium text-[#2a6690]"
+                  >
+                    transcript ready
+                  </Badge>
+                )}
+                {task.resume_contract && (
+                  <Badge
+                    variant="outline"
+                    className="rounded-full border-[#e5e5e3] bg-[#fafaf9] px-2.5 py-1 text-[11px] font-medium text-[#37352f]"
+                  >
+                    resume {task.resume_contract.command}
+                  </Badge>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  };
 
   return (
     <Card className="border border-[#e5e5e3] bg-white shadow-[0_1px_3px_rgba(15,15,15,0.08),0_0_1px_rgba(15,15,15,0.04)]">
@@ -118,16 +246,37 @@ export function LinkedDecisionsCard({
           Linked Decisions
         </CardTitle>
         <CardDescription className="text-[13px] text-[#787774]">
-          Approvals, issues, and tool-permission runtimes attached to the selected session.
+          Approvals, issues, tool-permission runtimes, and active background follow-through attached to the selected session.
         </CardDescription>
       </CardHeader>
       <CardContent>
         {!selectedSession ? (
           <div className="rounded-xl border border-dashed border-[#e5e5e3] bg-[#fafaf9] px-5 py-8 text-[13px] text-[#9b9a97]">
-            Select a session to inspect pending approvals, issues, and tool-permission requests.
+            Select a session to inspect linked approvals, issues, tool-permission requests, and background tasks.
           </div>
         ) : (
           <div className="space-y-4">
+            <div className="rounded-2xl border border-[#ecebe8] bg-[#fbfbf9] p-4">
+              <div className="flex items-center justify-between">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#9b9a97]">
+                  Background Tasks
+                </p>
+                <Badge
+                  variant="outline"
+                  className="rounded-full border-[#e5e5e3] bg-white px-2.5 py-1 text-[11px] font-medium text-[#37352f]"
+                >
+                  {activeAsyncTasks.length}
+                </Badge>
+              </div>
+              {activeAsyncTasks.length === 0 ? (
+                <p className="mt-3 text-[13px] text-[#9b9a97]">
+                  No active background follow-through for this session.
+                </p>
+              ) : (
+                <div className="mt-3 space-y-3">{activeAsyncTasks.map(renderAsyncTaskRow)}</div>
+              )}
+            </div>
+
             <div className="rounded-2xl border border-[#ecebe8] bg-[#fbfbf9] p-4">
               <div className="flex items-center justify-between">
                 <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#9b9a97]">
