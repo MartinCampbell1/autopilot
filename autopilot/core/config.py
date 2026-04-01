@@ -196,6 +196,10 @@ class AutopilotConfig:
         return self.control_plane_state_dir / "tool-permissions.json"
 
     @property
+    def managed_settings_fragments_dir(self) -> Path:
+        return self.autopilot_home / "managed-settings.d"
+
+    @property
     def tool_permission_denials_json_path(self) -> Path:
         return self.control_plane_state_dir / "tool-permission-denials.json"
 
