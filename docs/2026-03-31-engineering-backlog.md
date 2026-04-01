@@ -4,13 +4,13 @@ Snapshot date: `2026-03-31`
 
 Related docs:
 
-- [README.md](/Users/martin/Desktop/autopilot/README.md)
-- [docs/autopilot-design.md](/Users/martin/Desktop/autopilot/docs/autopilot-design.md)
-- [docs/autopilot-implementation-plan.md](/Users/martin/Desktop/autopilot/docs/autopilot-implementation-plan.md)
-- [docs/phase1-adapter-foundation.md](/Users/martin/Desktop/autopilot/docs/phase1-adapter-foundation.md)
-- [docs/phase2-runtime-control-primitives.md](/Users/martin/Desktop/autopilot/docs/phase2-runtime-control-primitives.md)
-- [docs/phase3-founderos-execution-plane.md](/Users/martin/Desktop/autopilot/docs/phase3-founderos-execution-plane.md)
-- [docs/phase4-approval-foundation.md](/Users/martin/Desktop/autopilot/docs/phase4-approval-foundation.md)
+- [README.md](../README.md)
+- [docs/autopilot-design.md](autopilot-design.md)
+- [docs/autopilot-implementation-plan.md](autopilot-implementation-plan.md)
+- [docs/phase1-adapter-foundation.md](phase1-adapter-foundation.md)
+- [docs/phase2-runtime-control-primitives.md](phase2-runtime-control-primitives.md)
+- [docs/phase3-founderos-execution-plane.md](phase3-founderos-execution-plane.md)
+- [docs/phase4-approval-foundation.md](phase4-approval-foundation.md)
 
 ## Purpose
 
@@ -79,13 +79,13 @@ Confirmed present:
 
 Important grounding:
 
-- [autopilot/core/account_diagnostics.py](/Users/martin/Desktop/autopilot/autopilot/core/account_diagnostics.py)
-- [autopilot/core/adapters.py](/Users/martin/Desktop/autopilot/autopilot/core/adapters.py)
-- [autopilot/core/execution_plane.py](/Users/martin/Desktop/autopilot/autopilot/core/execution_plane.py)
-- [autopilot/core/project_store.py](/Users/martin/Desktop/autopilot/autopilot/core/project_store.py)
-- [autopilot/core/loop_runner.py](/Users/martin/Desktop/autopilot/autopilot/core/loop_runner.py)
-- [autopilot/cli/run.py](/Users/martin/Desktop/autopilot/autopilot/cli/run.py)
-- [dashboard/app/control-plane/page.tsx](/Users/martin/Desktop/autopilot/dashboard/app/control-plane/page.tsx)
+- [autopilot/core/account_diagnostics.py](../autopilot/core/account_diagnostics.py)
+- [autopilot/core/adapters.py](../autopilot/core/adapters.py)
+- [autopilot/core/execution_plane.py](../autopilot/core/execution_plane.py)
+- [autopilot/core/project_store.py](../autopilot/core/project_store.py)
+- [autopilot/core/loop_runner.py](../autopilot/core/loop_runner.py)
+- [autopilot/cli/run.py](../autopilot/cli/run.py)
+- [dashboard/app/control-plane/page.tsx](../dashboard/app/control-plane/page.tsx)
 
 ## Gaps This Backlog Focuses On
 
@@ -118,8 +118,8 @@ Autopilot already tracks iteration budgets, but not real provider/account/model 
 
 Target files:
 
-- [autopilot/core/models.py](/Users/martin/Desktop/autopilot/autopilot/core/models.py)
-- [autopilot/core/runtime_budgets.py](/Users/martin/Desktop/autopilot/autopilot/core/runtime_budgets.py)
+- [autopilot/core/models.py](../autopilot/core/models.py)
+- [autopilot/core/runtime_budgets.py](../autopilot/core/runtime_budgets.py)
 - new: `/Users/martin/Desktop/autopilot/autopilot/core/cost_accounting.py`
 
 Donor repos:
@@ -138,9 +138,9 @@ Acceptance criteria:
 
 Target files:
 
-- [autopilot/core/loop_runner.py](/Users/martin/Desktop/autopilot/autopilot/core/loop_runner.py)
-- [autopilot/core/critic.py](/Users/martin/Desktop/autopilot/autopilot/core/critic.py)
-- [autopilot/core/execution_plane.py](/Users/martin/Desktop/autopilot/autopilot/core/execution_plane.py)
+- [autopilot/core/loop_runner.py](../autopilot/core/loop_runner.py)
+- [autopilot/core/critic.py](../autopilot/core/critic.py)
+- [autopilot/core/execution_plane.py](../autopilot/core/execution_plane.py)
 
 Donor repos:
 
@@ -158,10 +158,10 @@ Acceptance criteria:
 
 Target files:
 
-- [autopilot/cli/main.py](/Users/martin/Desktop/autopilot/autopilot/cli/main.py)
-- [autopilot/cli/run.py](/Users/martin/Desktop/autopilot/autopilot/cli/run.py)
-- [autopilot/api/routes/projects.py](/Users/martin/Desktop/autopilot/autopilot/api/routes/projects.py)
-- [dashboard/lib/api.ts](/Users/martin/Desktop/autopilot/dashboard/lib/api.ts)
+- [autopilot/cli/main.py](../autopilot/cli/main.py)
+- [autopilot/cli/run.py](../autopilot/cli/run.py)
+- [autopilot/api/routes/projects.py](../autopilot/api/routes/projects.py)
+- [dashboard/lib/api.ts](../dashboard/lib/api.ts)
 
 Donor repos:
 
@@ -186,9 +186,9 @@ The repo has action-run replay and execution-plane audit surfaces, but still lac
 
 Target files:
 
-- [autopilot/core/loop_runner.py](/Users/martin/Desktop/autopilot/autopilot/core/loop_runner.py)
-- [autopilot/core/orchestrator.py](/Users/martin/Desktop/autopilot/autopilot/core/orchestrator.py)
-- [autopilot/core/critic.py](/Users/martin/Desktop/autopilot/autopilot/core/critic.py)
+- [autopilot/core/loop_runner.py](../autopilot/core/loop_runner.py)
+- [autopilot/core/orchestrator.py](../autopilot/core/orchestrator.py)
+- [autopilot/core/critic.py](../autopilot/core/critic.py)
 - new: `/Users/martin/Desktop/autopilot/autopilot/core/run_trace.py`
 
 Donor repos:
@@ -207,7 +207,7 @@ Acceptance criteria:
 
 Target files:
 
-- [autopilot/cli/main.py](/Users/martin/Desktop/autopilot/autopilot/cli/main.py)
+- [autopilot/cli/main.py](../autopilot/cli/main.py)
 - new: `/Users/martin/Desktop/autopilot/autopilot/cli/trace.py`
 
 Donor repos:
@@ -223,9 +223,9 @@ Acceptance criteria:
 
 Target files:
 
-- [autopilot/core/run_trace.py](/Users/martin/Desktop/autopilot/autopilot/core/run_trace.py)
-- [autopilot/core/execution_plane.py](/Users/martin/Desktop/autopilot/autopilot/core/execution_plane.py)
-- [dashboard/components/runtime-agent-activity-section.tsx](/Users/martin/Desktop/autopilot/dashboard/components/runtime-agent-activity-section.tsx)
+- [autopilot/core/run_trace.py](../autopilot/core/run_trace.py)
+- [autopilot/core/execution_plane.py](../autopilot/core/execution_plane.py)
+- [dashboard/components/runtime-agent-activity-section.tsx](../dashboard/components/runtime-agent-activity-section.tsx)
 
 Donor repos:
 
@@ -249,9 +249,9 @@ This is the single biggest external-loop gap versus stronger competitors.
 
 Target files:
 
-- [autopilot/core/worktree.py](/Users/martin/Desktop/autopilot/autopilot/core/worktree.py)
-- [autopilot/core/project_store.py](/Users/martin/Desktop/autopilot/autopilot/core/project_store.py)
-- [autopilot/core/execution_plane.py](/Users/martin/Desktop/autopilot/autopilot/core/execution_plane.py)
+- [autopilot/core/worktree.py](../autopilot/core/worktree.py)
+- [autopilot/core/project_store.py](../autopilot/core/project_store.py)
+- [autopilot/core/execution_plane.py](../autopilot/core/execution_plane.py)
 - new: `/Users/martin/Desktop/autopilot/autopilot/core/github_prs.py`
 
 Donor repos:
@@ -270,9 +270,9 @@ Acceptance criteria:
 
 Target files:
 
-- [autopilot/core/control_plane_issues.py](/Users/martin/Desktop/autopilot/autopilot/core/control_plane_issues.py)
-- [autopilot/core/execution_plane.py](/Users/martin/Desktop/autopilot/autopilot/core/execution_plane.py)
-- [autopilot/api/routes/execution_plane.py](/Users/martin/Desktop/autopilot/autopilot/api/routes/execution_plane.py)
+- [autopilot/core/control_plane_issues.py](../autopilot/core/control_plane_issues.py)
+- [autopilot/core/execution_plane.py](../autopilot/core/execution_plane.py)
+- [autopilot/api/routes/execution_plane.py](../autopilot/api/routes/execution_plane.py)
 - new: `/Users/martin/Desktop/autopilot/autopilot/core/github_reactions.py`
 
 Donor repos:
@@ -294,9 +294,9 @@ Acceptance criteria:
 
 Target files:
 
-- [dashboard/lib/control-plane-models.ts](/Users/martin/Desktop/autopilot/dashboard/lib/control-plane-models.ts)
-- [dashboard/components/story-detail-panel.tsx](/Users/martin/Desktop/autopilot/dashboard/components/story-detail-panel.tsx)
-- [dashboard/components/runtime-agent-inspector-column.tsx](/Users/martin/Desktop/autopilot/dashboard/components/runtime-agent-inspector-column.tsx)
+- [dashboard/lib/control-plane-models.ts](../dashboard/lib/control-plane-models.ts)
+- [dashboard/components/story-detail-panel.tsx](../dashboard/components/story-detail-panel.tsx)
+- [dashboard/components/runtime-agent-inspector-column.tsx](../dashboard/components/runtime-agent-inspector-column.tsx)
 
 Donor repos:
 
@@ -320,8 +320,8 @@ Autopilot currently assumes attended terminal flows too much for what it already
 
 Target files:
 
-- [autopilot/cli/main.py](/Users/martin/Desktop/autopilot/autopilot/cli/main.py)
-- [autopilot/cli/run.py](/Users/martin/Desktop/autopilot/autopilot/cli/run.py)
+- [autopilot/cli/main.py](../autopilot/cli/main.py)
+- [autopilot/cli/run.py](../autopilot/cli/run.py)
 - new: `/Users/martin/Desktop/autopilot/autopilot/core/headless.py`
 
 Donor repos:
@@ -339,7 +339,7 @@ Acceptance criteria:
 
 Target files:
 
-- [autopilot/cli/run.py](/Users/martin/Desktop/autopilot/autopilot/cli/run.py)
+- [autopilot/cli/run.py](../autopilot/cli/run.py)
 - new: `/Users/martin/Desktop/autopilot/deploy/systemd/autopilot.service`
 - new: `/Users/martin/Desktop/autopilot/deploy/launchd/com.autopilot.plist`
 
@@ -360,16 +360,16 @@ Acceptance criteria:
 
 ### Why
 
-The repo already has persisted probe logic in [account_diagnostics.py](/Users/martin/Desktop/autopilot/autopilot/core/account_diagnostics.py), but not a real user-facing `doctor`.
+The repo already has persisted probe logic in [account_diagnostics.py](../autopilot/core/account_diagnostics.py), but not a real user-facing `doctor`.
 
 ### Story 5.1 — Promote diagnostics into `autopilot doctor`
 
 Target files:
 
-- [autopilot/core/account_diagnostics.py](/Users/martin/Desktop/autopilot/autopilot/core/account_diagnostics.py)
-- [autopilot/core/adapters.py](/Users/martin/Desktop/autopilot/autopilot/core/adapters.py)
-- [autopilot/core/provider_sessions.py](/Users/martin/Desktop/autopilot/autopilot/core/provider_sessions.py)
-- [autopilot/cli/main.py](/Users/martin/Desktop/autopilot/autopilot/cli/main.py)
+- [autopilot/core/account_diagnostics.py](../autopilot/core/account_diagnostics.py)
+- [autopilot/core/adapters.py](../autopilot/core/adapters.py)
+- [autopilot/core/provider_sessions.py](../autopilot/core/provider_sessions.py)
+- [autopilot/cli/main.py](../autopilot/cli/main.py)
 - new: `/Users/martin/Desktop/autopilot/autopilot/cli/doctor.py`
 
 Donor repos:
@@ -387,13 +387,13 @@ Acceptance criteria:
 
 Current grounding:
 
-- [autopilot/cli/init_cmd.py](/Users/martin/Desktop/autopilot/autopilot/cli/init_cmd.py) is currently minimal
+- [autopilot/cli/init_cmd.py](../autopilot/cli/init_cmd.py) is currently minimal
 
 Target files:
 
-- [autopilot/cli/init_cmd.py](/Users/martin/Desktop/autopilot/autopilot/cli/init_cmd.py)
-- [autopilot/core/project_bootstrap.py](/Users/martin/Desktop/autopilot/autopilot/core/project_bootstrap.py)
-- [autopilot/core/adapters.py](/Users/martin/Desktop/autopilot/autopilot/core/adapters.py)
+- [autopilot/cli/init_cmd.py](../autopilot/cli/init_cmd.py)
+- [autopilot/core/project_bootstrap.py](../autopilot/core/project_bootstrap.py)
+- [autopilot/core/adapters.py](../autopilot/core/adapters.py)
 
 Donor repos:
 
@@ -411,15 +411,15 @@ Acceptance criteria:
 
 ### Why
 
-This is already present as design intent in [docs/autopilot-design.md](/Users/martin/Desktop/autopilot/docs/autopilot-design.md), but not as an implemented runtime model.
+This is already present as design intent in [docs/autopilot-design.md](autopilot-design.md), but not as an implemented runtime model.
 
 ### Story 6.1 — Extend story schema with dependencies
 
 Target files:
 
-- [autopilot/core/project_store.py](/Users/martin/Desktop/autopilot/autopilot/core/project_store.py)
-- [autopilot/core/models.py](/Users/martin/Desktop/autopilot/autopilot/core/models.py)
-- [autopilot/core/execution_brief.py](/Users/martin/Desktop/autopilot/autopilot/core/execution_brief.py)
+- [autopilot/core/project_store.py](../autopilot/core/project_store.py)
+- [autopilot/core/models.py](../autopilot/core/models.py)
+- [autopilot/core/execution_brief.py](../autopilot/core/execution_brief.py)
 
 Donor repos:
 
@@ -435,10 +435,10 @@ Acceptance criteria:
 
 Target files:
 
-- [autopilot/cli/run.py](/Users/martin/Desktop/autopilot/autopilot/cli/run.py)
-- [autopilot/core/orchestrator.py](/Users/martin/Desktop/autopilot/autopilot/core/orchestrator.py)
-- [autopilot/core/dispatcher.py](/Users/martin/Desktop/autopilot/autopilot/core/dispatcher.py)
-- [autopilot/core/project_store.py](/Users/martin/Desktop/autopilot/autopilot/core/project_store.py)
+- [autopilot/cli/run.py](../autopilot/cli/run.py)
+- [autopilot/core/orchestrator.py](../autopilot/core/orchestrator.py)
+- [autopilot/core/dispatcher.py](../autopilot/core/dispatcher.py)
+- [autopilot/core/project_store.py](../autopilot/core/project_store.py)
 
 Donor repos:
 
@@ -463,8 +463,8 @@ The current adapter layer is good, but still too tied to the existing provider f
 
 Target files:
 
-- [autopilot/core/adapters.py](/Users/martin/Desktop/autopilot/autopilot/core/adapters.py)
-- [autopilot/core/providers.py](/Users/martin/Desktop/autopilot/autopilot/core/providers.py)
+- [autopilot/core/adapters.py](../autopilot/core/adapters.py)
+- [autopilot/core/providers.py](../autopilot/core/providers.py)
 - new: `/Users/martin/Desktop/autopilot/autopilot/core/plugins.py`
 
 Donor repos:
@@ -484,8 +484,8 @@ Acceptance criteria:
 
 Target files:
 
-- [autopilot/core/adapters.py](/Users/martin/Desktop/autopilot/autopilot/core/adapters.py)
-- [tests/test_providers.py](/Users/martin/Desktop/autopilot/tests/test_providers.py)
+- [autopilot/core/adapters.py](../autopilot/core/adapters.py)
+- [tests/test_providers.py](../tests/test_providers.py)
 
 Donor repos:
 
@@ -508,13 +508,13 @@ Current notifier support is effectively Telegram-only and too narrow.
 
 Current grounding:
 
-- [autopilot/core/notifier.py](/Users/martin/Desktop/autopilot/autopilot/core/notifier.py) is Telegram-specific today
+- [autopilot/core/notifier.py](../autopilot/core/notifier.py) is Telegram-specific today
 
 Target files:
 
-- [autopilot/core/notifier.py](/Users/martin/Desktop/autopilot/autopilot/core/notifier.py)
+- [autopilot/core/notifier.py](../autopilot/core/notifier.py)
 - new: `/Users/martin/Desktop/autopilot/autopilot/core/notifiers.py`
-- [tests/test_notifier.py](/Users/martin/Desktop/autopilot/tests/test_notifier.py)
+- [tests/test_notifier.py](../tests/test_notifier.py)
 
 Donor repos:
 
@@ -530,9 +530,9 @@ Acceptance criteria:
 
 Target files:
 
-- [autopilot/core/critic.py](/Users/martin/Desktop/autopilot/autopilot/core/critic.py)
-- [autopilot/core/orchestrator.py](/Users/martin/Desktop/autopilot/autopilot/core/orchestrator.py)
-- [tests/test_critic.py](/Users/martin/Desktop/autopilot/tests/test_critic.py)
+- [autopilot/core/critic.py](../autopilot/core/critic.py)
+- [autopilot/core/orchestrator.py](../autopilot/core/orchestrator.py)
+- [tests/test_critic.py](../tests/test_critic.py)
 
 Donor repos:
 
@@ -559,9 +559,9 @@ This is a high-leverage small change.
 
 Target files:
 
-- [autopilot/core/gates.py](/Users/martin/Desktop/autopilot/autopilot/core/gates.py)
-- [autopilot/core/orchestrator.py](/Users/martin/Desktop/autopilot/autopilot/core/orchestrator.py)
-- [autopilot/core/loop_runner.py](/Users/martin/Desktop/autopilot/autopilot/core/loop_runner.py)
+- [autopilot/core/gates.py](../autopilot/core/gates.py)
+- [autopilot/core/orchestrator.py](../autopilot/core/orchestrator.py)
+- [autopilot/core/loop_runner.py](../autopilot/core/loop_runner.py)
 
 Donor repos:
 
@@ -576,8 +576,8 @@ Acceptance criteria:
 
 Target files:
 
-- [autopilot/core/orchestrator.py](/Users/martin/Desktop/autopilot/autopilot/core/orchestrator.py)
-- [autopilot/core/project_store.py](/Users/martin/Desktop/autopilot/autopilot/core/project_store.py)
+- [autopilot/core/orchestrator.py](../autopilot/core/orchestrator.py)
+- [autopilot/core/project_store.py](../autopilot/core/project_store.py)
 
 Donor repos:
 
@@ -602,9 +602,9 @@ The runtime is still mostly "one worker does most of the execution."
 
 Target files:
 
-- [autopilot/core/loop_runner.py](/Users/martin/Desktop/autopilot/autopilot/core/loop_runner.py)
-- [autopilot/core/orchestrator.py](/Users/martin/Desktop/autopilot/autopilot/core/orchestrator.py)
-- [autopilot/core/runtime_agents.py](/Users/martin/Desktop/autopilot/autopilot/core/runtime_agents.py)
+- [autopilot/core/loop_runner.py](../autopilot/core/loop_runner.py)
+- [autopilot/core/orchestrator.py](../autopilot/core/orchestrator.py)
+- [autopilot/core/runtime_agents.py](../autopilot/core/runtime_agents.py)
 
 Donor repos:
 
@@ -620,9 +620,9 @@ Acceptance criteria:
 
 Target files:
 
-- [autopilot/core/orchestrator.py](/Users/martin/Desktop/autopilot/autopilot/core/orchestrator.py)
-- [autopilot/core/project_store.py](/Users/martin/Desktop/autopilot/autopilot/core/project_store.py)
-- [dashboard/components/runtime-agent-activity-section.tsx](/Users/martin/Desktop/autopilot/dashboard/components/runtime-agent-activity-section.tsx)
+- [autopilot/core/orchestrator.py](../autopilot/core/orchestrator.py)
+- [autopilot/core/project_store.py](../autopilot/core/project_store.py)
+- [dashboard/components/runtime-agent-activity-section.tsx](../dashboard/components/runtime-agent-activity-section.tsx)
 
 Donor repos:
 
@@ -641,8 +641,8 @@ Acceptance criteria:
 
 Target files:
 
-- [autopilot/api/main.py](/Users/martin/Desktop/autopilot/autopilot/api/main.py)
-- [autopilot/core/project_store.py](/Users/martin/Desktop/autopilot/autopilot/core/project_store.py)
+- [autopilot/api/main.py](../autopilot/api/main.py)
+- [autopilot/core/project_store.py](../autopilot/core/project_store.py)
 - new: `/Users/martin/Desktop/autopilot/autopilot/api/routes/integrations.py`
 
 Donor repos:
@@ -660,9 +660,9 @@ Acceptance criteria:
 
 Target files:
 
-- [autopilot/core/intake.py](/Users/martin/Desktop/autopilot/autopilot/core/intake.py)
-- [autopilot/cli/init_cmd.py](/Users/martin/Desktop/autopilot/autopilot/cli/init_cmd.py)
-- [dashboard/components/intake-chat.tsx](/Users/martin/Desktop/autopilot/dashboard/components/intake-chat.tsx)
+- [autopilot/core/intake.py](../autopilot/core/intake.py)
+- [autopilot/cli/init_cmd.py](../autopilot/cli/init_cmd.py)
+- [dashboard/components/intake-chat.tsx](../dashboard/components/intake-chat.tsx)
 
 Donor repos:
 
@@ -695,8 +695,8 @@ Acceptance criteria:
 
 Target files:
 
-- [autopilot/core/orchestrator.py](/Users/martin/Desktop/autopilot/autopilot/core/orchestrator.py)
-- [autopilot/core/escalation.py](/Users/martin/Desktop/autopilot/autopilot/core/escalation.py)
+- [autopilot/core/orchestrator.py](../autopilot/core/orchestrator.py)
+- [autopilot/core/escalation.py](../autopilot/core/escalation.py)
 
 Donor repos:
 
@@ -711,7 +711,7 @@ Acceptance criteria:
 
 Target files:
 
-- [autopilot/cli/run.py](/Users/martin/Desktop/autopilot/autopilot/cli/run.py)
+- [autopilot/cli/run.py](../autopilot/cli/run.py)
 - new: `/Users/martin/Desktop/autopilot/autopilot/core/scheduler.py`
 
 Donor repos:

@@ -6,16 +6,16 @@ Status: canonical handoff for the next chat after branch hardening
 
 Supersedes as the default starting point for future work:
 
-- [2026-03-31-merged-handoff-and-plan.md](/Users/martin/Desktop/autopilot/docs/2026-03-31-merged-handoff-and-plan.md)
-- [2026-03-31-control-plane-handoff.md](/Users/martin/Desktop/autopilot/docs/2026-03-31-control-plane-handoff.md)
+- [2026-03-31-merged-handoff-and-plan.md](2026-03-31-merged-handoff-and-plan.md)
+- [2026-03-31-control-plane-handoff.md](2026-03-31-control-plane-handoff.md)
 
 Grounding docs:
 
-- [2026-03-31-pr-summary.md](/Users/martin/Desktop/autopilot/docs/2026-03-31-pr-summary.md)
-- [2026-03-31-branch-completion-note.md](/Users/martin/Desktop/autopilot/docs/2026-03-31-branch-completion-note.md)
-- [execution-brief-bridge.md](/Users/martin/Desktop/autopilot/docs/execution-brief-bridge.md)
-- [phase3-founderos-execution-plane.md](/Users/martin/Desktop/autopilot/docs/phase3-founderos-execution-plane.md)
-- [phase4-approval-foundation.md](/Users/martin/Desktop/autopilot/docs/phase4-approval-foundation.md)
+- [2026-03-31-pr-summary.md](2026-03-31-pr-summary.md)
+- [2026-03-31-branch-completion-note.md](2026-03-31-branch-completion-note.md)
+- [execution-brief-bridge.md](execution-brief-bridge.md)
+- [phase3-founderos-execution-plane.md](phase3-founderos-execution-plane.md)
+- [phase4-approval-foundation.md](phase4-approval-foundation.md)
 
 ## North Star
 
@@ -50,7 +50,7 @@ Do not reopen the already-landed branch tasks unless a regression proves the bra
 
 Start here in the next chat:
 
-1. Read [2026-03-31-pr-summary.md](/Users/martin/Desktop/autopilot/docs/2026-03-31-pr-summary.md) and [2026-03-31-branch-completion-note.md](/Users/martin/Desktop/autopilot/docs/2026-03-31-branch-completion-note.md).
+1. Read [2026-03-31-pr-summary.md](2026-03-31-pr-summary.md) and [2026-03-31-branch-completion-note.md](2026-03-31-branch-completion-note.md).
 2. Use this file as the single source of truth for what comes next.
 3. Default to `Phase 0` until the baseline is reviewed, green, and merged.
 4. Promote `P3` only if a concrete runtime or operator failure mode demands it.
@@ -97,10 +97,10 @@ Goal: make execution safe and reviewable before apply, not only after the fact.
 
 Existing foundation to extend:
 
-- [phase4-approval-foundation.md](/Users/martin/Desktop/autopilot/docs/phase4-approval-foundation.md)
-- [autopilot/core/execution_plane.py](/Users/martin/Desktop/autopilot/autopilot/core/execution_plane.py)
-- [autopilot/api/routes/execution_plane.py](/Users/martin/Desktop/autopilot/autopilot/api/routes/execution_plane.py)
-- [dashboard/app/control-plane/page.tsx](/Users/martin/Desktop/autopilot/dashboard/app/control-plane/page.tsx)
+- [phase4-approval-foundation.md](phase4-approval-foundation.md)
+- [autopilot/core/execution_plane.py](../autopilot/core/execution_plane.py)
+- [autopilot/api/routes/execution_plane.py](../autopilot/api/routes/execution_plane.py)
+- [dashboard/app/control-plane/page.tsx](../dashboard/app/control-plane/page.tsx)
 
 Changes:
 
@@ -134,11 +134,11 @@ Goal: remove the product dependency on a small set of cloud CLIs and make privat
 
 Existing foundation to extend:
 
-- [autopilot/core/adapters.py](/Users/martin/Desktop/autopilot/autopilot/core/adapters.py)
-- [autopilot/core/providers.py](/Users/martin/Desktop/autopilot/autopilot/core/providers.py)
-- [autopilot/core/config.py](/Users/martin/Desktop/autopilot/autopilot/core/config.py)
-- [autopilot/core/capability_store.py](/Users/martin/Desktop/autopilot/autopilot/core/capability_store.py)
-- [autopilot/cli/doctor.py](/Users/martin/Desktop/autopilot/autopilot/cli/doctor.py)
+- [autopilot/core/adapters.py](../autopilot/core/adapters.py)
+- [autopilot/core/providers.py](../autopilot/core/providers.py)
+- [autopilot/core/config.py](../autopilot/core/config.py)
+- [autopilot/core/capability_store.py](../autopilot/core/capability_store.py)
+- [autopilot/cli/doctor.py](../autopilot/cli/doctor.py)
 
 Changes:
 
@@ -181,10 +181,10 @@ Goal: expose the existing capability and connector work as a clear extension sys
 
 Existing foundation to extend:
 
-- [autopilot/core/capability_store.py](/Users/martin/Desktop/autopilot/autopilot/core/capability_store.py)
-- [autopilot/core/plugins.py](/Users/martin/Desktop/autopilot/autopilot/core/plugins.py)
-- [autopilot/api/routes/capabilities.py](/Users/martin/Desktop/autopilot/autopilot/api/routes/capabilities.py)
-- [dashboard/components/settings-capabilities.tsx](/Users/martin/Desktop/autopilot/dashboard/components/settings-capabilities.tsx)
+- [autopilot/core/capability_store.py](../autopilot/core/capability_store.py)
+- [autopilot/core/plugins.py](../autopilot/core/plugins.py)
+- [autopilot/api/routes/capabilities.py](../autopilot/api/routes/capabilities.py)
+- [dashboard/components/settings-capabilities.tsx](../dashboard/components/settings-capabilities.tsx)
 
 Changes:
 
@@ -230,11 +230,11 @@ Goal: close the path from idea to brief to tracked execution to PR or handoff ar
 
 Existing foundation to extend:
 
-- [execution-brief-bridge.md](/Users/martin/Desktop/autopilot/docs/execution-brief-bridge.md)
-- [autopilot/core/execution_brief.py](/Users/martin/Desktop/autopilot/autopilot/core/execution_brief.py)
-- [autopilot/core/worktree.py](/Users/martin/Desktop/autopilot/autopilot/core/worktree.py)
-- [autopilot/core/project_bootstrap.py](/Users/martin/Desktop/autopilot/autopilot/core/project_bootstrap.py)
-- [autopilot/core/github_prs.py](/Users/martin/Desktop/autopilot/autopilot/core/github_prs.py)
+- [execution-brief-bridge.md](execution-brief-bridge.md)
+- [autopilot/core/execution_brief.py](../autopilot/core/execution_brief.py)
+- [autopilot/core/worktree.py](../autopilot/core/worktree.py)
+- [autopilot/core/project_bootstrap.py](../autopilot/core/project_bootstrap.py)
+- [autopilot/core/github_prs.py](../autopilot/core/github_prs.py)
 
 Changes:
 

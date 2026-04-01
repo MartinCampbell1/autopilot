@@ -63,9 +63,9 @@ Expected result:
 
 Pick one of the public walkthroughs and verify that the product story is coherent:
 
-- [docs/quickstart.md](/Users/martin/Desktop/autopilot/docs/quickstart.md)
-- [docs/workflow.md](/Users/martin/Desktop/autopilot/docs/workflow.md)
-- [docs/examples/issue-driven-flow.md](/Users/martin/Desktop/autopilot/docs/examples/issue-driven-flow.md)
+- [docs/quickstart.md](quickstart.md)
+- [docs/workflow.md](workflow.md)
+- [docs/examples/issue-driven-flow.md](examples/issue-driven-flow.md)
 
 Success means the reader can answer:
 

@@ -4,7 +4,7 @@ This checklist defines the minimum release hygiene for the current release-candi
 
 ## Versioning Strategy
 
-Current package version in [pyproject.toml](/Users/martin/Desktop/autopilot/pyproject.toml): `0.1.0`
+Current package version in [pyproject.toml](../pyproject.toml): `0.1.0`
 
 Use the following rule set:
 
@@ -19,11 +19,11 @@ Use the following rule set:
 - confirm the branch scope is limited to the already-landed baseline plus release-hygiene changes
 - do not reopen closed `P0`, `P1`, or `P2` work unless a regression requires it
 - do not promote a `P3` item by default
-- ensure the canonical next-step handoff is [2026-03-31-next-product-plan.md](/Users/martin/Desktop/autopilot/docs/2026-03-31-next-product-plan.md)
+- ensure the canonical next-step handoff is [2026-03-31-next-product-plan.md](2026-03-31-next-product-plan.md)
 
 ## PR And Review
 
-- review the existing branch diff against [2026-03-31-pr-summary.md](/Users/martin/Desktop/autopilot/docs/2026-03-31-pr-summary.md)
+- review the existing branch diff against [2026-03-31-pr-summary.md](2026-03-31-pr-summary.md)
 - move the PR out of draft before requesting final review
 - ensure CI or an equivalent recorded verification baseline exists
 - merge only after the verification contract is green
@@ -45,14 +45,14 @@ Run and record:
 ## Documentation Sync
 
 - `README.md` matches the current product surface and release baseline
-- [2026-03-31-next-product-plan.md](/Users/martin/Desktop/autopilot/docs/2026-03-31-next-product-plan.md) is the only canonical next-step handoff
+- [2026-03-31-next-product-plan.md](2026-03-31-next-product-plan.md) is the only canonical next-step handoff
 - older handoff docs are clearly marked as historical context
 - release checklist, changelog, and release notes template exist
 
 ## Release Artifacts
 
-- update [CHANGELOG.md](/Users/martin/Desktop/autopilot/CHANGELOG.md)
-- copy [release-notes-template.md](/Users/martin/Desktop/autopilot/docs/release-notes-template.md) into the actual release notes draft
+- update [CHANGELOG.md](../CHANGELOG.md)
+- copy [release-notes-template.md](release-notes-template.md) into the actual release notes draft
 - include the verification baseline in the release notes
 - include the public smoke and evaluation story in the release body when the goal is external adoption
 - link to the main architecture and handoff docs in the release body

@@ -6,8 +6,8 @@ This project follows Keep a Changelog style entries and uses semantic versioning
 
 ### Added
 
-- Canonical post-hardening handoff in [docs/2026-03-31-next-product-plan.md](/Users/martin/Desktop/autopilot/docs/2026-03-31-next-product-plan.md).
-- Release hygiene surface with [docs/release-checklist.md](/Users/martin/Desktop/autopilot/docs/release-checklist.md) and [docs/release-notes-template.md](/Users/martin/Desktop/autopilot/docs/release-notes-template.md).
+- Canonical post-hardening handoff in [docs/2026-03-31-next-product-plan.md](docs/2026-03-31-next-product-plan.md).
+- Release hygiene surface with [docs/release-checklist.md](docs/release-checklist.md) and [docs/release-notes-template.md](docs/release-notes-template.md).
 
 ### Changed
 

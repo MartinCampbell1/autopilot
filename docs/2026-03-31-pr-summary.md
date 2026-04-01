@@ -26,7 +26,7 @@ Branch: `codex/founderos-control-plane`
 
 - `./.venv/bin/python -m pytest -q`
   - `281 passed in 7.73s`
-- `./.venv/bin/ruff check /Users/martin/Desktop/autopilot/autopilot /Users/martin/Desktop/autopilot/tests`
+- `./.venv/bin/ruff check autopilot tests`
   - passed
 - `npm run build` in `dashboard`
   - passed
@@ -45,23 +45,23 @@ Branch: `codex/founderos-control-plane`
 
 Primary code areas for review:
 
-- [autopilot/core/orchestrator.py](/Users/martin/Desktop/autopilot/autopilot/core/orchestrator.py)
-- [autopilot/core/gates.py](/Users/martin/Desktop/autopilot/autopilot/core/gates.py)
-- [autopilot/core/escalation.py](/Users/martin/Desktop/autopilot/autopilot/core/escalation.py)
-- [autopilot/core/scheduler.py](/Users/martin/Desktop/autopilot/autopilot/core/scheduler.py)
-- [autopilot/cli/dashboard.py](/Users/martin/Desktop/autopilot/autopilot/cli/dashboard.py)
-- [autopilot/cli/run.py](/Users/martin/Desktop/autopilot/autopilot/cli/run.py)
-- [autopilot/cli/main.py](/Users/martin/Desktop/autopilot/autopilot/cli/main.py)
-- [dashboard/app/control-plane/page.tsx](/Users/martin/Desktop/autopilot/dashboard/app/control-plane/page.tsx)
-- [dashboard/package.json](/Users/martin/Desktop/autopilot/dashboard/package.json)
-- [dashboard/.gitignore](/Users/martin/Desktop/autopilot/dashboard/.gitignore)
+- [autopilot/core/orchestrator.py](../autopilot/core/orchestrator.py)
+- [autopilot/core/gates.py](../autopilot/core/gates.py)
+- [autopilot/core/escalation.py](../autopilot/core/escalation.py)
+- [autopilot/core/scheduler.py](../autopilot/core/scheduler.py)
+- [autopilot/cli/dashboard.py](../autopilot/cli/dashboard.py)
+- [autopilot/cli/run.py](../autopilot/cli/run.py)
+- [autopilot/cli/main.py](../autopilot/cli/main.py)
+- [dashboard/app/control-plane/page.tsx](../dashboard/app/control-plane/page.tsx)
+- [dashboard/package.json](../dashboard/package.json)
+- [dashboard/.gitignore](../dashboard/.gitignore)
 
 Primary status docs:
 
-- [2026-03-31-branch-completion-note.md](/Users/martin/Desktop/autopilot/docs/2026-03-31-branch-completion-note.md)
-- [2026-03-31-merged-handoff-and-plan.md](/Users/martin/Desktop/autopilot/docs/2026-03-31-merged-handoff-and-plan.md)
-- [2026-03-31-control-plane-handoff.md](/Users/martin/Desktop/autopilot/docs/2026-03-31-control-plane-handoff.md)
-- [2026-03-31-engineering-backlog.md](/Users/martin/Desktop/autopilot/docs/2026-03-31-engineering-backlog.md)
+- [2026-03-31-branch-completion-note.md](2026-03-31-branch-completion-note.md)
+- [2026-03-31-merged-handoff-and-plan.md](2026-03-31-merged-handoff-and-plan.md)
+- [2026-03-31-control-plane-handoff.md](2026-03-31-control-plane-handoff.md)
+- [2026-03-31-engineering-backlog.md](2026-03-31-engineering-backlog.md)
 
 ## Intentional Boundary
 
