@@ -248,6 +248,8 @@ def test_execution_plane_surfaces_pending_tool_permission_runtimes_in_project_an
     agent_detail_response = client.get(f"/api/execution-plane/agents/{runtime_agent_id}")
     assert agent_detail_response.status_code == 200
     agent_detail = agent_detail_response.json()
+    assert agent_detail["attention"]["state"] == "needs_approval"
+    assert any(item["kind"] == "review_tool_permissions" for item in agent_detail["recommendations"])
     assert agent_detail["history"]["tool_permission_runtime_count"] == 1
     assert agent_detail["history"]["pending_tool_permission_runtime_count"] == 1
     assert len(agent_detail["tool_permission_runtimes"]) == 1
@@ -2308,6 +2310,101 @@ def test_execution_plane_orchestrator_session_control_apply_completes_healthy_se
     assert detail["control"]["state"] == "closed"
     assert detail["control"]["session_state"] == "idle"
     assert detail["control"]["pending_action"] is None
+
+
+@patch("autopilot.core.execution_plane.generate_prd_from_spec")
+def test_execution_plane_orchestrator_session_control_surfaces_pending_tool_permissions(
+    mock_generate_prd_from_spec,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    client = _build_client(config, monkeypatch)
+    mock_generate_prd_from_spec.return_value = {
+        "title": "FounderOS Copilot",
+        "description": "Execution-ready FounderOS project.",
+        "stories": [{"id": 1, "title": "Bootstrap", "description": "Create the app shell"}],
+    }
+    created = _create_execution_project(client, tmp_path / "session-tool-permission-project")
+    project_id = created["project"]["project_id"]
+    session = _create_orchestrator_session(
+        client,
+        project_ids=[project_id],
+        initiative_id="init_founderos_1",
+        actor="founderos",
+        title="FounderOS tool permission sweep",
+    )
+    agents_response = client.get(f"/api/execution-plane/projects/{project_id}/agents")
+    assert agents_response.status_code == 200
+    runtime_agent_id = agents_response.json()["agents"][0]["agent_id"]
+
+    runtime = create_or_reuse_approval_runtime(
+        config,
+        key=f"tool-permission:{project_id}:demo.pause:toolu_session_1",
+        project_id=project_id,
+        runtime_agent_ids=[runtime_agent_id],
+        metadata={
+            "kind": "tool_permission_request",
+            "tool_name": "demo.pause",
+            "tool_use_id": "toolu_session_1",
+        },
+        publish_pending=True,
+        pending_message_type="tool_permission_pending",
+        pending_payload={
+            "tool_name": "demo.pause",
+            "tool_use_id": "toolu_session_1",
+            "message": "Need explicit approval.",
+            "behavior": "pending_user",
+        },
+    )
+    annotate_approval_runtime(
+        config,
+        approval_runtime_id=runtime.id,
+        metadata_updates={
+            "pending": {
+                "stage": "pending_user",
+                "tool_name": "demo.pause",
+                "tool_use_id": "toolu_session_1",
+            }
+        },
+        payload_updates={
+            "pending_user": {
+                "message": "Need explicit approval.",
+                "tool_name": "demo.pause",
+                "tool_use_id": "toolu_session_1",
+            }
+        },
+        mailbox_message_type="tool_permission_user_pending",
+        mailbox_payload={"tool_name": "demo.pause", "tool_use_id": "toolu_session_1"},
+    )
+
+    session_detail = client.get(f"/api/execution-plane/orchestrator-sessions/{session['id']}")
+    assert session_detail.status_code == 200
+    detail = session_detail.json()
+    assert detail["summary"]["tool_permission_runtime_count"] == 1
+    assert detail["summary"]["pending_tool_permission_runtime_count"] == 1
+    assert detail["runtime_state"] == "requires_action"
+    assert detail["pending_action"]["kind"] == "review_pending_tool_permissions"
+    assert detail["control"]["state"] == "needs_approval"
+    assert detail["control"]["counts"]["pending_tool_permission_runtimes"] == 1
+    assert detail["control"]["session_state"] == "requires_action"
+    assert detail["control"]["pending_action"]["kind"] == "review_pending_tool_permissions"
+    assert any(item["kind"] == "review_pending_tool_permissions" for item in detail["control"]["recommendations"])
+
+    apply_response = client.post(
+        f"/api/execution-plane/orchestrator-sessions/{session['id']}/control/apply",
+        json={
+            "recommendation_kind": "review_pending_tool_permissions",
+            "actor": "founderos",
+            "reason": "Inspect pending tool permission requests.",
+        },
+    )
+    assert apply_response.status_code == 200
+    payload = apply_response.json()
+    assert payload["status"] == "ok"
+    assert payload["recommendation"]["kind"] == "review_pending_tool_permissions"
+    assert payload["result"]["counts"]["pending_tool_permission_runtimes"] == 1
+    assert payload["result"]["pending_tool_permission_runtimes"][0]["id"] == runtime.id
 
 
 @patch("autopilot.core.execution_plane.generate_prd_from_spec")

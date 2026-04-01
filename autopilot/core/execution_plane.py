@@ -728,6 +728,7 @@ def _runtime_agent_attention_summary(
     budget: dict[str, Any],
     open_issues: list[dict[str, Any]],
     pending_approvals: list[dict[str, Any]],
+    pending_tool_permission_runtimes: list[dict[str, Any]],
 ) -> dict[str, Any]:
     reasons: list[str] = []
     agent_status = str((agent or {}).get("status") or "")
@@ -742,6 +743,14 @@ def _runtime_agent_attention_summary(
             f"{len(pending_approvals)} pending approval(s): "
             + ", ".join(str(approval.get("action") or "approval") for approval in pending_approvals[:2])
         )
+    if pending_tool_permission_runtimes:
+        reasons.append(
+            f"{len(pending_tool_permission_runtimes)} pending tool permission runtime(s): "
+            + ", ".join(
+                str(runtime.get("tool_name") or runtime.get("pending_stage") or "tool permission")
+                for runtime in pending_tool_permission_runtimes[:2]
+            )
+        )
     if budget.get("tracked") and budget.get("exhausted"):
         reasons.append("Agent budget is exhausted.")
     elif budget.get("tracked") and isinstance(budget.get("remaining"), int) and int(budget["remaining"]) <= 2:
@@ -754,9 +763,14 @@ def _runtime_agent_attention_summary(
     if open_issues or agent_status in {"blocked", "stuck"}:
         state = "blocked"
         recommended_action = "Resolve linked issues before resuming execution."
-    elif pending_approvals:
+    elif pending_approvals or pending_tool_permission_runtimes:
         state = "needs_approval"
-        recommended_action = "Review and apply or reject pending control-plane actions."
+        if pending_approvals and pending_tool_permission_runtimes:
+            recommended_action = "Review pending approvals and explicit tool-permission requests."
+        elif pending_tool_permission_runtimes:
+            recommended_action = "Review and resolve pending tool-permission requests."
+        else:
+            recommended_action = "Review and apply or reject pending control-plane actions."
     elif budget.get("tracked") and budget.get("exhausted"):
         state = "budget_exhausted"
         recommended_action = "Increase the relevant budget or rotate to another account."
@@ -858,6 +872,7 @@ def _runtime_agent_recommendations(
     attention: dict[str, Any],
     open_issues: list[dict[str, Any]],
     pending_approvals: list[dict[str, Any]],
+    pending_tool_permission_runtimes: list[dict[str, Any]],
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     recommendations: list[dict[str, Any]] = []
     suggested_commands: list[dict[str, Any]] = []
@@ -884,6 +899,27 @@ def _runtime_agent_recommendations(
                 "reason": attention["recommended_action"],
                 "approval_ids": [str(approval["id"]) for approval in pending_approvals],
                 "actions": [str(approval.get("action") or "") for approval in pending_approvals],
+            }
+        )
+    if pending_tool_permission_runtimes:
+        recommendations.append(
+            {
+                "kind": "review_tool_permissions",
+                "priority": "high",
+                "title": "Review pending tool permissions",
+                "reason": attention["recommended_action"],
+                "tool_permission_runtime_ids": [
+                    str(runtime.get("id") or "")
+                    for runtime in pending_tool_permission_runtimes
+                    if str(runtime.get("id") or "").strip()
+                ],
+                "tool_names": sorted(
+                    {
+                        str(runtime.get("tool_name") or "")
+                        for runtime in pending_tool_permission_runtimes
+                        if str(runtime.get("tool_name") or "").strip()
+                    }
+                ),
             }
         )
 
@@ -1753,6 +1789,7 @@ def _decorate_runtime_agent(
         budget=budget,
         open_issues=open_issues,
         pending_approvals=pending_approvals,
+        pending_tool_permission_runtimes=pending_tool_permission_runtimes,
     )
     recommendations, suggested_commands = _runtime_agent_recommendations(
         config,
@@ -1763,6 +1800,7 @@ def _decorate_runtime_agent(
         attention=attention,
         open_issues=open_issues,
         pending_approvals=pending_approvals,
+        pending_tool_permission_runtimes=pending_tool_permission_runtimes,
     )
     return {
         **agent,
@@ -1801,6 +1839,24 @@ def list_execution_plane_tool_permission_runtimes(
             runtime_agent_id=runtime_agent_id,
             status=status,
             pending_stage=pending_stage,
+        )
+    ]
+
+
+def _list_orchestrator_session_tool_permission_runtimes(
+    config: AutopilotConfig,
+    session: Any,
+) -> list[dict[str, Any]]:
+    """Return tool-permission runtimes linked to one orchestrator session."""
+
+    session_project_ids = set(getattr(session, "project_ids", []) or [])
+    runtime_agent_ids = set(getattr(session, "linked_runtime_agent_ids", []) or [])
+    return [
+        runtime
+        for runtime in list_execution_plane_tool_permission_runtimes(config)
+        if (
+            str(runtime.get("project_id") or "") in session_project_ids
+            or bool(runtime_agent_ids.intersection(set(runtime.get("runtime_agent_ids") or [])))
         )
     ]
 
@@ -2758,6 +2814,7 @@ ORCHESTRATOR_SESSION_CONTROL_PROFILES: dict[str, dict[str, Any]] = {
         ),
         "recommendation_kinds": [
             "review_pending_approvals",
+            "review_pending_tool_permissions",
             "execute_safe_actions",
             "preview_approval_gated_actions",
             "triage_open_issues",
@@ -2771,6 +2828,7 @@ ORCHESTRATOR_SESSION_CONTROL_PROFILES: dict[str, dict[str, Any]] = {
         ),
         "recommendation_kinds": [
             "review_pending_approvals",
+            "review_pending_tool_permissions",
             "preview_safe_actions",
             "preview_approval_gated_actions",
             "triage_open_issues",
@@ -2931,12 +2989,16 @@ def build_execution_plane_orchestrator_session_control(
         for issue in list_issues(config)
         if issue.id in set(session.linked_issue_ids)
     ]
+    tool_permission_runtimes = _list_orchestrator_session_tool_permission_runtimes(config, session)
     async_tasks = list_execution_plane_runtime_agent_tasks(
         config,
         orchestrator_session_id=session_id,
     )
 
     pending_approvals = [approval for approval in approvals if approval.get("status") == "pending"]
+    pending_tool_permission_runtimes = [
+        runtime for runtime in tool_permission_runtimes if str(runtime.get("status") or "") == "pending"
+    ]
     open_issues = [issue for issue in issues if issue.get("status") == "open"]
     active_async_tasks = [
         task
@@ -2957,7 +3019,7 @@ def build_execution_plane_orchestrator_session_control(
 
     if session.status != "open":
         state = "closed"
-    elif pending_approvals:
+    elif pending_approvals or pending_tool_permission_runtimes:
         state = "needs_approval"
     elif active_async_tasks:
         state = "in_progress"
@@ -2980,6 +3042,29 @@ def build_execution_plane_orchestrator_session_control(
                 "operation": {
                     "type": "inspect_session_approvals",
                     "session_id": session_id,
+                },
+            }
+        )
+    if pending_tool_permission_runtimes:
+        recommendations.append(
+            {
+                "kind": "review_pending_tool_permissions",
+                "priority": "high",
+                "title": "Review pending tool permissions",
+                "reason": (
+                    f"{len(pending_tool_permission_runtimes)} pending tool-permission runtime(s) "
+                    "are waiting for explicit allow or deny."
+                ),
+                "counts": {"pending_tool_permission_runtimes": len(pending_tool_permission_runtimes)},
+                "operation": {
+                    "type": "inspect_session_tool_permission_runtimes",
+                    "session_id": session_id,
+                    "endpoint": "/api/execution-plane/tool-permission-runtimes",
+                    "payload": {
+                        "project_ids": list(session.project_ids),
+                        "runtime_agent_ids": list(session.linked_runtime_agent_ids),
+                        "status": "pending",
+                    },
                 },
             }
         )
@@ -3117,6 +3202,7 @@ def build_execution_plane_orchestrator_session_control(
         "pending_action": session.pending_action,
         "counts": {
             "pending_approvals": len(pending_approvals),
+            "pending_tool_permission_runtimes": len(pending_tool_permission_runtimes),
             "open_issues": len(open_issues),
             "active_async_tasks": len(active_async_tasks),
             "safe_actions": len(safe_actions),
@@ -3230,6 +3316,22 @@ def apply_execution_plane_orchestrator_session_recommendation(
             "counts": {
                 "approvals": len(approvals),
                 "pending_approvals": len(pending_approvals),
+            },
+        }
+    elif operation_type == "inspect_session_tool_permission_runtimes":
+        tool_permission_runtimes = _list_orchestrator_session_tool_permission_runtimes(config, session)
+        pending_tool_permission_runtimes = [
+            runtime
+            for runtime in tool_permission_runtimes
+            if str(runtime.get("status") or "") == "pending"
+        ]
+        result = {
+            "status": "ok",
+            "tool_permission_runtimes": tool_permission_runtimes,
+            "pending_tool_permission_runtimes": pending_tool_permission_runtimes,
+            "counts": {
+                "tool_permission_runtimes": len(tool_permission_runtimes),
+                "pending_tool_permission_runtimes": len(pending_tool_permission_runtimes),
             },
         }
     elif operation_type == "inspect_session_issues":
@@ -3693,16 +3795,7 @@ def get_execution_plane_orchestrator_session(
         for issue in list_issues(config)
         if issue.id in set(session.linked_issue_ids)
     ]
-    session_project_ids = set(session.project_ids)
-    runtime_agent_ids = set(session.linked_runtime_agent_ids)
-    tool_permission_runtimes = [
-        runtime
-        for runtime in list_execution_plane_tool_permission_runtimes(config)
-        if (
-            str(runtime.get("project_id") or "") in session_project_ids
-            or bool(runtime_agent_ids.intersection(set(runtime.get("runtime_agent_ids") or [])))
-        )
-    ]
+    tool_permission_runtimes = _list_orchestrator_session_tool_permission_runtimes(config, session)
     async_tasks = list_execution_plane_runtime_agent_tasks(
         config,
         orchestrator_session_id=session_id,
@@ -4000,6 +4093,9 @@ def get_execution_plane_agent_detail(
         budget=current_budget,
         open_issues=[issue for issue in issues if issue.get("status") == "open"],
         pending_approvals=[approval for approval in approvals if approval.get("status") == "pending"],
+        pending_tool_permission_runtimes=[
+            runtime for runtime in tool_permission_runtimes if str(runtime.get("status") or "") == "pending"
+        ],
     )
     recommendations, suggested_commands = _runtime_agent_recommendations(
         config,
@@ -4010,6 +4106,9 @@ def get_execution_plane_agent_detail(
         attention=attention,
         open_issues=[issue for issue in issues if issue.get("status") == "open"],
         pending_approvals=[approval for approval in approvals if approval.get("status") == "pending"],
+        pending_tool_permission_runtimes=[
+            runtime for runtime in tool_permission_runtimes if str(runtime.get("status") or "") == "pending"
+        ],
     )
     if current_agent is not None:
         current_agent = _decorate_runtime_agent(
