@@ -16,6 +16,7 @@ class TestRunSingleGate:
         result = run_single_gate("build", "npm run build", Path("/tmp"), required=True)
         assert result.passed is True
         assert result.name == "build"
+        assert mock_run.call_args.args[0] == ["npm", "run", "build"]
 
     @patch("autopilot.core.gates.subprocess.run")
     def test_gate_fails(self, mock_run: MagicMock) -> None:
@@ -65,6 +66,35 @@ class TestRunSingleGate:
 
         assert result.passed is True
         assert marker.exists()
+
+    @patch("autopilot.core.gates.subprocess.run")
+    def test_gate_rejects_shell_control_operator_before_execution(self, mock_run: MagicMock) -> None:
+        result = run_single_gate("test", "pytest && rm -rf dist", Path("/tmp"), required=True)
+
+        assert result.passed is False
+        assert result.exit_semantics == "denied"
+        assert "control operator" in result.output.lower()
+        mock_run.assert_not_called()
+
+    @patch("autopilot.core.gates.subprocess.run")
+    def test_gate_rejects_path_expansion_before_execution(self, mock_run: MagicMock) -> None:
+        result = run_single_gate("test", "pytest ~/tests", Path("/tmp"), required=True)
+
+        assert result.passed is False
+        assert result.exit_semantics == "denied"
+        assert "shell expansion" in result.output.lower()
+        mock_run.assert_not_called()
+
+    def test_gate_supports_leading_env_assignments(self, tmp_path: Path) -> None:
+        result = run_single_gate(
+            "env-check",
+            "FOUNDEROS_GATE_OK=1 python3 -c 'import os; print(os.environ[\"FOUNDEROS_GATE_OK\"])'",
+            tmp_path,
+            required=True,
+        )
+
+        assert result.passed is True
+        assert result.output == "1"
 
     @patch("autopilot.core.gates.subprocess.run")
     def test_gate_reports_grep_no_match_semantics(self, mock_run: MagicMock) -> None:

@@ -10,6 +10,7 @@ from pathlib import Path
 
 from autopilot.core.command_semantics import classify_command_exit
 from autopilot.core.models import GateResult
+from autopilot.core.path_permissions import validate_gate_shell_command
 
 
 def _gate_env(workdir: Path, base_env: Mapping[str, str] | None = None) -> dict[str, str]:
@@ -46,17 +47,34 @@ def run_single_gate(
 ) -> GateResult:
     """Run a single gate command and return its structured result."""
     started_at = time.time()
+    validation = validate_gate_shell_command(cmd)
+    if not validation.allowed:
+        return GateResult(
+            name=name,
+            cmd=cmd,
+            passed=False,
+            output=validation.reason,
+            required=required,
+            elapsed_sec=round(time.time() - started_at, 2),
+            exit_code=None,
+            exit_semantics="denied",
+            exit_semantics_summary=validation.reason,
+        )
+
+    env = _gate_env(workdir, base_env)
+    if validation.env_updates:
+        env.update(validation.env_updates)
+
     try:
         result = subprocess.run(
-            cmd,
-            shell=True,
+            list(validation.argv),
             cwd=str(workdir),
             capture_output=True,
             text=True,
             timeout=timeout,
-            env=_gate_env(workdir, base_env),
+            env=env,
         )
-        semantics = classify_command_exit(cmd, int(result.returncode))
+        semantics = classify_command_exit(list(validation.argv), int(result.returncode))
         passed = not semantics.treat_as_error
         output = result.stdout + result.stderr
         if result.returncode != 0 and semantics.summary:
