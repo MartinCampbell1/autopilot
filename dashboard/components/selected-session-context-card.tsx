@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useEffect, useState } from "react";
 import { RelationshipStrip, SessionMetric, type RelationshipStripItem } from "@/components/control-plane-display";
 import { approvalStatusClass, issueSeverityClass, issueStatusClass, passStatusClass } from "@/lib/control-plane-ui";
 import { Badge } from "@/components/ui/badge";
@@ -12,11 +13,17 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import {
+  fetchExecutionPlaneRuntimeAgentTaskOutput,
+  fetchExecutionPlaneRuntimeAgentTaskTranscript,
+} from "@/lib/api";
 import type {
   ExecutionAgentActionRunRecord,
   ExecutionApprovalRecord,
   ExecutionIssueRecord,
   ExecutionRuntimeAgentTaskRecord,
+  ExecutionRuntimeAgentTaskOutputArtifact,
+  ExecutionRuntimeAgentTaskTranscriptArtifact,
   OrchestratorSessionDetail,
   ToolPermissionRuntimeRecord,
 } from "@/lib/types";
@@ -147,6 +154,68 @@ export function SelectedSessionContextCard({
   onDenyToolPermissionRuntime,
   onAdvanceCurrentQueue,
 }: SelectedSessionContextCardProps) {
+  const selectedAsyncTaskId =
+    selectedSessionContext?.kind === "async_task" ? selectedSessionContext.task.id : "";
+  const [taskOutputArtifact, setTaskOutputArtifact] =
+    useState<ExecutionRuntimeAgentTaskOutputArtifact | null>(null);
+  const [taskTranscriptArtifact, setTaskTranscriptArtifact] =
+    useState<ExecutionRuntimeAgentTaskTranscriptArtifact | null>(null);
+  const [taskOutputError, setTaskOutputError] = useState("");
+  const [taskTranscriptError, setTaskTranscriptError] = useState("");
+  const [loadingTaskOutput, setLoadingTaskOutput] = useState(false);
+  const [loadingTaskTranscript, setLoadingTaskTranscript] = useState(false);
+  const [showTaskOutput, setShowTaskOutput] = useState(false);
+  const [showTaskTranscript, setShowTaskTranscript] = useState(false);
+
+  useEffect(() => {
+    setTaskOutputArtifact(null);
+    setTaskTranscriptArtifact(null);
+    setTaskOutputError("");
+    setTaskTranscriptError("");
+    setLoadingTaskOutput(false);
+    setLoadingTaskTranscript(false);
+    setShowTaskOutput(false);
+    setShowTaskTranscript(false);
+  }, [selectedAsyncTaskId]);
+
+  async function handleTaskOutputToggle(taskId: string) {
+    if (!taskId) return;
+    if (showTaskOutput) {
+      setShowTaskOutput(false);
+      return;
+    }
+    setShowTaskOutput(true);
+    if (taskOutputArtifact || loadingTaskOutput) return;
+    setLoadingTaskOutput(true);
+    setTaskOutputError("");
+    try {
+      setTaskOutputArtifact(await fetchExecutionPlaneRuntimeAgentTaskOutput(taskId));
+    } catch (error) {
+      setTaskOutputError(error instanceof Error ? error.message : "Failed to load task output.");
+    } finally {
+      setLoadingTaskOutput(false);
+    }
+  }
+
+  async function handleTaskTranscriptToggle(taskId: string) {
+    if (!taskId) return;
+    if (showTaskTranscript) {
+      setShowTaskTranscript(false);
+      return;
+    }
+    setShowTaskTranscript(true);
+    if (taskTranscriptArtifact || loadingTaskTranscript) return;
+    setLoadingTaskTranscript(true);
+    setTaskTranscriptError("");
+    try {
+      setTaskTranscriptArtifact(await fetchExecutionPlaneRuntimeAgentTaskTranscript(taskId));
+    } catch (error) {
+      setTaskTranscriptError(error instanceof Error ? error.message : "Failed to load task transcript.");
+    } finally {
+      setLoadingTaskTranscript(false);
+    }
+  }
+
   return (
     <Card className="border border-[#e5e5e3] bg-white shadow-[0_1px_3px_rgba(15,15,15,0.08),0_0_1px_rgba(15,15,15,0.04)]">
       <CardHeader>
@@ -722,6 +791,146 @@ export function SelectedSessionContextCard({
                       {relatedOutcome.subtitle || "No outcome subtype"}
                     </p>
                     <p className="mt-2 text-[12px] text-[#6b6b6b]">{relatedOutcome.message}</p>
+                  </div>
+                )}
+
+                {asyncTaskContext && (
+                  <div className="grid gap-3 xl:grid-cols-2">
+                    <div className="rounded-xl border border-[#ecebe8] bg-[#fbfbf9] p-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#9b9a97]">
+                            Output Artifact
+                          </p>
+                          <p className="mt-2 text-[12px] text-[#6b6b6b]">
+                            {asyncTaskContext.output_artifact_ref
+                              ? asyncTaskContext.output_preview || "Durable output is ready for inline inspection."
+                              : "No durable output artifact is available yet."}
+                          </p>
+                        </div>
+                        {asyncTaskContext.output_artifact_ref ? (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-8 rounded-lg border-[#d6e9dc] bg-white text-[12px] text-[#2b6e3f] hover:bg-[#eef8f1]"
+                            disabled={loadingTaskOutput}
+                            onClick={() => {
+                              void handleTaskOutputToggle(asyncTaskContext.id);
+                            }}
+                          >
+                            {loadingTaskOutput
+                              ? "Loading..."
+                              : showTaskOutput
+                                ? "Hide output"
+                                : taskOutputArtifact
+                                  ? "Show output"
+                                  : "Load output"}
+                          </Button>
+                        ) : null}
+                      </div>
+                      {asyncTaskContext.output_preview ? (
+                        <pre className="mt-3 overflow-x-auto rounded-lg bg-white p-3 text-[11px] leading-relaxed text-[#37352f]">
+                          {asyncTaskContext.output_preview}
+                        </pre>
+                      ) : null}
+                      {taskOutputError ? (
+                        <p className="mt-3 text-[12px] text-[#b42318]">{taskOutputError}</p>
+                      ) : null}
+                      {showTaskOutput && taskOutputArtifact ? (
+                        <>
+                          <div className="mt-3 flex flex-wrap gap-2">
+                            <Badge
+                              variant="outline"
+                              className="rounded-full border-[#d6e9dc] bg-[#eef8f1] px-2.5 py-1 text-[11px] font-medium text-[#2b6e3f]"
+                            >
+                              {taskOutputArtifact.content_bytes} bytes
+                            </Badge>
+                            {taskOutputArtifact.truncated ? (
+                              <Badge
+                                variant="outline"
+                                className="rounded-full border-[#f4e0c4] bg-[#fff6e8] px-2.5 py-1 text-[11px] font-medium text-[#9a6700]"
+                              >
+                                truncated
+                              </Badge>
+                            ) : null}
+                            {taskOutputArtifact.source_path ? (
+                              <Badge
+                                variant="outline"
+                                className="rounded-full border-[#e5e5e3] bg-white px-2.5 py-1 text-[11px] font-medium text-[#37352f]"
+                              >
+                                {taskOutputArtifact.source_path}
+                              </Badge>
+                            ) : null}
+                          </div>
+                          <pre className="mt-3 max-h-80 overflow-auto rounded-lg bg-white p-3 text-[11px] leading-relaxed text-[#37352f]">
+                            {taskOutputArtifact.content}
+                          </pre>
+                        </>
+                      ) : null}
+                    </div>
+
+                    <div className="rounded-xl border border-[#ecebe8] bg-[#fbfbf9] p-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#9b9a97]">
+                            Transcript Artifact
+                          </p>
+                          <p className="mt-2 text-[12px] text-[#6b6b6b]">
+                            {asyncTaskContext.transcript_artifact_ref
+                              ? `${asyncTaskContext.history.length} recorded lifecycle entries.`
+                              : "No durable transcript artifact is available yet."}
+                          </p>
+                        </div>
+                        {asyncTaskContext.transcript_artifact_ref ? (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-8 rounded-lg border-[#d3e5ef] bg-white text-[12px] text-[#2a6690] hover:bg-[#eef7fb]"
+                            disabled={loadingTaskTranscript}
+                            onClick={() => {
+                              void handleTaskTranscriptToggle(asyncTaskContext.id);
+                            }}
+                          >
+                            {loadingTaskTranscript
+                              ? "Loading..."
+                              : showTaskTranscript
+                                ? "Hide transcript"
+                                : taskTranscriptArtifact
+                                  ? "Show transcript"
+                                  : "Load transcript"}
+                          </Button>
+                        ) : null}
+                      </div>
+                      {asyncTaskContext.history.length ? (
+                        <pre className="mt-3 overflow-x-auto rounded-lg bg-white p-3 text-[11px] leading-relaxed text-[#37352f]">
+                          {formatJson(asyncTaskContext.history.slice(-3))}
+                        </pre>
+                      ) : null}
+                      {taskTranscriptError ? (
+                        <p className="mt-3 text-[12px] text-[#b42318]">{taskTranscriptError}</p>
+                      ) : null}
+                      {showTaskTranscript && taskTranscriptArtifact ? (
+                        <>
+                          <div className="mt-3 flex flex-wrap gap-2">
+                            <Badge
+                              variant="outline"
+                              className="rounded-full border-[#d3e5ef] bg-[#eef7fb] px-2.5 py-1 text-[11px] font-medium text-[#2a6690]"
+                            >
+                              updated {formatTimestamp(taskTranscriptArtifact.updated_at)}
+                            </Badge>
+                            <Badge
+                              variant="outline"
+                              className="rounded-full border-[#e5e5e3] bg-white px-2.5 py-1 text-[11px] font-medium text-[#37352f]"
+                            >
+                              {taskTranscriptArtifact.id}
+                            </Badge>
+                          </div>
+                          <pre className="mt-3 max-h-80 overflow-auto rounded-lg bg-white p-3 text-[11px] leading-relaxed text-[#37352f]">
+                            {taskTranscriptArtifact.content}
+                          </pre>
+                        </>
+                      ) : null}
+                    </div>
                   </div>
                 )}
 

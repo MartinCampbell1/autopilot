@@ -9,6 +9,8 @@ import type {
   ExecutionAgentActionBatchResult,
   ExecutionAgentActionExecuteResult,
   ExecutionAgentActionRunRecord,
+  ExecutionRuntimeAgentTaskOutputArtifact,
+  ExecutionRuntimeAgentTaskTranscriptArtifact,
   IssueResolutionResult,
   IntakeSession,
   SpecBootstrap,
@@ -191,6 +193,30 @@ export async function fetchExecutionPlaneAgentDetail(
   return jsonOrThrow<ExecutionRuntimeAgentDetail>(
     res,
     `Failed to fetch runtime agent detail: ${res.status}`
+  );
+}
+
+export async function fetchExecutionPlaneRuntimeAgentTaskOutput(
+  taskId: string
+): Promise<ExecutionRuntimeAgentTaskOutputArtifact> {
+  const res = await fetch(
+    `${API_BASE}/execution-plane/agents/tasks/${encodeURIComponent(taskId)}/output`
+  );
+  return jsonOrThrow<ExecutionRuntimeAgentTaskOutputArtifact>(
+    res,
+    `Failed to fetch runtime agent task output: ${res.status}`
+  );
+}
+
+export async function fetchExecutionPlaneRuntimeAgentTaskTranscript(
+  taskId: string
+): Promise<ExecutionRuntimeAgentTaskTranscriptArtifact> {
+  const res = await fetch(
+    `${API_BASE}/execution-plane/agents/tasks/${encodeURIComponent(taskId)}/transcript`
+  );
+  return jsonOrThrow<ExecutionRuntimeAgentTaskTranscriptArtifact>(
+    res,
+    `Failed to fetch runtime agent task transcript: ${res.status}`
   );
 }
 
