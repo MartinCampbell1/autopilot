@@ -94,6 +94,26 @@ def test_parse_control_message_supports_tool_permission_runtime_resolution_reque
     assert parsed.session_id == "sess_1"
 
 
+def test_parse_control_message_supports_runtime_agent_task_artifact_requests() -> None:
+    parsed = parse_control_message(
+        {
+            "type": "control_request",
+            "requestId": "req_task_output",
+            "request": {
+                "subtype": "get_runtime_agent_task_output",
+                "taskId": "rat_123",
+            },
+            "sessionId": "sess_1",
+        }
+    )
+
+    assert parsed is not None
+    assert parsed.type == "control_request"
+    assert parsed.request.subtype == "get_runtime_agent_task_output"
+    assert parsed.request.task_id == "rat_123"
+    assert parsed.session_id == "sess_1"
+
+
 def test_build_structured_event_envelope_uses_sequence_when_no_explicit_id() -> None:
     event = {
         "event": "project_created",
