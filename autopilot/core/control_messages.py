@@ -129,9 +129,27 @@ class ControlGetRuntimeAgentActionRunRequest(BaseModel):
     wait_timeout_ms: int | None = None
 
 
+class ControlListRuntimeAgentActionRunsRequest(BaseModel):
+    subtype: Literal["list_runtime_agent_action_runs"]
+    orchestrator_session_id: str | None = None
+    run_kind: str | None = None
+    actor: str | None = None
+    status: str | None = None
+    dry_run: bool | None = None
+
+
 class ControlGetRuntimeAgentTaskOutputRequest(BaseModel):
     subtype: Literal["get_runtime_agent_task_output"]
     task_id: str
+
+
+class ControlListRuntimeAgentTasksRequest(BaseModel):
+    subtype: Literal["list_runtime_agent_tasks"]
+    orchestrator_session_id: str | None = None
+    runtime_agent_id: str | None = None
+    status: str | None = None
+    command: str | None = None
+    agent_action_run_id: str | None = None
 
 
 class ControlGetRuntimeAgentTaskTranscriptRequest(BaseModel):
@@ -172,6 +190,8 @@ ControlRequestPayload = Annotated[
     | ControlGetContextUsageRequest
     | ControlGetRuntimeAgentTaskRequest
     | ControlGetRuntimeAgentActionRunRequest
+    | ControlListRuntimeAgentActionRunsRequest
+    | ControlListRuntimeAgentTasksRequest
     | ControlGetRuntimeAgentTaskOutputRequest
     | ControlGetRuntimeAgentTaskTranscriptRequest
     | ControlListToolPermissionRuntimesRequest

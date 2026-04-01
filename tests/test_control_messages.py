@@ -140,6 +140,48 @@ def test_parse_control_message_supports_runtime_agent_action_run_requests() -> N
     assert parsed.session_id == "sess_1"
 
 
+def test_parse_control_message_supports_runtime_agent_listing_requests() -> None:
+    parsed = parse_control_message(
+        {
+            "type": "control_request",
+            "requestId": "req_list_runs",
+            "request": {
+                "subtype": "list_runtime_agent_action_runs",
+                "orchestratorSessionId": "sess_1",
+                "status": "ok",
+                "dryRun": False,
+            },
+            "sessionId": "sess_1",
+        }
+    )
+
+    assert parsed is not None
+    assert parsed.type == "control_request"
+    assert parsed.request.subtype == "list_runtime_agent_action_runs"
+    assert parsed.request.orchestrator_session_id == "sess_1"
+    assert parsed.request.status == "ok"
+    assert parsed.request.dry_run is False
+
+    parsed_tasks = parse_control_message(
+        {
+            "type": "control_request",
+            "requestId": "req_list_tasks",
+            "request": {
+                "subtype": "list_runtime_agent_tasks",
+                "runtimeAgentId": "runtime-agent-1",
+                "agentActionRunId": "aar_123",
+            },
+            "sessionId": "sess_1",
+        }
+    )
+
+    assert parsed_tasks is not None
+    assert parsed_tasks.type == "control_request"
+    assert parsed_tasks.request.subtype == "list_runtime_agent_tasks"
+    assert parsed_tasks.request.runtime_agent_id == "runtime-agent-1"
+    assert parsed_tasks.request.agent_action_run_id == "aar_123"
+
+
 def test_build_structured_event_envelope_uses_sequence_when_no_explicit_id() -> None:
     event = {
         "event": "project_created",
