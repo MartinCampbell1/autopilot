@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import time
 from enum import StrEnum
 from pathlib import Path
@@ -34,6 +35,13 @@ from autopilot.core.session_tasks import VERIFICATION_NUDGE_FEEDBACK, verificati
 from autopilot.core.stuck_detector import StuckDetector
 
 console = Console()
+
+
+def _diff_signature(diff: str) -> str:
+    stripped = str(diff).strip()
+    if not stripped:
+        return ""
+    return hashlib.sha1(stripped.encode("utf-8")).hexdigest()
 
 
 class StoryOutcome(StrEnum):
@@ -253,6 +261,7 @@ class Orchestrator:
             critic_feedback=critic_result.feedback,
             elapsed_sec=round(time.time() - started_at, 2),
             git_diff_empty=diff_empty,
+            diff_signature=_diff_signature(diff),
             gate_results=gate_results,
             worker_usage=worker_usage,
             critic_usage=critic_result.usage,

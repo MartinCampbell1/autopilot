@@ -10,6 +10,7 @@ from autopilot.core.models import IterationRecord
 class StuckReason(StrEnum):
     NOT_STUCK = "not_stuck"
     SAME_FEEDBACK = "same_feedback"
+    NO_PROGRESS = "no_progress"
     EMPTY_DIFF = "empty_diff"
     SAME_GATE_FAIL = "same_gate_fail"
     TIMEOUT = "timeout"
@@ -21,10 +22,12 @@ class StuckDetector:
     def __init__(
         self,
         max_same_feedback: int = 3,
+        max_no_progress_rejections: int = 3,
         max_empty_diffs: int = 3,
         max_same_gate_fail: int = 3,
     ):
         self.max_same_feedback = max_same_feedback
+        self.max_no_progress_rejections = max_no_progress_rejections
         self.max_empty_diffs = max_empty_diffs
         self.max_same_gate_fail = max_same_gate_fail
         self.iterations: list[IterationRecord] = []
@@ -42,6 +45,10 @@ class StuckDetector:
 
         if self._check_same_feedback():
             self.stuck_reason = StuckReason.SAME_FEEDBACK
+            return True
+
+        if self._check_repeated_critic_rejection_without_progress():
+            self.stuck_reason = StuckReason.NO_PROGRESS
             return True
 
         if self._check_empty_diffs():
@@ -71,6 +78,24 @@ class StuckDetector:
 
         feedbacks = [record.critic_feedback.strip().lower() for record in critic_rejections]
         return len(set(feedbacks)) == 1
+
+    def _check_repeated_critic_rejection_without_progress(self) -> bool:
+        """Detect repeated critic rejections that keep producing the same net diff."""
+
+        recent = self.iterations[-self.max_no_progress_rejections :]
+        if len(recent) < self.max_no_progress_rejections:
+            return False
+
+        critic_rejections = [
+            record
+            for record in recent
+            if record.gates_passed and record.critic_approved is False and record.diff_signature.strip()
+        ]
+        if len(critic_rejections) < self.max_no_progress_rejections:
+            return False
+
+        signatures = [record.diff_signature.strip() for record in critic_rejections]
+        return len(set(signatures)) == 1
 
     def _check_empty_diffs(self) -> bool:
         """Detect no changes N times in a row."""
@@ -105,6 +130,9 @@ class StuckDetector:
 
         reason_messages = {
             StuckReason.SAME_FEEDBACK: f"Critic gave same feedback {self.max_same_feedback} times",
+            StuckReason.NO_PROGRESS: (
+                f"Critic rejected the same net code movement {self.max_no_progress_rejections} times"
+            ),
             StuckReason.EMPTY_DIFF: f"No code changes for {self.max_empty_diffs} iterations",
             StuckReason.SAME_GATE_FAIL: f"Same failure for {self.max_same_gate_fail} iterations",
             StuckReason.TIMEOUT: "Agent timed out",

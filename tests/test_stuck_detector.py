@@ -43,6 +43,26 @@ class TestStuckDetector:
             )
         assert detector.is_stuck() is False
 
+    def test_stuck_repeated_critic_rejection_without_net_code_movement(self) -> None:
+        detector = StuckDetector(max_no_progress_rejections=3)
+        for feedback in ["issue A", "issue B", "issue C"]:
+            detector.record_iteration(
+                IterationRecord(
+                    story_id=1,
+                    iteration=1,
+                    profile_used="acc1",
+                    provider="codex",
+                    gates_passed=True,
+                    critic_approved=False,
+                    critic_feedback=feedback,
+                    diff_signature="same-diff-signature",
+                )
+            )
+
+        assert detector.is_stuck() is True
+        assert detector.stuck_reason == StuckReason.NO_PROGRESS
+        assert detector.summary() == "Critic rejected the same net code movement 3 times"
+
     def test_stuck_empty_diffs(self) -> None:
         detector = StuckDetector(max_empty_diffs=3)
         for _ in range(3):
