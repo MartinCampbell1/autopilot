@@ -1,0 +1,48 @@
+name: Bug report
+description: Report a regression, broken workflow, or incorrect behavior.
+title: "[Bug]: "
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What is broken?
+      placeholder: Autopilot loses the approval state after refreshing the dashboard.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      placeholder: The approval should remain visible in the same run context after refresh.
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      placeholder: The approval disappears and the operator cannot continue the flow.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction steps
+      placeholder: |
+        1. Create a preview-gated run
+        2. Approve it
+        3. Refresh the dashboard
+        4. Observe the missing approval state
+    validations:
+      required: true
+  - type: textarea
+    id: verification
+    attributes:
+      label: Verification context
+      description: Include any failing verification command, logs, or screenshots.
+      placeholder: pytest/ruff/dashboard build output, CLI logs, screenshots, or trace snippets
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      placeholder: macOS 15, Python 3.12, Node 22, local_command provider
