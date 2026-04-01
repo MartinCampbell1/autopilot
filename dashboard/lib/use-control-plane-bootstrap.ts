@@ -301,9 +301,8 @@ export function useControlPlaneBootstrap({
     let cancelled = false;
     setAgentLoading(true);
     loadAgentDetail(selectedAgentId)
-      .then((detail) => {
+      .then(() => {
         if (cancelled) return;
-        setSelectedAgent(detail);
       })
       .catch((error) => {
         if (cancelled) return;

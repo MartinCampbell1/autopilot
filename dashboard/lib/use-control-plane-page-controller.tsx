@@ -189,6 +189,9 @@ export function useControlPlanePageController(
   } = useControlPlaneViewState(initialSelection);
 
   const { loadOverview, loadSessionDetail, loadAgentDetail } = useControlPlaneDataLoader({
+    projects,
+    sessions,
+    selectedSession,
     selectedSessionId,
     selectedAgentId,
     setHealth,
@@ -228,7 +231,6 @@ export function useControlPlanePageController(
     setSelectedRunId,
     setSelectedRunResultIndex,
     setSelectedPassId,
-    setSelectedAgent,
     setEntitySearch,
     setPendingLineageAutoAdvance,
     setPendingAgentPriorityAutoAdvance,
