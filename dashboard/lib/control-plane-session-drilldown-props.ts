@@ -352,6 +352,12 @@ export function buildSessionDrilldownSectionProps({
           runtimeAgentId: task.runtime_agent_ids[0] || task.runtime_agent_id,
         });
       },
+      onRefreshAsyncTask: (task) => {
+        void refreshAsyncTask(task);
+      },
+      onWaitForAsyncTaskSettlement: (task) => {
+        void waitForAsyncTaskSettlement(task);
+      },
       onApproveApproval: (approval) => {
         void approveApproval(approval);
       },
