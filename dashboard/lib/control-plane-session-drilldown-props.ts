@@ -61,7 +61,7 @@ type BuildSessionDrilldownSectionPropsArgs = {
   eventFamily: (eventName: string) => string;
   sessionEventKey: (event: Record<string, unknown>, fallback?: string) => string;
   sessionContextRowDomId: (
-    kind: "approval" | "issue" | "event" | "tool_permission_runtime",
+    kind: "approval" | "issue" | "event" | "tool_permission_runtime" | "async_task",
     key: string
   ) => string;
   syncLinkedSelection: (payload: {
@@ -70,6 +70,7 @@ type BuildSessionDrilldownSectionPropsArgs = {
     approvalId?: string;
     issueId?: string;
     toolPermissionRuntimeId?: string;
+    asyncTaskId?: string;
     runtimeAgentId?: string;
   }) => void;
   selectedPass: SessionDrilldownSectionProps["selectedControlPassCardProps"]["selectedPass"];
@@ -77,6 +78,7 @@ type BuildSessionDrilldownSectionPropsArgs = {
   selectedSessionApprovalId: string;
   selectedSessionIssueId: string;
   selectedSessionToolPermissionRuntimeId: string;
+  selectedSessionAsyncTaskId: string;
   revealSelectedSessionContextRow: () => void;
   revealSelectedSessionContextInAgentTimeline: () => void;
   selectedSessionContext: SessionDrilldownSectionProps["selectedSessionContextCardProps"]["selectedSessionContext"];
@@ -159,6 +161,7 @@ export function buildSessionDrilldownSectionProps({
   selectedSessionApprovalId,
   selectedSessionIssueId,
   selectedSessionToolPermissionRuntimeId,
+  selectedSessionAsyncTaskId,
   revealSelectedSessionContextRow,
   revealSelectedSessionContextInAgentTimeline,
   selectedSessionContext,
@@ -293,6 +296,7 @@ export function buildSessionDrilldownSectionProps({
       visibleSessionIssues,
       selectedSessionIssueId,
       selectedSessionToolPermissionRuntimeId,
+      selectedSessionAsyncTaskId,
       busyActionKey,
       formatTimestamp,
       sessionContextRowDomId,
@@ -322,6 +326,15 @@ export function buildSessionDrilldownSectionProps({
         syncLinkedSelection({
           toolPermissionRuntimeId: runtime.id,
           runtimeAgentId: runtime.runtime_agent_ids[0],
+        });
+      },
+      onInspectAsyncTask: (task) => {
+        syncLinkedSelection({
+          asyncTaskId: task.id,
+          runId: task.agent_action_run_id,
+          approvalId: task.approval_id,
+          issueId: task.issue_id,
+          runtimeAgentId: task.runtime_agent_ids[0] || task.runtime_agent_id,
         });
       },
       onApproveApproval: (approval) => {

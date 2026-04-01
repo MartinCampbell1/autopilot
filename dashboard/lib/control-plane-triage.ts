@@ -87,6 +87,7 @@ export function isAttentionLineageEntry(entry: SessionLineageEntry): boolean {
   const status = entry.status.toLowerCase();
   const eventStatus = toStringValue(asRecord(entry.event)?.status).toLowerCase();
   return (
+    (Boolean(entry.asyncTaskId) && ["queued", "running"].includes(status)) ||
     (Boolean(entry.toolPermissionRuntimeId) && status === "pending") ||
     Boolean(entry.issueId) ||
     ["error", "partial", "pending_approval", "failed", "rejected", "blocked", "not_executable"].includes(
@@ -116,6 +117,9 @@ export function sessionLineageTraits(entry: SessionLineageEntry | null): Session
       : null,
     entry.toolPermissionRuntimeId
       ? { key: "tool-permission", label: "Tool gate", className: "border-[#f4e0c4] bg-[#fff6e8] text-[#9a6700]" }
+      : null,
+    entry.asyncTaskId
+      ? { key: "async-task", label: "Async follow-through", className: "border-[#d3e5ef] bg-[#eef7fb] text-[#2a6690]" }
       : null,
     entry.approvalId || entry.issueId
       ? { key: "decision", label: "Decision-linked", className: "border-[#d3e5ef] bg-[#eef7fb] text-[#2a6690]" }
@@ -260,6 +264,9 @@ export function buildQueueAdvanceFocusSummary(args: {
 export function sessionLineagePriority(entry: SessionLineageEntry): TriagePriority {
   const status = entry.status.toLowerCase();
   const eventStatus = toStringValue(asRecord(entry.event)?.status).toLowerCase();
+  if (entry.asyncTaskId && ["queued", "running"].includes(status)) {
+    return "high";
+  }
   if (
     entry.issueId ||
     ["error", "failed", "blocked", "rejected", "not_executable"].includes(status) ||
@@ -307,6 +314,20 @@ export function describeSessionQueueAdvanceReason(entry: SessionLineageEntry): Q
   const priority = sessionLineagePriority(entry);
   const status = entry.status.toLowerCase();
   const eventStatus = toStringValue(asRecord(entry.event)?.status).toLowerCase();
+  if (entry.asyncTaskId && ["queued", "running"].includes(status)) {
+    return {
+      priority,
+      reason: "Async follow-through stays queued because background work is still running and needs inspection.",
+      signals: [
+        queueAdvanceSignal(
+          "async-task",
+          "Async follow-through",
+          "border-[#d3e5ef] bg-[#eef7fb] text-[#2a6690]",
+          "attention"
+        ),
+      ],
+    };
+  }
   if (entry.toolPermissionRuntimeId && status === "pending") {
     const pendingStage = entry.toolPermissionPendingStage
       ? entry.toolPermissionPendingStage.replaceAll("_", " ")

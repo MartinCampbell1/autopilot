@@ -128,6 +128,13 @@ function formatToolPermissionStage(value?: string | null): string {
 }
 
 function lineageEntrySummary(entry: SessionLineageEntry): string {
+  if (entry.asyncTaskId) {
+    const command = entry.asyncTaskCommand || "task";
+    if (entry.runId) {
+      return `${entry.asyncTaskStatus || entry.status} · ${command} · run ${entry.runId}`;
+    }
+    return `${entry.asyncTaskStatus || entry.status} · ${command}`;
+  }
   if (entry.toolPermissionRuntimeId) {
     const stage = formatToolPermissionStage(entry.toolPermissionPendingStage);
     const toolUseId = entry.toolPermissionToolUseId || entry.toolPermissionRuntimeId;
@@ -146,6 +153,15 @@ function relationshipStripItemsForEntry(
   onInspectSessionLineageEntry: (entry: SessionLineageEntry) => void
 ): RelationshipStripItem[] {
   return [
+    entry.asyncTaskId
+      ? {
+          key: `lineage-async-task-${entry.asyncTaskId}`,
+          label: `async task ${entry.asyncTaskId}`,
+          tone: "event" as const,
+          active: selected,
+          onClick: () => onInspectSessionLineageEntry(entry),
+        }
+      : null,
     entry.toolPermissionRuntimeId
       ? {
           key: `lineage-tool-permission-${entry.toolPermissionRuntimeId}`,
@@ -170,7 +186,7 @@ function relationshipStripItemsForEntry(
           key: `lineage-outcome-${entry.key}`,
           label: `outcome ${entry.resultIndex + 1}`,
           tone: "outcome" as const,
-          active: selected && !entry.toolPermissionRuntimeId,
+          active: selected && !entry.toolPermissionRuntimeId && !entry.asyncTaskId,
           onClick: () => onInspectSessionLineageEntry(entry),
         }
       : null,
@@ -274,6 +290,7 @@ export function SessionLineageSection({
   const toolPermissionRuntimeCount = sessionLineageEntries.filter(
     (entry) => entry.toolPermissionRuntimeId
   ).length;
+  const asyncTaskCount = sessionLineageEntries.filter((entry) => entry.asyncTaskId).length;
   const queueConfigs = [
     {
       key: "attention" as const,
@@ -327,6 +344,7 @@ export function SessionLineageSection({
                 value={String(runOutcomeCount)}
                 detail={`${linkedRunCount} run${linkedRunCount === 1 ? "" : "s"} linked${
                   toolPermissionRuntimeCount ? ` · ${toolPermissionRuntimeCount} tool gate${toolPermissionRuntimeCount === 1 ? "" : "s"}` : ""
+                }${asyncTaskCount ? ` · ${asyncTaskCount} async task${asyncTaskCount === 1 ? "" : "s"}` : ""
                 }`}
               />
               <SessionMetric
@@ -501,6 +519,14 @@ export function SessionLineageSection({
                           tool permission {selectedSessionLineageEntry.toolPermissionRuntimeId}
                         </Badge>
                       ) : null}
+                      {selectedSessionLineageEntry.asyncTaskId ? (
+                        <Badge
+                          variant="outline"
+                          className="rounded-full border-[#d3e5ef] bg-[#eef7fb] px-2.5 py-1 text-[11px] font-medium text-[#2a6690]"
+                        >
+                          async task {selectedSessionLineageEntry.asyncTaskId}
+                        </Badge>
+                      ) : null}
                       {selectedSessionLineageEntry.runId ? (
                         <Badge
                           variant="outline"
@@ -514,7 +540,9 @@ export function SessionLineageSection({
                           variant="outline"
                           className="rounded-full border-[#e5e5e3] bg-[#fafaf9] px-2.5 py-1 text-[11px] font-medium text-[#37352f]"
                         >
-                          outcome {selectedSessionLineageEntry.resultIndex + 1}
+                          {selectedSessionLineageEntry.asyncTaskId
+                            ? "linked outcome"
+                            : `outcome ${selectedSessionLineageEntry.resultIndex + 1}`}
                         </Badge>
                       ) : null}
                       {selectedSessionLineageTraits.map((trait) => (

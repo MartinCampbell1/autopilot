@@ -16,6 +16,9 @@ function triageLabelForSessionLineageEntry(
   entry: SessionLineageEntry,
   fallback: string
 ): string {
+  if (entry.asyncTaskId) {
+    return "Session Async Follow-Through";
+  }
   if (entry.toolPermissionRuntimeId) {
     return "Session Tool Gate";
   }
@@ -26,6 +29,9 @@ function triageQueueDetailForSessionLineageEntry(
   entry: SessionLineageEntry,
   queuedCount: number
 ): string {
+  if (entry.asyncTaskId) {
+    return `${queuedCount} queued · ${entry.asyncTaskStatus || entry.status}`;
+  }
   if (entry.toolPermissionRuntimeId) {
     return `${queuedCount} queued · ${formatToolPermissionStage(entry.toolPermissionPendingStage)}`;
   }
@@ -33,6 +39,9 @@ function triageQueueDetailForSessionLineageEntry(
 }
 
 function triageSubtitleForSessionLineageEntry(entry: SessionLineageEntry): string {
+  if (entry.asyncTaskId) {
+    return `${entry.asyncTaskStatus || entry.status} · ${entry.asyncTaskCommand || "task"}`;
+  }
   if (entry.toolPermissionRuntimeId) {
     const toolUseId = entry.toolPermissionToolUseId || entry.toolPermissionRuntimeId;
     return `${formatToolPermissionStage(entry.toolPermissionPendingStage)} · use ${toolUseId}`;

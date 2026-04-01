@@ -76,10 +76,11 @@ type LinkedDecisionsCardProps = {
   visibleSessionIssues: ExecutionIssueRecord[];
   selectedSessionIssueId: string;
   selectedSessionToolPermissionRuntimeId: string;
+  selectedSessionAsyncTaskId: string;
   busyActionKey: string;
   formatTimestamp: (value?: string | null) => string;
   sessionContextRowDomId: (
-    kind: "approval" | "issue" | "event" | "tool_permission_runtime",
+    kind: "approval" | "issue" | "event" | "tool_permission_runtime" | "async_task",
     key: string
   ) => string;
   onSearchEntity: (value: string) => void;
@@ -88,6 +89,7 @@ type LinkedDecisionsCardProps = {
   onInspectApproval: (approval: ExecutionApprovalRecord) => void;
   onInspectIssue: (issue: ExecutionIssueRecord) => void;
   onInspectToolPermissionRuntime: (runtime: ToolPermissionRuntimeRecord) => void;
+  onInspectAsyncTask: (task: ExecutionRuntimeAgentTaskRecord) => void;
   onApproveApproval: (approval: ExecutionApprovalRecord) => void;
   onRejectApproval: (approval: ExecutionApprovalRecord) => void;
   onApplyApproval: (approval: ExecutionApprovalRecord) => void;
@@ -108,6 +110,7 @@ export function LinkedDecisionsCard({
   visibleSessionIssues,
   selectedSessionIssueId,
   selectedSessionToolPermissionRuntimeId,
+  selectedSessionAsyncTaskId,
   busyActionKey,
   formatTimestamp,
   sessionContextRowDomId,
@@ -117,6 +120,7 @@ export function LinkedDecisionsCard({
   onInspectApproval,
   onInspectIssue,
   onInspectToolPermissionRuntime,
+  onInspectAsyncTask,
   onApproveApproval,
   onRejectApproval,
   onApplyApproval,
@@ -140,6 +144,7 @@ export function LinkedDecisionsCard({
     });
 
   const renderAsyncTaskRow = (task: ExecutionRuntimeAgentTaskRecord) => {
+    const selected = selectedSessionAsyncTaskId === task.id;
     const relatedRun = task.agent_action_run_id
       ? linkedRuns.find((run) => run.id === task.agent_action_run_id) || null
       : null;
@@ -152,7 +157,10 @@ export function LinkedDecisionsCard({
     return (
       <div
         key={`${selectedSession?.id || "session"}-async-task-${task.id}`}
-        className="rounded-xl border border-[#ecebe8] bg-white p-3"
+        id={sessionContextRowDomId("async_task", task.id)}
+        className={`rounded-xl border p-3 ${
+          selected ? "border-[#d3e5ef] bg-[#f7fbfd]" : "border-[#ecebe8] bg-white"
+        }`}
       >
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
@@ -170,6 +178,20 @@ export function LinkedDecisionsCard({
               >
                 {task.command || "task"}
               </Badge>
+              <Button
+                size="sm"
+                variant={selected ? "default" : "outline"}
+                className={`h-7 rounded-lg px-2 text-[11px] ${
+                  selected
+                    ? "bg-[#1a1a1a] text-white hover:bg-[#333]"
+                    : "border-[#e5e5e3] bg-white text-[#37352f] hover:bg-[#f7f7f5]"
+                }`}
+                onClick={() => {
+                  onInspectAsyncTask(task);
+                }}
+              >
+                {selected ? "Selected" : "Inspect"}
+              </Button>
               {relatedRun && (
                 <Button
                   size="sm"

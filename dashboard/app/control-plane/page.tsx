@@ -26,7 +26,8 @@ function parseSessionContextKind(
     value === "approval" ||
     value === "issue" ||
     value === "event" ||
-    value === "tool_permission_runtime"
+    value === "tool_permission_runtime" ||
+    value === "async_task"
   ) {
     return value;
   }
@@ -76,6 +77,9 @@ function ControlPlanePageInner({
         next.delete("tool_permission_runtime");
       }
 
+      if (selection.asyncTaskId) next.set("async_task", selection.asyncTaskId);
+      else next.delete("async_task");
+
       if (selection.eventKey) next.set("event", selection.eventKey);
       else next.delete("event");
 
@@ -98,6 +102,7 @@ function ControlPlanePageInner({
     selectedSessionApprovalId,
     selectedSessionIssueId,
     selectedSessionToolPermissionRuntimeId,
+    selectedSessionAsyncTaskId,
     selectedSessionEventKey,
     selectedSessionContextKind,
     headerSectionProps,
@@ -141,6 +146,9 @@ function ControlPlanePageInner({
       next.delete("tool_permission_runtime");
     }
 
+    if (selectedSessionAsyncTaskId) next.set("async_task", selectedSessionAsyncTaskId);
+    else next.delete("async_task");
+
     if (selectedSessionEventKey) next.set("event", selectedSessionEventKey);
     else next.delete("event");
 
@@ -160,6 +168,7 @@ function ControlPlanePageInner({
     selectedSessionEventKey,
     selectedSessionIssueId,
     selectedSessionToolPermissionRuntimeId,
+    selectedSessionAsyncTaskId,
     selectedSessionId,
   ]);
 
@@ -196,6 +205,7 @@ function ControlPlanePageContent() {
       approvalId: resolvedSearchParams.get("approval") ?? null,
       issueId: resolvedSearchParams.get("issue") ?? null,
       toolPermissionRuntimeId: resolvedSearchParams.get("tool_permission_runtime") ?? null,
+      asyncTaskId: resolvedSearchParams.get("async_task") ?? null,
       eventKey: resolvedSearchParams.get("event") ?? null,
     }),
     [resolvedSearchParams]
@@ -212,6 +222,7 @@ function ControlPlanePageContent() {
         initialSelection.approvalId || "",
         initialSelection.issueId || "",
         initialSelection.toolPermissionRuntimeId || "",
+        initialSelection.asyncTaskId || "",
         initialSelection.eventKey || "",
       ].join("|"),
     [initialSelection]

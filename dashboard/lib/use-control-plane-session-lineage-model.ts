@@ -54,6 +54,7 @@ type UseControlPlaneSessionLineageModelArgs = {
   selectedRunId: string;
   selectedRunResultIndex: number;
   selectedSessionToolPermissionRuntimeId: string;
+  selectedSessionAsyncTaskId: string;
   sessionLineageFilter: string;
   dismissedLineageQueueKeys: Record<LineageQueueKind, string[]>;
   snoozedLineageQueueUntil: Record<LineageQueueKind, Record<string, number>>;
@@ -101,6 +102,7 @@ export function useControlPlaneSessionLineageModel({
   selectedRunId,
   selectedRunResultIndex,
   selectedSessionToolPermissionRuntimeId,
+  selectedSessionAsyncTaskId,
   sessionLineageFilter,
   dismissedLineageQueueKeys,
   snoozedLineageQueueUntil,
@@ -162,6 +164,9 @@ export function useControlPlaneSessionLineageModel({
           toolPermissionRuntimeId: "",
           toolPermissionPendingStage: "",
           toolPermissionToolUseId: "",
+          asyncTaskId: "",
+          asyncTaskStatus: "",
+          asyncTaskCommand: "",
         });
       });
     });
@@ -216,6 +221,68 @@ export function useControlPlaneSessionLineageModel({
         toolPermissionRuntimeId: runtime.id,
         toolPermissionPendingStage: toStringValue(runtime.pending_stage),
         toolPermissionToolUseId: toolUseId,
+        asyncTaskId: "",
+        asyncTaskStatus: "",
+        asyncTaskCommand: "",
+      });
+    });
+    (selectedSession?.async_tasks || []).forEach((task) => {
+      const runtimeAgentId = task.runtime_agent_ids[0] || task.runtime_agent_id || "";
+      const relatedRunLink = resolveRunLinkFromContext(linkedRuns, {
+        runId: task.agent_action_run_id,
+        approvalId: task.approval_id,
+        issueId: task.issue_id,
+        runtimeAgentId,
+      });
+      const relatedResult = relatedRunLink
+        ? asRecord(relatedRunLink.run.results[relatedRunLink.resultIndex])
+        : null;
+      const relatedEventMatch = resolveSessionEventFromContext(selectedSession?.events || [], {
+        runId: relatedRunLink?.run.id || task.agent_action_run_id || "",
+        resultIndex: relatedRunLink?.resultIndex ?? 0,
+        approvalId: task.approval_id,
+        issueId: task.issue_id,
+        runtimeAgentId,
+      });
+      const projectId = relatedResult ? outcomeProjectId(relatedResult) : task.project_id;
+      const projectName = relatedResult ? outcomeProjectName(relatedResult) : "";
+      const storyId = relatedResult ? outcomeStoryId(relatedResult) : null;
+      const storyTitle = relatedResult ? outcomeStoryTitle(relatedResult) : "";
+      const timestamp =
+        toStringValue(relatedEventMatch?.event?.timestamp) ||
+        task.updated_at ||
+        task.started_at ||
+        task.created_at;
+      entries.push({
+        kind: "async_task",
+        key: `async-task:${task.id}`,
+        runId: relatedRunLink?.run.id || task.agent_action_run_id || "",
+        resultIndex: relatedRunLink?.resultIndex ?? 0,
+        timestamp,
+        status: toStringValue(task.status, "running"),
+        title: task.title || `${toStringValue(task.command, "background")} follow-through`,
+        subtitle: `${toStringValue(task.status, "running")} · ${toStringValue(task.command, "task")}`,
+        message:
+          task.result_summary ||
+          task.reason ||
+          task.placeholder_result ||
+          "Background follow-through is still active.",
+        approvalId: task.approval_id || "",
+        issueId: task.issue_id || "",
+        eventKey: relatedEventMatch?.key || "",
+        eventName: toStringValue(relatedEventMatch?.event?.event),
+        runtimeAgentId,
+        projectId,
+        projectName,
+        storyId,
+        storyTitle,
+        event: relatedEventMatch?.event || null,
+        toolPermissionRuntimeId: "",
+        toolPermissionPendingStage: "",
+        toolPermissionToolUseId: "",
+        asyncTaskId: task.id,
+        asyncTaskStatus: toStringValue(task.status),
+        asyncTaskCommand: toStringValue(task.command),
       });
     });
     return entries.sort(
@@ -232,6 +299,7 @@ export function useControlPlaneSessionLineageModel({
     selectedRunId,
     selectedRunResultIndex,
     selectedSessionToolPermissionRuntimeId,
+    selectedSessionAsyncTaskId,
     sessionLineageEntries,
     sessionLineageFilter,
     selectedSessionLineageEntryRef,

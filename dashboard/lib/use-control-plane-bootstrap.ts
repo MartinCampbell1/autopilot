@@ -39,6 +39,7 @@ type UseControlPlaneBootstrapArgs = {
   setSelectedSessionApprovalId: Dispatch<SetStateAction<string>>;
   setSelectedSessionIssueId: Dispatch<SetStateAction<string>>;
   setSelectedSessionToolPermissionRuntimeId: Dispatch<SetStateAction<string>>;
+  setSelectedSessionAsyncTaskId: Dispatch<SetStateAction<string>>;
   setSelectedSessionEventKey: Dispatch<SetStateAction<string>>;
   setSelectedSessionContextKind: Dispatch<SetStateAction<SessionContextKind>>;
   setEntitySearch: Dispatch<SetStateAction<string>>;
@@ -85,6 +86,7 @@ export function useControlPlaneBootstrap({
   setSelectedSessionApprovalId,
   setSelectedSessionIssueId,
   setSelectedSessionToolPermissionRuntimeId,
+  setSelectedSessionAsyncTaskId,
   setSelectedSessionEventKey,
   setSelectedSessionContextKind,
   setEntitySearch,
@@ -145,6 +147,7 @@ export function useControlPlaneBootstrap({
       setSelectedSessionApprovalId("");
       setSelectedSessionIssueId("");
       setSelectedSessionToolPermissionRuntimeId("");
+      setSelectedSessionAsyncTaskId("");
       setSelectedSessionEventKey("");
       setSelectedSessionContextKind("");
       setEntitySearch("");
@@ -187,6 +190,7 @@ export function useControlPlaneBootstrap({
     setSelectedSessionEventKey,
     setSelectedSessionIssueId,
     setSelectedSessionToolPermissionRuntimeId,
+    setSelectedSessionAsyncTaskId,
     setSessionLoading,
   ]);
 
@@ -195,6 +199,7 @@ export function useControlPlaneBootstrap({
     setSelectedSessionApprovalId("");
     setSelectedSessionIssueId("");
     setSelectedSessionToolPermissionRuntimeId("");
+    setSelectedSessionAsyncTaskId("");
     setSelectedSessionEventKey("");
     setSelectedSessionContextKind("");
     setSessionQueueAdvanceFeedback(null);
@@ -211,6 +216,7 @@ export function useControlPlaneBootstrap({
     setSelectedSessionEventKey,
     setSelectedSessionIssueId,
     setSelectedSessionToolPermissionRuntimeId,
+    setSelectedSessionAsyncTaskId,
     setSessionQueueAdvanceFeedback,
     setSessionQueueFocusDelta,
   ]);

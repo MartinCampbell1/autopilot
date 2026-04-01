@@ -46,6 +46,7 @@ export type ControlPlaneViewSelection = {
   approvalId?: string | null;
   issueId?: string | null;
   toolPermissionRuntimeId?: string | null;
+  asyncTaskId?: string | null;
   eventKey?: string | null;
 };
 
@@ -62,7 +63,8 @@ function normalizeSessionContextKind(value?: string | null): SessionContextKind 
     value === "approval" ||
     value === "issue" ||
     value === "event" ||
-    value === "tool_permission_runtime"
+    value === "tool_permission_runtime" ||
+    value === "async_task"
   ) {
     return value;
   }
@@ -83,6 +85,7 @@ export function useControlPlaneViewState(initialSelection?: ControlPlaneViewSele
   const initialToolPermissionRuntimeId = normalizeSelectionValue(
     initialSelection?.toolPermissionRuntimeId
   );
+  const initialAsyncTaskId = normalizeSelectionValue(initialSelection?.asyncTaskId);
   const initialEventKey = normalizeSelectionValue(initialSelection?.eventKey);
   const [health, setHealth] = useState<AccountHealth | null>(null);
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
@@ -130,6 +133,8 @@ export function useControlPlaneViewState(initialSelection?: ControlPlaneViewSele
   const [selectedSessionIssueId, setSelectedSessionIssueId] = useState(initialIssueId);
   const [selectedSessionToolPermissionRuntimeId, setSelectedSessionToolPermissionRuntimeId] =
     useState(initialToolPermissionRuntimeId);
+  const [selectedSessionAsyncTaskId, setSelectedSessionAsyncTaskId] =
+    useState(initialAsyncTaskId);
   const [selectedSessionEventKey, setSelectedSessionEventKey] = useState(initialEventKey);
   const [selectedSessionContextKind, setSelectedSessionContextKind] =
     useState<SessionContextKind>(initialSessionContextKind);
@@ -242,6 +247,8 @@ export function useControlPlaneViewState(initialSelection?: ControlPlaneViewSele
     setSelectedSessionIssueId,
     selectedSessionToolPermissionRuntimeId,
     setSelectedSessionToolPermissionRuntimeId,
+    selectedSessionAsyncTaskId,
+    setSelectedSessionAsyncTaskId,
     selectedSessionEventKey,
     setSelectedSessionEventKey,
     selectedSessionContextKind,

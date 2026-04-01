@@ -4,7 +4,13 @@ import type {
   ExecutionIssueRecord,
 } from "@/lib/types";
 
-export type SessionContextKind = "" | "approval" | "issue" | "event" | "tool_permission_runtime";
+export type SessionContextKind =
+  | ""
+  | "approval"
+  | "issue"
+  | "event"
+  | "tool_permission_runtime"
+  | "async_task";
 export type LineageQueueKind = "attention" | "decisions";
 export type TriagePriority = "critical" | "high" | "normal";
 export type AgentPriorityQueueKind = "critical" | "high";
@@ -46,12 +52,13 @@ export type LinkedSelectionContext = {
   approvalId?: string;
   issueId?: string;
   toolPermissionRuntimeId?: string;
+  asyncTaskId?: string;
   runtimeAgentId?: string;
   event?: Record<string, unknown> | null;
 };
 
 export type SessionLineageEntry = {
-  kind: "run_result" | "tool_permission_runtime";
+  kind: "run_result" | "tool_permission_runtime" | "async_task";
   key: string;
   runId: string;
   resultIndex: number;
@@ -73,6 +80,9 @@ export type SessionLineageEntry = {
   toolPermissionRuntimeId: string;
   toolPermissionPendingStage: string;
   toolPermissionToolUseId: string;
+  asyncTaskId: string;
+  asyncTaskStatus: string;
+  asyncTaskCommand: string;
 };
 
 export type SessionLineageTrait = {
