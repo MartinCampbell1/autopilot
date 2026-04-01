@@ -208,6 +208,10 @@ class AutopilotConfig:
         return self.control_plane_state_dir / "permission-audit"
 
     @property
+    def permission_sync_dir(self) -> Path:
+        return self.control_plane_state_dir / "permission-sync"
+
+    @property
     def tool_results_dir(self) -> Path:
         return self.control_plane_state_dir / "tool-results"
 

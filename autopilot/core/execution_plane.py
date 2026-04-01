@@ -45,7 +45,13 @@ from autopilot.core.project_store import (
     update_project_budget_policy,
     update_project_entry,
 )
-from autopilot.core.approvals import create_approval, get_approval, list_approvals, mark_approval_applied
+from autopilot.core.approvals import (
+    create_approval,
+    get_approval,
+    list_approvals,
+    mark_approval_applied,
+    save_approval,
+)
 from autopilot.core.agent_action_runs import (
     AgentActionBatchRunRecord,
     create_agent_action_batch_run,
@@ -54,7 +60,15 @@ from autopilot.core.agent_action_runs import (
     list_agent_action_batch_runs,
     save_agent_action_batch_run,
 )
-from autopilot.core.control_plane_issues import create_issue, link_issue_approval, list_issues, resolve_issue
+from autopilot.core.control_plane_issues import (
+    create_issue,
+    get_issue,
+    link_issue_approval,
+    list_issues,
+    resolve_issue,
+    save_issue,
+)
+from autopilot.core.permission_sync import resolve_permission_sync
 from autopilot.core.tool_contracts import ToolResult, ToolUseContext, build_tool
 from autopilot.core.tool_permissions import (
     PermissionContextOverlay,
@@ -495,36 +509,62 @@ def create_execution_command_issue(
         description_lines.append(f"Requested by: {requested_by.strip()}")
 
     root_cause = policy_reasons[0] if policy_reasons else (reason.strip() or f"Approval requested for `{command}`.")
-
-    issue = create_issue(
+    dedupe_key = f"{project_id}:{command}:approval"
+    sync_record = resolve_permission_sync(
         config,
-        project=project,
-        title=f"Approval required for `{command}`",
-        description="\n".join(description_lines).strip(),
-        root_cause=root_cause,
-        category="policy_approval" if is_policy_issue else "approval_request",
-        severity="high" if is_policy_issue else "medium",
-        related_command=command,
-        runtime_agent_id=runtime_agent_ids[0] if len(runtime_agent_ids) == 1 else "",
-        runtime_agent_ids=runtime_agent_ids,
-        dedupe_key=f"{project_id}:{command}:approval",
-        context={
-            "project": {
-                "status": state.get("status"),
-                "paused": state.get("paused"),
-                "current_story_id": state.get("current_story_id"),
-                "current_iteration": state.get("current_iteration"),
-            },
-            "command": {
-                "name": command,
-                "requested_by": requested_by,
-                "reason": reason,
-                "policy_reasons": list(policy_reasons),
-                "runtime_agent_ids": runtime_agent_ids,
-            },
+        sync_key=f"execution-command-issue:{dedupe_key}",
+        metadata={"project_id": project_id, "command": command, "kind": "issue"},
+        resolver=lambda: {
+            "issue": create_issue(
+                config,
+                project=project,
+                title=f"Approval required for `{command}`",
+                description="\n".join(description_lines).strip(),
+                root_cause=root_cause,
+                category="policy_approval" if is_policy_issue else "approval_request",
+                severity="high" if is_policy_issue else "medium",
+                related_command=command,
+                runtime_agent_id=runtime_agent_ids[0] if len(runtime_agent_ids) == 1 else "",
+                runtime_agent_ids=runtime_agent_ids,
+                dedupe_key=dedupe_key,
+                context={
+                    "project": {
+                        "status": state.get("status"),
+                        "paused": state.get("paused"),
+                        "current_story_id": state.get("current_story_id"),
+                        "current_iteration": state.get("current_iteration"),
+                    },
+                    "command": {
+                        "name": command,
+                        "requested_by": requested_by,
+                        "reason": reason,
+                        "policy_reasons": list(policy_reasons),
+                        "runtime_agent_ids": runtime_agent_ids,
+                    },
+                },
+            ).model_dump()
         },
     )
-    return issue.model_dump()
+    issue_payload = dict(sync_record.payload.get("issue") or {})
+    issue_id = str(issue_payload.get("id") or "").strip()
+    if issue_id:
+        issue_record = get_issue(config, issue_id)
+        if issue_record is not None:
+            changed = False
+            merged_runtime_agent_ids = sorted({*issue_record.runtime_agent_ids, *runtime_agent_ids})
+            if merged_runtime_agent_ids != issue_record.runtime_agent_ids:
+                issue_record.runtime_agent_ids = merged_runtime_agent_ids
+                issue_record.runtime_agent_id = merged_runtime_agent_ids[0] if len(merged_runtime_agent_ids) == 1 else ""
+                changed = True
+            command_context = dict(issue_record.context.get("command") or {})
+            if merged_runtime_agent_ids and command_context.get("runtime_agent_ids") != merged_runtime_agent_ids:
+                command_context["runtime_agent_ids"] = merged_runtime_agent_ids
+                issue_record.context["command"] = command_context
+                changed = True
+            if changed:
+                issue_record = save_issue(config, issue_record)
+                issue_payload = issue_record.model_dump()
+    return issue_payload
 
 
 def _build_progress_snapshot(stories: list[dict[str, Any]]) -> ExecutionPlaneProgress:
@@ -3896,31 +3936,83 @@ def create_execution_command_approval(
     if project is None:
         raise KeyError(project_id)
     runtime_agent_ids = list(runtime_agent_ids or _affected_runtime_agent_ids(config, project))
-    if issue_id:
-        existing = list_approvals(
-            config,
-            project_id=project_id,
-            action=command,
-            status="pending",
-            issue_id=issue_id,
-        )
-        if existing:
-            return existing[-1].model_dump()
-
-    approval = create_approval(
-        config,
-        project=project,
-        action=command,
-        payload=payload,
-        requested_by=requested_by,
-        reason=reason,
-        issue_id=issue_id,
-        runtime_agent_ids=runtime_agent_ids,
-        policy_reasons=policy_reasons,
+    normalized_issue_id = str(issue_id or "").strip()
+    payload_hash = hashlib.sha256(
+        json.dumps(payload or {}, sort_keys=True, ensure_ascii=False, default=str).encode("utf-8")
+    ).hexdigest()[:12]
+    sync_key = (
+        f"execution-command-approval:{normalized_issue_id}"
+        if normalized_issue_id
+        else f"execution-command-approval:{project_id}:{command}:{payload_hash}"
     )
-    if issue_id:
-        link_issue_approval(config, issue_id=issue_id, approval_id=approval.id)
-    return approval.model_dump()
+
+    def _resolve_approval_payload() -> dict[str, Any]:
+        existing_pending = (
+            list_approvals(
+                config,
+                project_id=project_id,
+                action=command,
+                status="pending",
+                issue_id=normalized_issue_id,
+            )
+            if normalized_issue_id
+            else []
+        )
+        approval_record = (
+            existing_pending[-1]
+            if existing_pending
+            else create_approval(
+                config,
+                project=project,
+                action=command,
+                payload=payload,
+                requested_by=requested_by,
+                reason=reason,
+                issue_id=normalized_issue_id,
+                runtime_agent_ids=runtime_agent_ids,
+                policy_reasons=policy_reasons,
+            )
+        )
+        return {"approval": approval_record.model_dump()}
+
+    sync_record = resolve_permission_sync(
+        config,
+        sync_key=sync_key,
+        metadata={
+            "project_id": project_id,
+            "command": command,
+            "issue_id": normalized_issue_id,
+            "payload_hash": payload_hash,
+            "kind": "approval",
+        },
+        resolver=_resolve_approval_payload,
+    )
+    approval_payload = dict(sync_record.payload.get("approval") or {})
+    approval_id = str(approval_payload.get("id") or "").strip()
+    if approval_id:
+        approval_record = get_approval(config, approval_id)
+        if approval_record is not None:
+            changed = False
+            merged_runtime_agent_ids = sorted({*approval_record.runtime_agent_ids, *runtime_agent_ids})
+            if merged_runtime_agent_ids != approval_record.runtime_agent_ids:
+                approval_record.runtime_agent_ids = merged_runtime_agent_ids
+                changed = True
+            merged_policy_reasons = sorted({*approval_record.policy_reasons, *(policy_reasons or [])})
+            if merged_policy_reasons != approval_record.policy_reasons:
+                approval_record.policy_reasons = merged_policy_reasons
+                changed = True
+            if reason.strip() and not approval_record.reason.strip():
+                approval_record.reason = reason.strip()
+                changed = True
+            if requested_by.strip() and not approval_record.requested_by.strip():
+                approval_record.requested_by = requested_by.strip()
+                changed = True
+            if changed:
+                approval_record = save_approval(config, approval_record)
+            if normalized_issue_id:
+                link_issue_approval(config, issue_id=normalized_issue_id, approval_id=approval_record.id)
+            approval_payload = approval_record.model_dump()
+    return approval_payload
 
 
 def execute_execution_plane_agent_action(
