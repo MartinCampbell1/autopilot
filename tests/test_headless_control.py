@@ -519,3 +519,32 @@ def test_headless_control_classifier_fails_closed_in_dont_ask_mode(tmp_path: Pat
     assert payload["behavior"] == "deny"
     assert payload["rule_source"] == "classifier"
     assert payload["matched_rule"] == "classifier:transcript_too_long"
+
+
+def test_headless_control_can_return_pending_classifier_runtime(tmp_path: Path) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    project = _create_project(config, tmp_path / "project")
+    session = create_headless_control_session(config, project_entry=project, session_id="sess_headless")
+
+    response = session.handle_request(
+        {
+            "type": "control_request",
+            "request_id": "req_can_use_tool_classifier_pending",
+            "request": {
+                "subtype": "can_use_tool",
+                "tool_name": "demo.read",
+                "input": {"path": "README.md"},
+                "tool_use_id": "toolu_classifier_pending",
+                "agent_id": "proj_headless_classifier:1:worker:a",
+                "classifier_enabled": True,
+                "classifier_mode": "deferred",
+                "user_text": "Please inspect the README and show me the current contents.",
+            },
+            "session_id": "sess_headless",
+        }
+    )
+
+    payload = response.response.response
+    assert payload["behavior"] == "pending_classifier"
+    assert payload["rule_source"] == "classifier"
+    assert payload["approval_runtime_id"]

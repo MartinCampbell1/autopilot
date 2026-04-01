@@ -25,7 +25,8 @@ from autopilot.core.permission_audit import append_permission_audit_entry
 from autopilot.core.tool_contracts import ToolDef, ToolPermissionContext, get_empty_tool_permission_context
 
 PermissionMode = Literal["default", "approved", "bypass_permissions", "dont_ask", "plan"]
-PermissionBehavior = Literal["allow", "deny", "ask"]
+PermissionRuleBehavior = Literal["allow", "deny", "ask"]
+PermissionDecisionBehavior = Literal["allow", "deny", "ask", "pending_classifier", "pending_user", "pending_hook"]
 PermissionRuleSource = Literal["command", "session", "project", "user", "managed", "env", "project_policy", "workspace_policy", "classifier"]
 PermissionUpdateDestination = Literal["session", "user", "project"]
 
@@ -56,14 +57,14 @@ class PermissionRule(BaseModel):
     """One resolved permission rule."""
 
     source: PermissionRuleSource
-    rule_behavior: PermissionBehavior
+    rule_behavior: PermissionRuleBehavior
     rule_value: PermissionRuleValue
 
 
 class PermissionDecision(BaseModel):
     """Result of one permission check."""
 
-    behavior: PermissionBehavior
+    behavior: PermissionDecisionBehavior
     message: str = ""
     reasons: list[str] = Field(default_factory=list)
     rule_source: PermissionRuleSource | None = None
@@ -78,7 +79,7 @@ class PermissionUpdate(BaseModel):
 
     type: Literal["add_rules", "replace_rules", "remove_rules", "set_mode"]
     destination: PermissionUpdateDestination
-    behavior: PermissionBehavior | None = None
+    behavior: PermissionRuleBehavior | None = None
     rules: list[PermissionRuleValue] = Field(default_factory=list)
     mode: PermissionMode | None = None
     project_id: str | None = None
@@ -641,7 +642,7 @@ def load_tool_permission_context(
 
 def _rules_for_behavior(
     context: ToolPermissionContext,
-    behavior: PermissionBehavior,
+    behavior: PermissionRuleBehavior,
 ) -> list[PermissionRule]:
     raw_map = {
         "allow": context.always_allow_rules,

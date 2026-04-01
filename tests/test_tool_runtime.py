@@ -399,6 +399,52 @@ def test_tool_runner_permission_classifier_can_auto_allow_safe_explicit_request(
     assert result.permission.matched_rule == "classifier:safe_explicit_intent"
 
 
+def test_tool_runner_permission_classifier_allow_settles_runtime(tmp_path: Path) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    tool = build_tool(
+        name="demo.read",
+        description="Read demo payload.",
+        approval_policy="ask",
+        execute=lambda tool_input, _: ToolResult(status="ok", payload={"path": tool_input["path"]}),
+    )
+
+    result = run_tool_use(
+        tool,
+        {"path": "README.md"},
+        ToolUseContext(
+            config=config,
+            actor="tester",
+            project_id="proj_classifier_allow",
+            runtime_agent_ids=("proj_classifier_allow:1:worker:a",),
+            metadata={
+                "tool_use_id": "toolu_classifier_allow",
+                "permission_classifier": {
+                    "enabled": True,
+                    "user_text": "Please inspect the README and show me the current contents.",
+                },
+            },
+        ),
+        permission_context=get_empty_tool_permission_context(),
+    )
+
+    runtime = get_approval_runtime(
+        config,
+        key="tool-permission:proj_classifier_allow:demo.read:toolu_classifier_allow",
+    )
+    mailbox = list_agent_mailbox_messages(
+        config,
+        project_id="proj_classifier_allow",
+        runtime_agent_id="proj_classifier_allow:1:worker:a",
+    )
+
+    assert result.status == "ok"
+    assert runtime is not None
+    assert runtime.winner_source == "classifier"
+    assert runtime.outcome == "allow"
+    assert any(message.message_type == "permission_classifier_allow" for message in mailbox)
+    assert any(message.message_type == "approval_runtime_resolved" for message in mailbox)
+
+
 def test_tool_runner_permission_classifier_fails_closed_to_prompt_on_long_transcript() -> None:
     tool = build_tool(
         name="demo.read",
@@ -428,6 +474,114 @@ def test_tool_runner_permission_classifier_fails_closed_to_prompt_on_long_transc
     assert result.permission.rule_source == "classifier"
     assert result.permission.matched_rule == "classifier:transcript_too_long"
     assert "too long" in result.message.lower()
+
+
+def test_tool_runner_pending_classifier_creates_runtime_and_mailbox(tmp_path: Path) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    tool = build_tool(
+        name="demo.read",
+        description="Read demo payload.",
+        approval_policy="ask",
+        execute=lambda tool_input, _: ToolResult(status="ok", payload=tool_input),
+    )
+
+    result = run_tool_use(
+        tool,
+        {"path": "README.md"},
+        ToolUseContext(
+            config=config,
+            actor="tester",
+            project_id="proj_classifier_pending",
+            runtime_agent_ids=("proj_classifier_pending:1:worker:a",),
+            metadata={
+                "tool_use_id": "toolu_classifier_pending",
+                "permission_classifier": {
+                    "enabled": True,
+                    "mode": "deferred",
+                    "user_text": "Please inspect the README and show me the current contents.",
+                },
+            },
+        ),
+        permission_context=get_empty_tool_permission_context(),
+    )
+
+    runtime = get_approval_runtime(
+        config,
+        key="tool-permission:proj_classifier_pending:demo.read:toolu_classifier_pending",
+    )
+    mailbox = list_agent_mailbox_messages(
+        config,
+        project_id="proj_classifier_pending",
+        runtime_agent_id="proj_classifier_pending:1:worker:a",
+        message_type="tool_permission_classifier_pending",
+    )
+
+    assert result.status == "approval_required"
+    assert result.approval_runtime_id
+    assert result.permission is not None
+    assert result.permission.behavior == "pending_classifier"
+    assert runtime is not None
+    assert runtime.metadata["classifier"]["stage"] == "pending_classifier"
+    assert runtime.payload["classifier"]["projected_tool_use"]
+    assert len(mailbox) == 1
+
+
+def test_tool_runner_classifier_pending_keeps_runtime_open_for_hook_resolution(tmp_path: Path) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    tool = build_tool(
+        name="demo.read",
+        description="Read demo payload.",
+        approval_policy="ask",
+        execute=lambda tool_input, _: ToolResult(status="ok", payload=tool_input),
+    )
+
+    result = run_tool_use(
+        tool,
+        {"path": "README.md"},
+        ToolUseContext(
+            config=config,
+            actor="tester",
+            project_id="proj_classifier_pending",
+            runtime_agent_ids=("proj_classifier_pending:1:worker:a",),
+            metadata={
+                "tool_use_id": "toolu_classifier_pending",
+                "permission_classifier": {
+                    "enabled": True,
+                    "user_text": "I am not sure what to do next.",
+                },
+            },
+        ),
+        permission_context=get_empty_tool_permission_context(),
+        hooks=[
+            ToolHookDefinition(
+                name="deny-after-pending-classifier",
+                event="permission_request",
+                handler=lambda _: {
+                    "permission_behavior": "deny",
+                    "message": "Hook denied after classifier pending.",
+                },
+            )
+        ],
+    )
+
+    runtime = get_approval_runtime(
+        config,
+        key="tool-permission:proj_classifier_pending:demo.read:toolu_classifier_pending",
+    )
+    mailbox = list_agent_mailbox_messages(
+        config,
+        project_id="proj_classifier_pending",
+        runtime_agent_id="proj_classifier_pending:1:worker:a",
+    )
+
+    assert result.status == "denied"
+    assert result.message == "Hook denied after classifier pending."
+    assert runtime is not None
+    assert runtime.winner_source == "hook:deny-after-pending-classifier"
+    assert runtime.outcome == "deny"
+    assert runtime.metadata["classifier"]["stage"] == "pending_classifier"
+    assert any(message.message_type == "permission_classifier_pending" for message in mailbox)
+    assert any(message.message_type == "permission_hook_deny" for message in mailbox)
 
 
 def test_repeated_denials_escalate_to_explicit_approval(tmp_path: Path) -> None:

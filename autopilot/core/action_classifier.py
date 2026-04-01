@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 
 from autopilot.core.tool_contracts import ToolDef
 
-ClassifierBehavior = Literal["allow", "ask", "deny"]
+ClassifierBehavior = Literal["allow", "ask", "deny", "pending_classifier"]
 
 CLASSIFIER_MAX_USER_TEXT_CHARS = 4000
 SAFE_ACTION_KEYWORDS = {
@@ -74,6 +74,7 @@ class ActionClassifierContext(BaseModel):
     user_text: str = ""
     decision_reason: str = ""
     projected_tool_use: str = ""
+    mode: Literal["sync", "deferred"] = "sync"
     fail_open: bool = False
     max_user_text_chars: int = CLASSIFIER_MAX_USER_TEXT_CHARS
 
@@ -187,6 +188,19 @@ def classify_tool_permission(
             decision_id="transcript_too_long",
             message="Permission classifier transcript was too long to classify safely.",
             explanation="The classifier failed closed because the user-intent transcript exceeded the configured limit.",
+            projected_tool_use=projected_tool_use,
+        )
+
+    if context.mode == "deferred":
+        return ActionClassifierDecision(
+            behavior="pending_classifier",
+            decision_id="deferred_classifier",
+            message="Permission classifier delegated this tool use to runtime settlement.",
+            reasons=[
+                "Deferred classifier mode is enabled for this projected tool use.",
+                "The classifier should settle through the shared approval runtime instead of silently allowing.",
+            ],
+            explanation="Deferred classifier mode materializes a pending classifier decision for external settlement.",
             projected_tool_use=projected_tool_use,
         )
 
