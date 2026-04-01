@@ -142,6 +142,8 @@ export function useControlPlanePageController(
     setSelectedSessionIssueId,
     selectedSessionToolPermissionRuntimeId,
     setSelectedSessionToolPermissionRuntimeId,
+    selectedSessionAsyncTaskId,
+    setSelectedSessionAsyncTaskId,
     selectedSessionEventKey,
     setSelectedSessionEventKey,
     selectedSessionContextKind,
@@ -304,6 +306,7 @@ export function useControlPlanePageController(
     setSelectedSessionApprovalId,
     setSelectedSessionIssueId,
     setSelectedSessionToolPermissionRuntimeId,
+    setSelectedSessionAsyncTaskId,
     setSelectedSessionEventKey,
     setSelectedSessionContextKind,
     setEntitySearch,
@@ -377,6 +380,7 @@ export function useControlPlanePageController(
       selectedSessionApprovalId ||
         selectedSessionIssueId ||
         selectedSessionToolPermissionRuntimeId ||
+        selectedSessionAsyncTaskId ||
         selectedSessionEventKey
     ),
     setSelectedRunId,
@@ -388,6 +392,12 @@ export function useControlPlanePageController(
         (runtime) => runtime.id === selectedSessionToolPermissionRuntimeId
       ) ?? null,
     [selectedSession, selectedSessionToolPermissionRuntimeId]
+  );
+  const selectedSessionAsyncTask = useMemo(
+    () =>
+      (selectedSession?.async_tasks || []).find((task) => task.id === selectedSessionAsyncTaskId) ??
+      null,
+    [selectedSession, selectedSessionAsyncTaskId]
   );
   const latestSessionPreviewRun = useMemo(() => {
     const previewRuns = linkedRuns.filter(
@@ -457,6 +467,7 @@ export function useControlPlanePageController(
     selectedRunId,
     selectedRunResultIndex,
     selectedSessionToolPermissionRuntimeId,
+    selectedSessionAsyncTaskId,
     sessionLineageFilter,
     dismissedLineageQueueKeys,
     snoozedLineageQueueUntil,
@@ -484,9 +495,11 @@ export function useControlPlanePageController(
     selectedSessionContextKind,
     selectedRun,
     selectedRunResult,
+    selectedSessionAsyncTask,
     setSelectedSessionApprovalId,
     setSelectedSessionIssueId,
     setSelectedSessionToolPermissionRuntimeId,
+    setSelectedSessionAsyncTaskId,
     setSelectedSessionEventKey,
     setSelectedSessionContextKind,
     setSelectedRunId,
@@ -514,6 +527,7 @@ export function useControlPlanePageController(
       approvalId: selectedSessionApprovalId || null,
       issueId: selectedSessionIssueId || null,
       toolPermissionRuntimeId: selectedSessionToolPermissionRuntimeId || null,
+      asyncTaskId: selectedSessionAsyncTaskId || null,
       eventKey: selectedSessionEventKey || null,
     }),
     [
@@ -527,6 +541,7 @@ export function useControlPlanePageController(
       selectedSessionId,
       selectedSessionIssueId,
       selectedSessionToolPermissionRuntimeId,
+      selectedSessionAsyncTaskId,
     ]
   );
 
@@ -566,6 +581,7 @@ export function useControlPlanePageController(
       approvalId: approvalId || null,
       issueId: issueId || null,
       toolPermissionRuntimeId: null,
+      asyncTaskId: null,
       eventKey: matchedEvent?.key || null,
     };
   }, [
@@ -585,18 +601,24 @@ export function useControlPlanePageController(
       selectedSessionContext.kind === "tool_permission_runtime"
         ? selectedSessionContext.runtime
         : null;
+    const asyncTaskContext =
+      selectedSessionContext.kind === "async_task" ? selectedSessionContext.task : null;
     const approvalId =
       selectedSessionContext.kind === "approval"
         ? selectedSessionContext.approval.id
         : selectedSessionContext.kind === "issue"
           ? selectedSessionContext.issue.approval_id
-          : runtimeContext?.approval_id || toStringValue(eventContext?.approval_id);
+          : selectedSessionContext.kind === "async_task"
+            ? asyncTaskContext?.approval_id || ""
+            : runtimeContext?.approval_id || toStringValue(eventContext?.approval_id);
     const issueId =
       selectedSessionContext.kind === "issue"
         ? selectedSessionContext.issue.id
         : selectedSessionContext.kind === "approval"
           ? selectedSessionContext.approval.issue_id
-          : runtimeContext?.issue_id || toStringValue(eventContext?.issue_id);
+          : selectedSessionContext.kind === "async_task"
+            ? asyncTaskContext?.issue_id || ""
+            : runtimeContext?.issue_id || toStringValue(eventContext?.issue_id);
     const runtimeAgentId =
       selectedSessionContext.kind === "approval"
         ? selectedSessionContext.approval.runtime_agent_ids[0]
@@ -605,11 +627,15 @@ export function useControlPlanePageController(
             selectedSessionContext.issue.runtime_agent_id
           : selectedSessionContext.kind === "tool_permission_runtime"
             ? runtimeContext?.runtime_agent_ids[0] || ""
-          : toStringValue(eventContext?.runtime_agent_id) ||
-            toStringArray(eventContext?.runtime_agent_ids)[0];
+            : selectedSessionContext.kind === "async_task"
+              ? asyncTaskContext?.runtime_agent_ids[0] || asyncTaskContext?.runtime_agent_id || ""
+            : toStringValue(eventContext?.runtime_agent_id) ||
+              toStringArray(eventContext?.runtime_agent_ids)[0];
     const directRunId =
       selectedSessionContext.kind === "event"
         ? toStringValue(eventContext?.agent_action_run_id) || toStringValue(eventContext?.run_id)
+        : selectedSessionContext.kind === "async_task"
+          ? asyncTaskContext?.agent_action_run_id || ""
         : "";
     const relatedRunLink = resolveRunLinkFromContext(linkedRuns, {
       runId: directRunId,
@@ -627,10 +653,17 @@ export function useControlPlanePageController(
       passId: null,
       sessionContextKind: selectedSessionContext.kind,
       approvalId:
-        selectedSessionContext.kind === "tool_permission_runtime" ? null : approvalId || null,
+        selectedSessionContext.kind === "tool_permission_runtime" ||
+        selectedSessionContext.kind === "async_task"
+          ? null
+          : approvalId || null,
       issueId:
-        selectedSessionContext.kind === "tool_permission_runtime" ? null : issueId || null,
+        selectedSessionContext.kind === "tool_permission_runtime" ||
+        selectedSessionContext.kind === "async_task"
+          ? null
+          : issueId || null,
       toolPermissionRuntimeId: runtimeContext?.id || null,
+      asyncTaskId: asyncTaskContext?.id || null,
       eventKey:
         selectedSessionContext.kind === "event"
           ? selectedSessionEventKey || sessionEventKey(selectedSessionContext.event)
@@ -656,6 +689,7 @@ export function useControlPlanePageController(
       approvalId: null,
       issueId: null,
       toolPermissionRuntimeId: null,
+      asyncTaskId: null,
       eventKey: null,
     };
   }, [selectedAgent, selectedAgentId, selectedSessionId]);
@@ -1087,10 +1121,25 @@ export function useControlPlanePageController(
       focusRuntimeAgent,
       runAgentSuggestedCommand,
       inspectAsyncFollowThrough: () => {
+        const activeAsyncTask =
+          (selectedAgent?.async_tasks || []).find(
+            (task) => Boolean(task.active) || task.status === "queued" || task.status === "running"
+          ) || null;
         const pendingAsyncRun =
           agentScopedRuns.find((run) => run.completion_state === "pending_async") ??
           agentScopedRuns.find((run) => (run.async_task_count ?? 0) > 0);
         setAgentActivityFilter("attention");
+        if (activeAsyncTask) {
+          syncLinkedSelection({
+            asyncTaskId: activeAsyncTask.id,
+            runId: activeAsyncTask.agent_action_run_id,
+            approvalId: activeAsyncTask.approval_id,
+            issueId: activeAsyncTask.issue_id,
+            runtimeAgentId:
+              activeAsyncTask.runtime_agent_ids[0] || activeAsyncTask.runtime_agent_id,
+          });
+          return;
+        }
         if (pendingAsyncRun) {
           setSelectedRunId(pendingAsyncRun.id);
           setSelectedRunResultIndex(0);
@@ -1240,6 +1289,7 @@ export function useControlPlanePageController(
     selectedSessionApprovalId,
     selectedSessionIssueId,
     selectedSessionToolPermissionRuntimeId,
+    selectedSessionAsyncTaskId,
     revealSelectedSessionContextRow,
     revealSelectedSessionContextInAgentTimeline,
     selectedSessionContext,
@@ -1326,6 +1376,7 @@ export function useControlPlanePageController(
     selectedSessionApprovalId,
     selectedSessionIssueId,
     selectedSessionToolPermissionRuntimeId,
+    selectedSessionAsyncTaskId,
     selectedSessionEventKey,
     selectedSessionContextKind,
     headerSectionProps,

@@ -16,6 +16,7 @@ import type {
   ExecutionAgentActionRunRecord,
   ExecutionApprovalRecord,
   ExecutionIssueRecord,
+  ExecutionRuntimeAgentTaskRecord,
   OrchestratorSessionDetail,
   ToolPermissionRuntimeRecord,
 } from "@/lib/types";
@@ -24,6 +25,7 @@ type SelectedSessionContextValue =
   | { kind: "approval"; approval: ExecutionApprovalRecord }
   | { kind: "issue"; issue: ExecutionIssueRecord }
   | { kind: "tool_permission_runtime"; runtime: ToolPermissionRuntimeRecord }
+  | { kind: "async_task"; task: ExecutionRuntimeAgentTaskRecord }
   | { kind: "event"; event: Record<string, unknown> };
 
 function formatToolPermissionStage(value?: string | null): string {
@@ -78,6 +80,7 @@ type LinkedSelectionPayload = {
   approvalId?: string;
   issueId?: string;
   toolPermissionRuntimeId?: string;
+  asyncTaskId?: string;
   runtimeAgentId?: string;
   event?: Record<string, unknown> | null;
 };
@@ -171,19 +174,25 @@ export function SelectedSessionContextCard({
             const issueContext = contextKind === "issue" ? selectedSessionContext.issue : null;
             const runtimeContext =
               contextKind === "tool_permission_runtime" ? selectedSessionContext.runtime : null;
+            const asyncTaskContext =
+              contextKind === "async_task" ? selectedSessionContext.task : null;
             const eventContext = contextKind === "event" ? selectedSessionContext.event : null;
             const relatedApprovalId =
               approvalContext?.id ||
+              asyncTaskContext?.approval_id ||
               runtimeContext?.approval_id ||
               issueContext?.approval_id ||
               toStringValue(eventContext?.approval_id);
             const relatedIssueId =
               issueContext?.id ||
+              asyncTaskContext?.issue_id ||
               runtimeContext?.issue_id ||
               approvalContext?.issue_id ||
               toStringValue(eventContext?.issue_id);
             const runtimeAgentId =
               approvalContext?.runtime_agent_ids[0] ||
+              asyncTaskContext?.runtime_agent_ids[0] ||
+              asyncTaskContext?.runtime_agent_id ||
               runtimeContext?.runtime_agent_ids[0] ||
               issueContext?.runtime_agent_ids[0] ||
               issueContext?.runtime_agent_id ||
@@ -192,11 +201,13 @@ export function SelectedSessionContextCard({
               "";
             const projectId =
               approvalContext?.project_id ||
+              asyncTaskContext?.project_id ||
               runtimeContext?.project_id ||
               issueContext?.project_id ||
               toStringValue(eventContext?.project_id);
             const storyId =
               issueContext?.story_id ??
+              toNullableNumber(asyncTaskContext?.metadata?.story_id) ??
               toNullableNumber(runtimeContext?.metadata?.story_id) ??
               toNullableNumber(runtimeContext?.payload?.story_id) ??
               toNullableNumber(eventContext?.story_id);
@@ -210,6 +221,7 @@ export function SelectedSessionContextCard({
               approvalId: relatedApprovalId,
               issueId: relatedIssueId,
               runId:
+                asyncTaskContext?.agent_action_run_id ||
                 toStringValue(eventContext?.agent_action_run_id) ||
                 toStringValue(eventContext?.run_id),
               runtimeAgentId,
@@ -224,6 +236,8 @@ export function SelectedSessionContextCard({
               : null;
             const title =
               approvalContext?.action ||
+              asyncTaskContext?.title ||
+              asyncTaskContext?.command ||
               runtimeContext?.tool_name ||
               issueContext?.title ||
               issueContext?.root_cause ||
@@ -231,6 +245,9 @@ export function SelectedSessionContextCard({
               toStringValue(eventContext?.event, "unknown_event");
             const subtitle =
               approvalContext?.reason ||
+              asyncTaskContext?.result_summary ||
+              asyncTaskContext?.reason ||
+              asyncTaskContext?.placeholder_result ||
               (runtimeContext ? extractToolPermissionMessage(runtimeContext) : "") ||
               issueContext?.root_cause ||
               issueContext?.description ||
@@ -241,6 +258,9 @@ export function SelectedSessionContextCard({
               approvalContext?.decided_at ||
               approvalContext?.updated_at ||
               approvalContext?.created_at ||
+              asyncTaskContext?.completed_at ||
+              asyncTaskContext?.updated_at ||
+              asyncTaskContext?.created_at ||
               runtimeContext?.resolved_at ||
               runtimeContext?.updated_at ||
               runtimeContext?.created_at ||
@@ -250,6 +270,7 @@ export function SelectedSessionContextCard({
               toStringValue(eventContext?.timestamp);
             const status =
               approvalContext?.status ||
+              asyncTaskContext?.status ||
               runtimeContext?.status ||
               issueContext?.status ||
               toStringValue(eventContext?.status, "unknown");
@@ -261,18 +282,23 @@ export function SelectedSessionContextCard({
                   : passStatusClass(status);
             const payload =
               (approvalContext ? asRecord(approvalContext) : null) ||
+              (asyncTaskContext ? asRecord(asyncTaskContext) : null) ||
               (runtimeContext ? asRecord(runtimeContext) : null) ||
               (issueContext ? asRecord(issueContext) : null) ||
               eventContext ||
               {};
             const contextId =
               approvalContext?.id ||
+              asyncTaskContext?.id ||
               runtimeContext?.id ||
               issueContext?.id ||
               toStringValue(eventContext?.id) ||
               title;
             const contextDetail =
               approvalContext?.action ||
+              (asyncTaskContext
+                ? `${asyncTaskContext.command || "task"} · ${asyncTaskContext.status || "running"}`
+                : "") ||
               (runtimeContext
                 ? `${runtimeContext.tool_name || "tool"} · ${formatToolPermissionStage(runtimeContext.pending_stage)}`
                 : "") ||
@@ -280,6 +306,13 @@ export function SelectedSessionContextCard({
               toStringValue(eventContext?.event, "event");
             const runtimeAgentDetail =
               approvalContext?.requested_by ||
+              (asyncTaskContext
+                ? `${asyncTaskContext.actor || "unknown actor"}${
+                    asyncTaskContext.resume_contract
+                      ? ` · resume ${asyncTaskContext.resume_contract.command}`
+                      : ""
+                  }`
+                : "") ||
               (runtimeContext
                 ? `${formatToolPermissionStage(runtimeContext.pending_stage)}${
                     runtimeContext.resolved_source ? ` · ${runtimeContext.resolved_source}` : ""
@@ -327,6 +360,14 @@ export function SelectedSessionContextCard({
                           className="rounded-full border-[#e5e5e3] bg-[#fafaf9] px-2.5 py-1 text-[11px] font-medium text-[#37352f]"
                         >
                           {eventFamily(toStringValue(eventContext?.event))}
+                        </Badge>
+                      )}
+                      {contextKind === "async_task" && (
+                        <Badge
+                          variant="outline"
+                          className="rounded-full border-[#d3e5ef] bg-[#eef7fb] px-2.5 py-1 text-[11px] font-medium text-[#2a6690]"
+                        >
+                          {asyncTaskContext?.command || "background task"}
                         </Badge>
                       )}
                     </div>
@@ -377,6 +418,8 @@ export function SelectedSessionContextCard({
                       label:
                         contextKind === "tool_permission_runtime"
                           ? `tool permission ${contextId}`
+                          : contextKind === "async_task"
+                            ? `async task ${contextId}`
                           : `${contextKind} ${contextId}`,
                       tone:
                         contextKind === "approval"
@@ -385,6 +428,8 @@ export function SelectedSessionContextCard({
                             ? "issue"
                             : contextKind === "tool_permission_runtime"
                               ? "approval"
+                            : contextKind === "async_task"
+                              ? "event"
                             : "event",
                       active: true,
                       onClick: onRevealSessionRow,
@@ -419,6 +464,7 @@ export function SelectedSessionContextCard({
                               approvalId: relatedApprovalId,
                               issueId: relatedIssueId,
                               toolPermissionRuntimeId: runtimeContext?.id,
+                              asyncTaskId: asyncTaskContext?.id,
                               runtimeAgentId,
                               event: eventContext,
                             });
@@ -435,6 +481,7 @@ export function SelectedSessionContextCard({
                               approvalId: relatedApprovalId,
                               issueId: relatedIssueId,
                               toolPermissionRuntimeId: runtimeContext?.id,
+                              asyncTaskId: asyncTaskContext?.id,
                               runtimeAgentId,
                               event: eventContext,
                             });
@@ -484,6 +531,22 @@ export function SelectedSessionContextCard({
                         className="rounded-full border-[#d6e9dc] bg-[#eef8f1] px-2.5 py-1 text-[11px] font-medium text-[#2b6e3f]"
                       >
                         use {runtimeContext.tool_use_id || runtimeContext.id}
+                      </Badge>
+                    )}
+                    {asyncTaskContext?.output_artifact_ref && (
+                      <Badge
+                        variant="outline"
+                        className="rounded-full border-[#d6e9dc] bg-[#eef8f1] px-2.5 py-1 text-[11px] font-medium text-[#2b6e3f]"
+                      >
+                        output ready
+                      </Badge>
+                    )}
+                    {asyncTaskContext?.transcript_artifact_ref && (
+                      <Badge
+                        variant="outline"
+                        className="rounded-full border-[#d3e5ef] bg-[#eef7fb] px-2.5 py-1 text-[11px] font-medium text-[#2a6690]"
+                      >
+                        transcript ready
                       </Badge>
                     )}
                     {relatedApprovalId && contextKind !== "approval" && (

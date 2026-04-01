@@ -23,6 +23,7 @@ import type {
   ExecutionAgentActionRunRecord,
   ExecutionApprovalRecord,
   ExecutionIssueRecord,
+  ExecutionRuntimeAgentTaskRecord,
   OrchestratorSessionDetail,
   ToolPermissionRuntimeRecord,
 } from "@/lib/types";
@@ -31,6 +32,7 @@ export type SelectedSessionContextValue =
   | { kind: "approval"; approval: ExecutionApprovalRecord }
   | { kind: "issue"; issue: ExecutionIssueRecord }
   | { kind: "tool_permission_runtime"; runtime: ToolPermissionRuntimeRecord }
+  | { kind: "async_task"; task: ExecutionRuntimeAgentTaskRecord }
   | { kind: "event"; event: Record<string, unknown> };
 
 type UseControlPlaneLinkedSelectionArgs = {
@@ -39,6 +41,7 @@ type UseControlPlaneLinkedSelectionArgs = {
   selectedSessionApproval: ExecutionApprovalRecord | null;
   selectedSessionIssue: ExecutionIssueRecord | null;
   selectedSessionToolPermissionRuntime: ToolPermissionRuntimeRecord | null;
+  selectedSessionAsyncTask: ExecutionRuntimeAgentTaskRecord | null;
   selectedSessionEvent: Record<string, unknown> | null;
   selectedSessionEventKey: string;
   selectedSessionContextKind: SessionContextKind;
@@ -47,6 +50,7 @@ type UseControlPlaneLinkedSelectionArgs = {
   setSelectedSessionApprovalId: Dispatch<SetStateAction<string>>;
   setSelectedSessionIssueId: Dispatch<SetStateAction<string>>;
   setSelectedSessionToolPermissionRuntimeId: Dispatch<SetStateAction<string>>;
+  setSelectedSessionAsyncTaskId: Dispatch<SetStateAction<string>>;
   setSelectedSessionEventKey: Dispatch<SetStateAction<string>>;
   setSelectedSessionContextKind: Dispatch<SetStateAction<SessionContextKind>>;
   setSelectedRunId: Dispatch<SetStateAction<string>>;
@@ -69,6 +73,7 @@ export function useControlPlaneLinkedSelection({
   selectedSessionApproval,
   selectedSessionIssue,
   selectedSessionToolPermissionRuntime,
+  selectedSessionAsyncTask,
   selectedSessionEvent,
   selectedSessionEventKey,
   selectedSessionContextKind,
@@ -77,6 +82,7 @@ export function useControlPlaneLinkedSelection({
   setSelectedSessionApprovalId,
   setSelectedSessionIssueId,
   setSelectedSessionToolPermissionRuntimeId,
+  setSelectedSessionAsyncTaskId,
   setSelectedSessionEventKey,
   setSelectedSessionContextKind,
   setSelectedRunId,
@@ -97,6 +103,7 @@ export function useControlPlaneLinkedSelection({
       const approvalId = toStringValue(context.approvalId);
       const issueId = toStringValue(context.issueId);
       const toolPermissionRuntimeId = toStringValue(context.toolPermissionRuntimeId);
+      const asyncTaskId = toStringValue(context.asyncTaskId);
       const resolvedRunLink = resolveRunLinkFromContext(linkedRuns, context);
       const runId = resolvedRunLink?.run.id || toStringValue(context.runId);
       const resultIndex =
@@ -123,12 +130,21 @@ export function useControlPlaneLinkedSelection({
         setSelectedSessionApprovalId("");
         setSelectedSessionIssueId("");
         setSelectedSessionToolPermissionRuntimeId(toolPermissionRuntimeId);
+        setSelectedSessionAsyncTaskId("");
         setSelectedSessionEventKey("");
         setSelectedSessionContextKind("tool_permission_runtime");
+      } else if (asyncTaskId) {
+        setSelectedSessionApprovalId("");
+        setSelectedSessionIssueId("");
+        setSelectedSessionToolPermissionRuntimeId("");
+        setSelectedSessionAsyncTaskId(asyncTaskId);
+        setSelectedSessionEventKey("");
+        setSelectedSessionContextKind("async_task");
       } else {
         setSelectedSessionApprovalId(approvalId);
         setSelectedSessionIssueId(issueId);
         setSelectedSessionToolPermissionRuntimeId("");
+        setSelectedSessionAsyncTaskId("");
         setSelectedSessionEventKey(matchedEvent?.key || "");
         setSelectedSessionContextKind(
           context.event
@@ -175,6 +191,7 @@ export function useControlPlaneLinkedSelection({
       setSelectedSessionContextKind,
       setSelectedSessionEventKey,
       setSelectedSessionIssueId,
+      setSelectedSessionAsyncTaskId,
       setSelectedSessionToolPermissionRuntimeId,
     ]
   );
@@ -187,6 +204,7 @@ export function useControlPlaneLinkedSelection({
         approvalId: entry.approvalId,
         issueId: entry.issueId,
         toolPermissionRuntimeId: entry.toolPermissionRuntimeId,
+        asyncTaskId: entry.asyncTaskId,
         runtimeAgentId: entry.runtimeAgentId,
         event: entry.event,
       });
@@ -208,6 +226,7 @@ export function useControlPlaneLinkedSelection({
       setSelectedSessionApprovalId("");
       setSelectedSessionIssueId("");
       setSelectedSessionToolPermissionRuntimeId("");
+      setSelectedSessionAsyncTaskId("");
       setSelectedSessionEventKey("");
       return;
     }
@@ -230,16 +249,29 @@ export function useControlPlaneLinkedSelection({
             selectedSessionToolPermissionRuntime.issue_id === issueId)
         )
     );
+    const preservesSelectedAsyncTask = Boolean(
+      selectedSessionAsyncTask &&
+        ((selectedSessionAsyncTask.agent_action_run_id &&
+          selectedSessionAsyncTask.agent_action_run_id === selectedRun.id) ||
+          (selectedSessionAsyncTask.approval_id &&
+            selectedSessionAsyncTask.approval_id === approvalId) ||
+          (selectedSessionAsyncTask.issue_id &&
+            selectedSessionAsyncTask.issue_id === issueId))
+    );
 
     setSelectedSessionApprovalId(approvalId);
     setSelectedSessionIssueId(issueId);
     setSelectedSessionToolPermissionRuntimeId((current) =>
       preservesSelectedToolPermissionRuntime ? current : ""
     );
+    setSelectedSessionAsyncTaskId((current) => (preservesSelectedAsyncTask ? current : ""));
     setSelectedSessionEventKey(matchedEvent?.key || "");
     setSelectedSessionContextKind((current) => {
       if (preservesSelectedToolPermissionRuntime && selectedSessionToolPermissionRuntime) {
         return "tool_permission_runtime";
+      }
+      if (preservesSelectedAsyncTask && selectedSessionAsyncTask) {
+        return "async_task";
       }
       if (current === "event" && matchedEvent) return "event";
       if (current === "issue" && issueId) return "issue";
@@ -267,7 +299,9 @@ export function useControlPlaneLinkedSelection({
     setSelectedSessionContextKind,
     setSelectedSessionEventKey,
     setSelectedSessionIssueId,
+    setSelectedSessionAsyncTaskId,
     setSelectedSessionToolPermissionRuntimeId,
+    selectedSessionAsyncTask,
     selectedSessionToolPermissionRuntime,
   ]);
 
@@ -315,6 +349,9 @@ export function useControlPlaneLinkedSelection({
     ) {
       return { kind: "tool_permission_runtime", runtime: selectedSessionToolPermissionRuntime };
     }
+    if (selectedSessionContextKind === "async_task" && selectedSessionAsyncTask) {
+      return { kind: "async_task", task: selectedSessionAsyncTask };
+    }
     if (selectedSessionContextKind === "event" && selectedSessionEvent) {
       return { kind: "event", event: selectedSessionEvent };
     }
@@ -327,6 +364,9 @@ export function useControlPlaneLinkedSelection({
     if (selectedSessionToolPermissionRuntime) {
       return { kind: "tool_permission_runtime", runtime: selectedSessionToolPermissionRuntime };
     }
+    if (selectedSessionAsyncTask) {
+      return { kind: "async_task", task: selectedSessionAsyncTask };
+    }
     if (selectedSessionEvent) {
       return { kind: "event", event: selectedSessionEvent };
     }
@@ -336,6 +376,7 @@ export function useControlPlaneLinkedSelection({
     selectedSessionContextKind,
     selectedSessionEvent,
     selectedSessionIssue,
+    selectedSessionAsyncTask,
     selectedSessionToolPermissionRuntime,
   ]);
 
@@ -364,6 +405,10 @@ export function useControlPlaneLinkedSelection({
       );
       return;
     }
+    if (selectedSessionContext.kind === "async_task") {
+      setPendingSessionRowDomId(sessionContextRowDomId("async_task", selectedSessionContext.task.id));
+      return;
+    }
     setPendingSessionRowDomId(sessionContextRowDomId("issue", selectedSessionContext.issue.id));
   }, [
     selectedSessionContext,
@@ -380,6 +425,8 @@ export function useControlPlaneLinkedSelection({
         ? selectedSessionContext.approval.id
         : selectedSessionContext.kind === "tool_permission_runtime"
           ? selectedSessionContext.runtime.approval_id
+          : selectedSessionContext.kind === "async_task"
+            ? selectedSessionContext.task.approval_id
         : selectedSessionContext.kind === "issue"
           ? selectedSessionContext.issue.approval_id
           : toStringValue(selectedSessionContext.event.approval_id);
@@ -387,15 +434,20 @@ export function useControlPlaneLinkedSelection({
       selectedSessionContext.kind === "issue"
         ? selectedSessionContext.issue.id
         : selectedSessionContext.kind === "tool_permission_runtime"
-          ? selectedSessionContext.runtime.issue_id
+        ? selectedSessionContext.runtime.issue_id
         : selectedSessionContext.kind === "approval"
           ? selectedSessionContext.approval.issue_id
+          : selectedSessionContext.kind === "async_task"
+            ? selectedSessionContext.task.issue_id
           : toStringValue(selectedSessionContext.event.issue_id);
     const runtimeAgentId =
       selectedSessionContext.kind === "approval"
         ? selectedSessionContext.approval.runtime_agent_ids[0]
         : selectedSessionContext.kind === "tool_permission_runtime"
           ? selectedSessionContext.runtime.runtime_agent_ids[0]
+          : selectedSessionContext.kind === "async_task"
+            ? selectedSessionContext.task.runtime_agent_ids[0] ||
+              selectedSessionContext.task.runtime_agent_id
         : selectedSessionContext.kind === "issue"
           ? selectedSessionContext.issue.runtime_agent_ids[0] ||
             selectedSessionContext.issue.runtime_agent_id
@@ -415,11 +467,14 @@ export function useControlPlaneLinkedSelection({
         selectedSessionContext.kind === "tool_permission_runtime"
           ? selectedSessionContext.runtime.id
           : "",
+      asyncTaskId: selectedSessionContext.kind === "async_task" ? selectedSessionContext.task.id : "",
       runtimeAgentId,
       runId:
         selectedSessionContext.kind === "event"
           ? toStringValue(selectedSessionContext.event.agent_action_run_id) ||
             toStringValue(selectedSessionContext.event.run_id)
+          : selectedSessionContext.kind === "async_task"
+            ? selectedSessionContext.task.agent_action_run_id
           : "",
       event: selectedSessionContext.kind === "event" ? selectedSessionContext.event : null,
     });

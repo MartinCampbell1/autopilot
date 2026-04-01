@@ -47,7 +47,7 @@ export function sessionEventKey(event: Record<string, unknown>, fallback = ""): 
 }
 
 export function sessionContextRowDomId(
-  kind: "approval" | "issue" | "event" | "tool_permission_runtime",
+  kind: "approval" | "issue" | "event" | "tool_permission_runtime" | "async_task",
   key: string
 ): string {
   return key ? `session-context-row-${kind}-${domSafeToken(key)}` : "";
