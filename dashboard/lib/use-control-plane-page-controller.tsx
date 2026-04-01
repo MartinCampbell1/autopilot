@@ -1210,6 +1210,7 @@ export function useControlPlanePageController(
     rejectApproval,
     applyApproval,
     resolveIssue,
+    resolveToolPermissionRuntime,
     onCopySessionLink: () => {
       void copyControlPlaneLink(
         {

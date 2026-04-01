@@ -446,8 +446,9 @@ export function useControlPlaneActions({
 
   const resolveToolPermissionRuntime = useCallback(
     async (runtime: ToolPermissionRuntimeRecord, outcome: "allow" | "deny") => {
-      if (!selectedAgent) return;
       const actionLabel = outcome === "allow" ? "allow" : "deny";
+      const runtimeAgentLabel =
+        runtime.runtime_agent_ids[0] || selectedAgent?.runtime_agent_id || selectedSessionId || "session";
       await runDecisionAction(
         `tool-permission-${actionLabel}:${runtime.id}`,
         async () => {
@@ -455,12 +456,12 @@ export function useControlPlaneActions({
             outcome === "allow"
               ? await allowExecutionPlaneToolPermissionRuntime(runtime.id, {
                   actor: DEFAULT_CONTROL_ACTOR,
-                  note: `Dashboard allowed ${runtime.tool_name || runtime.id} for ${selectedAgent.runtime_agent_id}`,
+                  note: `Dashboard allowed ${runtime.tool_name || runtime.id} for ${runtimeAgentLabel}`,
                   source: "user",
                 })
               : await denyExecutionPlaneToolPermissionRuntime(runtime.id, {
                   actor: DEFAULT_CONTROL_ACTOR,
-                  note: `Dashboard denied ${runtime.tool_name || runtime.id} for ${selectedAgent.runtime_agent_id}`,
+                  note: `Dashboard denied ${runtime.tool_name || runtime.id} for ${runtimeAgentLabel}`,
                   source: "user",
                 });
           return `Tool permission ${payload.runtime.id} marked ${payload.runtime.status}.`;
@@ -468,7 +469,7 @@ export function useControlPlaneActions({
         { autoAdvanceQueue: true }
       );
     },
-    [runDecisionAction, selectedAgent]
+    [runDecisionAction, selectedAgent?.runtime_agent_id, selectedSessionId]
   );
 
   const runAgentSuggestedCommand = useCallback(

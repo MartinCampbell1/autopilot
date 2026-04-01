@@ -9,6 +9,7 @@ import type {
   OrchestratorSessionControlProfile,
   OrchestratorSessionControlRecommendation,
   OrchestratorSessionDetail,
+  ToolPermissionRuntimeRecord,
 } from "@/lib/types";
 
 type SessionDrilldownSectionProps = ComponentProps<typeof SessionDrilldownSection>;
@@ -92,6 +93,10 @@ type BuildSessionDrilldownSectionPropsArgs = {
   rejectApproval: (approval: ExecutionApprovalRecord) => Promise<void>;
   applyApproval: (approval: ExecutionApprovalRecord) => Promise<void>;
   resolveIssue: (issue: ExecutionIssueRecord) => Promise<void>;
+  resolveToolPermissionRuntime: (
+    runtime: ToolPermissionRuntimeRecord,
+    outcome: "allow" | "deny"
+  ) => Promise<void>;
   onCopySessionLink: () => void;
   canCopyFocusedLink: boolean;
   onCopyFocusedLink: () => void;
@@ -162,6 +167,7 @@ export function buildSessionDrilldownSectionProps({
   rejectApproval,
   applyApproval,
   resolveIssue,
+  resolveToolPermissionRuntime,
   onCopySessionLink,
   canCopyFocusedLink,
   onCopyFocusedLink,
@@ -311,6 +317,12 @@ export function buildSessionDrilldownSectionProps({
       },
       onResolveIssue: (issue) => {
         void resolveIssue(issue);
+      },
+      onAllowToolPermissionRuntime: (runtime) => {
+        void resolveToolPermissionRuntime(runtime, "allow");
+      },
+      onDenyToolPermissionRuntime: (runtime) => {
+        void resolveToolPermissionRuntime(runtime, "deny");
       },
     },
     selectedSessionContextCardProps: {
