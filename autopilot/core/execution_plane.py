@@ -6,6 +6,7 @@ import hashlib
 import json
 import uuid
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -1275,12 +1276,193 @@ def _refresh_result_async_tasks(
     return refreshed
 
 
+def _parse_execution_plane_timestamp(value: Any) -> datetime | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    try:
+        return datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+
+
+def _derive_execution_plane_agent_action_run_completion(
+    results: list[dict[str, Any]] | None,
+) -> dict[str, Any]:
+    status_counts: dict[str, int] = {}
+    active_async_task_ids: list[str] = []
+    saw_async_task = False
+    latest_completed_at: datetime | None = None
+
+    for result in results or []:
+        async_task = result.get("async_task")
+        if not isinstance(async_task, dict):
+            continue
+        task_id = str(async_task.get("id") or result.get("async_task_id") or "").strip()
+        task_status = str(async_task.get("status") or "").strip() or "unknown"
+        saw_async_task = True
+        status_counts[task_status] = status_counts.get(task_status, 0) + 1
+        if task_status in {"queued", "running"}:
+            if task_id:
+                active_async_task_ids.append(task_id)
+            continue
+        completed_at = _parse_execution_plane_timestamp(async_task.get("completed_at"))
+        if completed_at is not None and (latest_completed_at is None or completed_at > latest_completed_at):
+            latest_completed_at = completed_at
+
+    if active_async_task_ids:
+        count = len(active_async_task_ids)
+        noun = "task is" if count == 1 else "tasks are"
+        return {
+            "completion_state": "pending_async",
+            "completion_message": (
+                f"{count} async {noun} still running; do not treat this run as complete yet."
+            ),
+            "async_task_status_counts": status_counts,
+            "active_async_task_ids": active_async_task_ids,
+            "completed_at": None,
+        }
+
+    if not saw_async_task:
+        return {
+            "completion_state": "completed",
+            "completion_message": "",
+            "async_task_status_counts": {},
+            "active_async_task_ids": [],
+            "completed_at": None,
+        }
+
+    failed_count = int(status_counts.get("failed") or 0)
+    cancelled_count = int(status_counts.get("cancelled") or 0)
+    if failed_count or cancelled_count:
+        failure_bits: list[str] = []
+        if failed_count:
+            failure_bits.append(f"{failed_count} failed")
+        if cancelled_count:
+            failure_bits.append(f"{cancelled_count} cancelled")
+        completion_message = (
+            "Async follow-through reached terminal state with " + ", ".join(failure_bits) + " task(s)."
+        )
+    else:
+        completion_message = "Async follow-through reached terminal state."
+
+    return {
+        "completion_state": "completed",
+        "completion_message": completion_message,
+        "async_task_status_counts": status_counts,
+        "active_async_task_ids": [],
+        "completed_at": latest_completed_at.isoformat() if latest_completed_at is not None else None,
+    }
+
+
+def _completion_event_status_for_run(record: AgentActionBatchRunRecord) -> str:
+    failed_count = int((record.async_task_status_counts or {}).get("failed") or 0)
+    cancelled_count = int((record.async_task_status_counts or {}).get("cancelled") or 0)
+    if failed_count:
+        return "error"
+    if cancelled_count:
+        return "warning"
+    return "ok"
+
+
+def _emit_execution_plane_agent_action_run_completion_event(
+    config: AutopilotConfig,
+    record: AgentActionBatchRunRecord,
+    *,
+    event: str,
+    status: str,
+    message: str,
+) -> None:
+    extra = {
+        "agent_action_run_id": record.id,
+        "orchestrator_session_id": record.orchestrator_session_id,
+        "completion_state": record.completion_state,
+        "async_task_status_counts": dict(record.async_task_status_counts or {}),
+        "active_async_task_ids": list(record.active_async_task_ids or []),
+        "runtime_agent_ids": list(record.runtime_agent_ids or []),
+    }
+    for project_id in record.project_ids:
+        emit_project_event(
+            config,
+            project_id,
+            event=event,
+            status=status,
+            message=message,
+            extra=extra,
+        )
+
+
+def _refresh_execution_plane_agent_action_run_record(
+    config: AutopilotConfig,
+    record: AgentActionBatchRunRecord,
+) -> AgentActionBatchRunRecord:
+    refreshed_results = _refresh_result_async_tasks(config, record.results)
+    completion = _derive_execution_plane_agent_action_run_completion(refreshed_results)
+    previous_completion_state = str(record.completion_state or "completed")
+    updated = False
+
+    if refreshed_results != record.results:
+        record.results = refreshed_results
+        updated = True
+    if record.completion_state != completion["completion_state"]:
+        record.completion_state = str(completion["completion_state"])
+        updated = True
+    if record.completion_message != completion["completion_message"]:
+        record.completion_message = str(completion["completion_message"])
+        updated = True
+    if dict(record.async_task_status_counts or {}) != dict(completion["async_task_status_counts"]):
+        record.async_task_status_counts = dict(completion["async_task_status_counts"])
+        updated = True
+    if list(record.active_async_task_ids or []) != list(completion["active_async_task_ids"]):
+        record.active_async_task_ids = list(completion["active_async_task_ids"])
+        updated = True
+
+    desired_completed_at = completion["completed_at"]
+    if str(completion["completion_state"]) == "pending_async":
+        if record.completed_at is not None:
+            record.completed_at = None
+            updated = True
+    elif desired_completed_at:
+        if record.completed_at != desired_completed_at:
+            record.completed_at = desired_completed_at
+            updated = True
+    elif not record.completed_at:
+        record.completed_at = record.created_at
+        updated = True
+
+    if not updated:
+        return record
+
+    record = save_agent_action_batch_run(config, record)
+    if previous_completion_state != record.completion_state:
+        if record.completion_state == "pending_async":
+            _emit_execution_plane_agent_action_run_completion_event(
+                config,
+                record,
+                event="execution_plane_agent_action_run_pending_async",
+                status="running",
+                message=record.completion_message or (
+                    "Async follow-through is still running; final completion is not available yet."
+                ),
+            )
+        elif previous_completion_state == "pending_async":
+            _emit_execution_plane_agent_action_run_completion_event(
+                config,
+                record,
+                event="execution_plane_agent_action_run_async_settled",
+                status=_completion_event_status_for_run(record),
+                message=record.completion_message or "Async follow-through reached terminal state.",
+            )
+    return record
+
+
 def _materialize_execution_plane_agent_action_run_record(
     config: AutopilotConfig,
     record: AgentActionBatchRunRecord,
 ) -> dict[str, Any]:
+    record = _refresh_execution_plane_agent_action_run_record(config, record)
     payload = record.model_dump()
-    payload["results"] = _refresh_result_async_tasks(config, record.results)
+    payload["results"] = list(record.results)
     approval_required = bool(payload.get("approval_required")) or _execution_plane_agent_action_run_requires_approval(
         [],
         list(payload.get("results") or []),
@@ -1304,6 +1486,7 @@ def _materialize_execution_plane_agent_action_run_record(
     payload["artifact_ref"] = artifact_ref
     payload["approval_required"] = approval_required
     payload["apply_mode"] = apply_mode
+    payload["active_async_task_count"] = len(record.active_async_task_ids)
     payload.setdefault("diff_summary", {})
     payload.setdefault("patch_bundle", {})
     return payload
@@ -1320,6 +1503,9 @@ def _execution_plane_agent_action_batch_run_response(
     run_payload = _materialize_execution_plane_agent_action_run_record(config, record)
     return {
         "status": record.status,
+        "completion_state": run_payload["completion_state"],
+        "completion_message": run_payload["completion_message"],
+        "active_async_task_count": run_payload["active_async_task_count"],
         "selection": record.selection,
         "policy": record.policy,
         "summary": record.summary,
@@ -1355,6 +1541,9 @@ def _execution_plane_agent_action_run_response(
     payload["artifact_ref"] = run_payload["artifact_ref"]
     payload["approval_required"] = run_payload["approval_required"]
     payload["apply_mode"] = run_payload["apply_mode"]
+    payload["completion_state"] = run_payload["completion_state"]
+    payload["completion_message"] = run_payload["completion_message"]
+    payload["active_async_task_count"] = run_payload["active_async_task_count"]
     payload["run"] = run_payload
     payload["idempotent_replay"] = idempotent_replay
     return payload
@@ -1379,7 +1568,14 @@ def _emit_execution_plane_agent_action_batch_run_events(
             project_id,
             event=event_name,
             status=str(record.status or "ok"),
-            message=f"Runtime-agent batch {'preview' if record.dry_run else 'execution'} `{record.id}` recorded.",
+            message=(
+                f"Runtime-agent batch {'preview' if record.dry_run else 'execution'} `{record.id}` recorded."
+                if record.completion_state != "pending_async"
+                else (
+                    f"Runtime-agent batch `{record.id}` launched async follow-through; "
+                    "final completion is not available yet."
+                )
+            ),
             extra={
                 "agent_action_run_id": record.id,
                 "idempotency_key": record.idempotency_key,
@@ -1388,6 +1584,8 @@ def _emit_execution_plane_agent_action_batch_run_events(
                 "dry_run": record.dry_run,
                 "policy_profile": record.policy_profile,
                 "orchestrator_session_id": record.orchestrator_session_id,
+                "completion_state": record.completion_state,
+                "active_async_task_count": len(record.active_async_task_ids),
                 "selected_count": int(summary.get("selected_count") or 0),
                 "processed_count": int(summary.get("processed_count") or 0),
                 "status_counts": status_counts,
@@ -2148,20 +2346,24 @@ def summarize_execution_plane_agent_action_runs(
 ) -> dict[str, Any]:
     """Return aggregate counts across persisted runtime-agent batch runs."""
 
-    records = list_agent_action_batch_runs(
-        config,
-        run_kind=run_kind,
-        orchestrator_session_id=orchestrator_session_id,
-        project_id=project_id,
-        initiative_id=initiative_id,
-        orchestrator=orchestrator,
-        actor=actor,
-        dry_run=dry_run,
-        status=status,
-        idempotency_key=idempotency_key,
-    )
+    records = [
+        _refresh_execution_plane_agent_action_run_record(config, record)
+        for record in list_agent_action_batch_runs(
+            config,
+            run_kind=run_kind,
+            orchestrator_session_id=orchestrator_session_id,
+            project_id=project_id,
+            initiative_id=initiative_id,
+            orchestrator=orchestrator,
+            actor=actor,
+            dry_run=dry_run,
+            status=status,
+            idempotency_key=idempotency_key,
+        )
+    ]
 
     by_status: dict[str, int] = {}
+    by_completion_state: dict[str, int] = {}
     by_run_kind: dict[str, int] = {}
     by_actor: dict[str, int] = {}
     by_policy_profile: dict[str, int] = {}
@@ -2170,6 +2372,8 @@ def summarize_execution_plane_agent_action_runs(
     status_counts_total: dict[str, int] = {}
     for record in records:
         by_status[record.status] = by_status.get(record.status, 0) + 1
+        completion_state = str(record.completion_state or "completed")
+        by_completion_state[completion_state] = by_completion_state.get(completion_state, 0) + 1
         by_run_kind[record.run_kind] = by_run_kind.get(record.run_kind, 0) + 1
         by_actor[record.actor] = by_actor.get(record.actor, 0) + 1
         profile = record.policy_profile or "custom"
@@ -2191,8 +2395,10 @@ def summarize_execution_plane_agent_action_runs(
             "ok": sum(1 for record in records if record.status == "ok"),
             "partial": sum(1 for record in records if record.status == "partial"),
             "error": sum(1 for record in records if record.status == "error"),
+            "pending_async": sum(1 for record in records if record.completion_state == "pending_async"),
         },
         "by_status": by_status,
+        "by_completion_state": by_completion_state,
         "by_run_kind": by_run_kind,
         "by_actor": by_actor,
         "by_policy_profile": by_policy_profile,
@@ -4360,12 +4566,23 @@ def execute_execution_plane_agent_action_with_run(
             linked_issue_ids=linked_issue_ids,
             linked_runtime_agent_ids=[str(action.get("runtime_agent_id") or "")],
         )
+    task_id = str((result.get("async_task") or {}).get("id") or "")
+    if task_id:
+        link_runtime_agent_task_run(config, task_id, agent_action_run_id=run.id)
+    run = _refresh_execution_plane_agent_action_run_record(config, run)
     emit_project_event(
         config,
         str(action.get("project_id") or ""),
         event="execution_plane_agent_action_run_recorded",
         status=str(result.get("status") or "ok"),
-        message=f"Runtime-agent action run `{run.id}` recorded.",
+        message=(
+            f"Runtime-agent action run `{run.id}` recorded."
+            if run.completion_state != "pending_async"
+            else (
+                f"Runtime-agent action run `{run.id}` launched async follow-through; "
+                "final completion is not available yet."
+            )
+        ),
         story_id=action.get("story_id"),
         extra={
             "agent_action_run_id": run.id,
@@ -4374,15 +4591,12 @@ def execute_execution_plane_agent_action_with_run(
             "action_key": action_key,
             "actor": actor,
             "action_mode": mode,
+            "completion_state": run.completion_state,
+            "active_async_task_count": len(run.active_async_task_ids),
             "runtime_agent_id": str(action.get("runtime_agent_id") or ""),
             "runtime_agent_ids": [str(action.get("runtime_agent_id") or "")] if str(action.get("runtime_agent_id") or "").strip() else [],
         },
     )
-    task_id = str((result.get("async_task") or {}).get("id") or "")
-    if task_id:
-        link_runtime_agent_task_run(config, task_id, agent_action_run_id=run.id)
-        run.results = _refresh_result_async_tasks(config, run.results)
-        run = save_agent_action_batch_run(config, run)
     return _execution_plane_agent_action_run_response(config, run, idempotent_replay=False)
 
 
@@ -4826,8 +5040,7 @@ def execute_execution_plane_agent_actions(
         task_id = str((result.get("async_task") or {}).get("id") or "")
         if task_id:
             link_runtime_agent_task_run(config, task_id, agent_action_run_id=run.id)
-    run.results = _refresh_result_async_tasks(config, run.results)
-    run = save_agent_action_batch_run(config, run)
+    run = _refresh_execution_plane_agent_action_run_record(config, run)
     if normalized_session_id:
         linked_approval_ids = [
             str(result.get("approval", {}).get("id") or "")
