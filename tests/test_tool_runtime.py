@@ -10,9 +10,11 @@ from autopilot.core.permission_audit import read_permission_audit_entries
 from autopilot.core.tool_contracts import ToolResult, ToolUseContext, build_tool, get_empty_tool_permission_context
 from autopilot.core.tool_hooks import ToolHookDefinition
 from autopilot.core.tool_permissions import (
+    PermissionContextOverlay,
     PermissionRuleValue,
     PermissionUpdate,
     apply_permission_update,
+    has_permissions_to_use_tool,
     load_tool_permission_context,
     permission_rule_value_from_string,
     permission_rule_value_to_string,
@@ -109,6 +111,54 @@ def test_permission_rule_string_round_trip_canonicalizes_shell_grammar() -> None
     assert rule_value.tool_name == "shell_exec"
     assert rule_value.rule_content == "git status --short"
     assert permission_rule_value_to_string(rule_value) == "shell_exec(git status --short)"
+
+
+def test_load_tool_permission_context_ignores_project_mode_escalation(tmp_path: Path) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    persist_permission_update(
+        config,
+        PermissionUpdate(
+            type="set_mode",
+            destination="project",
+            project_id="proj_123",
+            mode="approved",
+        ),
+    )
+
+    context = load_tool_permission_context(config, project_id="proj_123")
+
+    assert context.mode == "default"
+    assert context.metadata["mode_resolution"]["ignored_project_mode"] == "approved"
+    assert context.metadata["mode_resolution"]["resolved_mode"] == "default"
+
+
+def test_command_overlay_source_wins_over_user_rule_precedence(tmp_path: Path) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    persist_permission_update(
+        config,
+        PermissionUpdate(
+            type="add_rules",
+            destination="user",
+            behavior="ask",
+            rules=[PermissionRuleValue(tool_name="execution.pause")],
+        ),
+    )
+    context = load_tool_permission_context(
+        config,
+        overlays={"command": PermissionContextOverlay(ask_rules=["execution.pause"])},
+    )
+    tool = build_tool(
+        name="execution.pause",
+        description="Pause execution.",
+        approval_policy="policy",
+        execute=lambda tool_input, _: ToolResult(status="ok", payload=tool_input),
+    )
+
+    decision = has_permissions_to_use_tool(tool, {}, context)
+
+    assert decision.behavior == "ask"
+    assert decision.rule_source == "command"
+    assert decision.matched_rule == "execution.pause"
 
 
 def test_tool_runner_permission_hook_can_auto_allow_and_pre_hook_can_mutate_input() -> None:

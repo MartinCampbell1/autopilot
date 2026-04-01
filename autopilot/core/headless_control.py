@@ -29,7 +29,11 @@ from autopilot.core.plugin_storage import get_plugin_option_state
 from autopilot.core.project_store import build_project_summary
 from autopilot.core.structured_io import StructuredIO
 from autopilot.core.tool_contracts import ToolResult, build_tool
-from autopilot.core.tool_permissions import load_tool_permission_context, resolve_tool_permission_decision
+from autopilot.core.tool_permissions import (
+    PermissionContextOverlay,
+    load_tool_permission_context,
+    resolve_tool_permission_decision,
+)
 
 
 def _utcnow_iso() -> str:
@@ -101,10 +105,14 @@ class HeadlessControlSession:
         return load_tool_permission_context(self.config, project_id=self.project_id).mode
 
     def _permission_context(self) -> Any:
-        context = load_tool_permission_context(self.config, project_id=self.project_id)
-        mode = self.resolved_permission_mode()
-        if context.mode != mode:
-            context = context.model_copy(update={"mode": mode})
+        overlays = None
+        if self.permission_mode:
+            overlays = {"session": PermissionContextOverlay(mode=self.permission_mode)}
+        context = load_tool_permission_context(
+            self.config,
+            project_id=self.project_id,
+            overlays=overlays,
+        )
         return sanitize_permission_context_for_mode(context)
 
     def _available_models(self) -> list[dict[str, Any]]:
