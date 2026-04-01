@@ -11,6 +11,7 @@ from autopilot.core.file_snapshot_store import (
     capture_file_snapshot,
     ensure_snapshot_is_current,
 )
+from autopilot.core.secret_scan import assert_no_obvious_secrets
 
 
 class ExactEditError(RuntimeError):
@@ -78,6 +79,7 @@ def apply_exact_edit(
         raise ExactEditError("Target string no longer exists in the current file.")
 
     updated = snapshot.content.replace(actual_old_string, new_string, -1 if replace_all else 1)
+    assert_no_obvious_secrets(updated, path=path)
     path.write_text(updated)
     return updated
 
@@ -87,6 +89,7 @@ def append_with_snapshot(path: Path, snapshot: FileSnapshot, suffix: str) -> str
 
     ensure_snapshot_is_current(path, snapshot)
     updated = f"{snapshot.content}{suffix}"
+    assert_no_obvious_secrets(updated, path=path)
     path.write_text(updated)
     return updated
 
@@ -106,6 +109,7 @@ def append_with_fresh_snapshot(
     if not path.exists():
         suffix = build_suffix(initial_content)
         updated = f"{initial_content}{suffix}"
+        assert_no_obvious_secrets(updated, path=path)
         path.write_text(updated)
         return updated
 
