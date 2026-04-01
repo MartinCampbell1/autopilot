@@ -86,6 +86,10 @@ autopilot status
 autopilot dashboard
 ```
 
+Canonical getting-started guide:
+
+- [docs/quickstart.md](/Users/martin/Desktop/autopilot/docs/quickstart.md)
+
 Useful patterns:
 
 - `autopilot run --headless` emits structured JSON events and a final summary
@@ -95,6 +99,16 @@ Useful patterns:
 - `autopilot live` renders an SSH-friendly snapshot of accounts, projects, stories, and recent events
 
 For the operator-facing path from source item or brief to final PR or handoff artifact, see [docs/workflow.md](/Users/martin/Desktop/autopilot/docs/workflow.md).
+
+## Product Surface
+
+Intake flow for choosing provider, runtime profile, and task source:
+
+![Autopilot intake](docs/assets/intake.png)
+
+Control plane for preview, approval, and execution-state inspection:
+
+![Autopilot control plane](docs/assets/control-plane.png)
 
 ## Local-First Setup
 
@@ -149,6 +163,7 @@ The intake dashboard now lets you choose both `Execution Provider` and `Runtime 
 - [local-only project](/Users/martin/Desktop/autopilot/docs/examples/local-only-project.md)
 - [cloud multi-provider project](/Users/martin/Desktop/autopilot/docs/examples/cloud-multi-provider-project.md)
 - [issue-driven flow](/Users/martin/Desktop/autopilot/docs/examples/issue-driven-flow.md)
+- [quickstart guide](/Users/martin/Desktop/autopilot/docs/quickstart.md)
 
 ## Comparison
 
