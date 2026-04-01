@@ -1,5 +1,9 @@
 "use client";
 import { useCallback, useMemo } from "react";
+import {
+  fetchExecutionPlaneRuntimeAgentTaskOutput,
+  fetchExecutionPlaneRuntimeAgentTaskTranscript,
+} from "@/lib/api";
 import { useSSE } from "@/lib/sse";
 import {
   asRecord,
@@ -213,6 +217,8 @@ export function useControlPlanePageController(
   const {
     handleSSEEvent: handleRuntimeControlSSEEvent,
     requestGetRuntimeAgentActionRun,
+    requestGetRuntimeAgentTaskOutput,
+    requestGetRuntimeAgentTaskTranscript,
   } = runtimeControl;
 
   useSSE(
@@ -225,6 +231,52 @@ export function useControlPlanePageController(
     {
       eventTypes: ["control_request", "control_response"],
     }
+  );
+
+  const loadAsyncTaskOutputArtifact = useCallback(
+    async (task: { id?: string | null; project_id?: string | null }) => {
+      const taskId = toStringValue(task.id);
+      if (!taskId) {
+        throw new Error("Async task is missing an id.");
+      }
+      const projectId = toStringValue(task.project_id);
+      const runtimeProject = projects.find(
+        (project) =>
+          project.id === projectId
+          && Boolean(project.runtime_control_available)
+          && Boolean(toStringValue(project.runtime_session_id))
+      );
+      if (!runtimeProject) {
+        return fetchExecutionPlaneRuntimeAgentTaskOutput(taskId);
+      }
+      return requestGetRuntimeAgentTaskOutput(runtimeProject.id, taskId, {
+        timeoutMs: 5000,
+      });
+    },
+    [projects, requestGetRuntimeAgentTaskOutput]
+  );
+
+  const loadAsyncTaskTranscriptArtifact = useCallback(
+    async (task: { id?: string | null; project_id?: string | null }) => {
+      const taskId = toStringValue(task.id);
+      if (!taskId) {
+        throw new Error("Async task is missing an id.");
+      }
+      const projectId = toStringValue(task.project_id);
+      const runtimeProject = projects.find(
+        (project) =>
+          project.id === projectId
+          && Boolean(project.runtime_control_available)
+          && Boolean(toStringValue(project.runtime_session_id))
+      );
+      if (!runtimeProject) {
+        return fetchExecutionPlaneRuntimeAgentTaskTranscript(taskId);
+      }
+      return requestGetRuntimeAgentTaskTranscript(runtimeProject.id, taskId, {
+        timeoutMs: 5000,
+      });
+    },
+    [projects, requestGetRuntimeAgentTaskTranscript]
   );
 
   const {
@@ -1357,6 +1409,8 @@ export function useControlPlanePageController(
         "No session context is selected."
       );
     },
+    loadAsyncTaskOutputArtifact,
+    loadAsyncTaskTranscriptArtifact,
   });
 
   const headerSectionProps = buildHeaderSectionProps({
