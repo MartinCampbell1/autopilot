@@ -128,6 +128,7 @@ type SelectedSessionContextCardProps = {
   onLoadAsyncTaskTranscriptArtifact?: (
     task: ExecutionRuntimeAgentTaskRecord
   ) => Promise<ExecutionRuntimeAgentTaskTranscriptArtifact>;
+  onRefreshAsyncTask?: (task: ExecutionRuntimeAgentTaskRecord) => void;
   onAdvanceCurrentQueue?: (() => void) | null;
 };
 
@@ -160,10 +161,19 @@ export function SelectedSessionContextCard({
   onDenyToolPermissionRuntime,
   onLoadAsyncTaskOutputArtifact,
   onLoadAsyncTaskTranscriptArtifact,
+  onRefreshAsyncTask,
   onAdvanceCurrentQueue,
 }: SelectedSessionContextCardProps) {
-  const selectedAsyncTaskId =
-    selectedSessionContext?.kind === "async_task" ? selectedSessionContext.task.id : "";
+  const selectedAsyncTaskResetKey =
+    selectedSessionContext?.kind === "async_task"
+      ? [
+          selectedSessionContext.task.id,
+          selectedSessionContext.task.status,
+          selectedSessionContext.task.updated_at,
+          selectedSessionContext.task.output_artifact_ref || "",
+          selectedSessionContext.task.transcript_artifact_ref || "",
+        ].join(":")
+      : "";
   const [taskOutputArtifact, setTaskOutputArtifact] =
     useState<ExecutionRuntimeAgentTaskOutputArtifact | null>(null);
   const [taskTranscriptArtifact, setTaskTranscriptArtifact] =
@@ -184,7 +194,7 @@ export function SelectedSessionContextCard({
     setLoadingTaskTranscript(false);
     setShowTaskOutput(false);
     setShowTaskTranscript(false);
-  }, [selectedAsyncTaskId]);
+  }, [selectedAsyncTaskResetKey]);
 
   async function handleTaskOutputToggle(task: ExecutionRuntimeAgentTaskRecord) {
     const taskId = task.id;
@@ -734,6 +744,21 @@ export function SelectedSessionContextCard({
                           : "Allow"}
                       </Button>
                     </>
+                  )}
+                  {asyncTaskContext && onRefreshAsyncTask && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-8 rounded-lg border-[#d3e5ef] bg-[#eef7fb] text-[12px] text-[#2a6690] hover:bg-[#e3f2f8]"
+                      disabled={Boolean(busyActionKey)}
+                      onClick={() => {
+                        onRefreshAsyncTask(asyncTaskContext);
+                      }}
+                    >
+                      {busyActionKey === `async-task-refresh:${asyncTaskContext.id}`
+                        ? "Refreshing..."
+                        : "Refresh task"}
+                    </Button>
                   )}
                   {runtimeAgentId && (
                     <Button

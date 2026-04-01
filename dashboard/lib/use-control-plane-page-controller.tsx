@@ -217,6 +217,7 @@ export function useControlPlanePageController(
   const {
     handleSSEEvent: handleRuntimeControlSSEEvent,
     requestGetRuntimeAgentActionRun,
+    requestGetRuntimeAgentTask,
     requestGetRuntimeAgentTaskOutput,
     requestGetRuntimeAgentTaskTranscript,
   } = runtimeControl;
@@ -277,6 +278,63 @@ export function useControlPlanePageController(
       });
     },
     [projects, requestGetRuntimeAgentTaskTranscript]
+  );
+
+  const refreshAsyncTask = useCallback(
+    async (task: { id?: string | null; project_id?: string | null; runtime_agent_ids?: string[] }) => {
+      const taskId = toStringValue(task.id);
+      if (!taskId) return;
+      setBusyActionKey(`async-task-refresh:${taskId}`);
+      setNotice("");
+      setErrorMessage("");
+      try {
+        const projectId = toStringValue(task.project_id);
+        const runtimeProject = projects.find(
+          (project) =>
+            project.id === projectId
+            && Boolean(project.runtime_control_available)
+            && Boolean(toStringValue(project.runtime_session_id))
+        );
+        const refreshedTask = runtimeProject
+          ? await requestGetRuntimeAgentTask(runtimeProject.id, taskId, {
+              timeoutMs: 5000,
+            })
+          : null;
+        if (selectedSessionId) {
+          await loadSessionDetail(selectedSessionId);
+        }
+        const selectedOrTaskAgentId =
+          (selectedAgentId &&
+          (refreshedTask?.runtime_agent_ids || task.runtime_agent_ids || []).includes(selectedAgentId))
+            ? selectedAgentId
+            : toStringValue((refreshedTask?.runtime_agent_ids || task.runtime_agent_ids || [])[0]);
+        if (selectedOrTaskAgentId) {
+          await loadAgentDetail(selectedOrTaskAgentId);
+        }
+        setNotice(
+          refreshedTask
+            ? `Task ${taskId} status is ${toStringValue(refreshedTask.status, "unknown")}.`
+            : `Task ${taskId} snapshot refreshed.`
+        );
+      } catch (error) {
+        setErrorMessage(
+          error instanceof Error ? error.message : "Failed to refresh async task."
+        );
+      } finally {
+        setBusyActionKey("");
+      }
+    },
+    [
+      loadAgentDetail,
+      loadSessionDetail,
+      projects,
+      requestGetRuntimeAgentTask,
+      selectedAgentId,
+      selectedSessionId,
+      setBusyActionKey,
+      setErrorMessage,
+      setNotice,
+    ]
   );
 
   const {
@@ -1411,6 +1469,7 @@ export function useControlPlanePageController(
     },
     loadAsyncTaskOutputArtifact,
     loadAsyncTaskTranscriptArtifact,
+    refreshAsyncTask,
   });
 
   const headerSectionProps = buildHeaderSectionProps({
