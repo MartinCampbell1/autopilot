@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 import shlex
 
+from autopilot.core.read_only_validation import validate_gate_command_policy
 from autopilot.core.shell_validation import validate_shell_security
 
 WORKTREE_NAME_PATTERN = re.compile(r"^(?P<name>.+)-story-(?P<story_id>\d+)$")
@@ -167,6 +168,10 @@ def validate_gate_shell_command(command: str) -> ShellCommandValidationResult:
             False,
             reason="Gate command `find` cannot use mutating operators such as `-delete` or `-exec`.",
         )
+
+    policy_result = validate_gate_command_policy(executable_argv)
+    if not policy_result.allowed:
+        return ShellCommandValidationResult(False, reason=policy_result.reason)
 
     for token in executable_argv[1:]:
         if not _looks_like_path_token(token):

@@ -86,15 +86,45 @@ class TestRunSingleGate:
         mock_run.assert_not_called()
 
     def test_gate_supports_leading_env_assignments(self, tmp_path: Path) -> None:
+        marker = tmp_path / "env-check.txt"
+        bin_dir = tmp_path / ".venv" / "bin"
+        bin_dir.mkdir(parents=True)
+        script = bin_dir / "pytest"
+        script.write_text(
+            "#!/bin/sh\n"
+            "printf '%s' \"$FOUNDEROS_GATE_OK\" > "
+            f"{marker}\n"
+            "exit 0\n"
+        )
+        script.chmod(script.stat().st_mode | S_IXUSR)
+
         result = run_single_gate(
             "env-check",
-            "FOUNDEROS_GATE_OK=1 python3 -c 'import os; print(os.environ[\"FOUNDEROS_GATE_OK\"])'",
+            "FOUNDEROS_GATE_OK=1 pytest -q",
             tmp_path,
             required=True,
         )
 
         assert result.passed is True
-        assert result.output == "1"
+        assert marker.read_text() == "1"
+
+    @patch("autopilot.core.gates.subprocess.run")
+    def test_gate_rejects_unknown_verification_script_before_execution(self, mock_run: MagicMock) -> None:
+        result = run_single_gate("deploy", "npm run deploy", Path("/tmp"), required=True)
+
+        assert result.passed is False
+        assert result.exit_semantics == "denied"
+        assert "verification-safe allowlist" in result.output.lower()
+        mock_run.assert_not_called()
+
+    @patch("autopilot.core.gates.subprocess.run")
+    def test_gate_rejects_git_write_subcommand_before_execution(self, mock_run: MagicMock) -> None:
+        result = run_single_gate("checkout", "git checkout README.md", Path("/tmp"), required=True)
+
+        assert result.passed is False
+        assert result.exit_semantics == "denied"
+        assert "read-only allowlist" in result.output.lower()
+        mock_run.assert_not_called()
 
     @patch("autopilot.core.gates.subprocess.run")
     def test_gate_reports_grep_no_match_semantics(self, mock_run: MagicMock) -> None:

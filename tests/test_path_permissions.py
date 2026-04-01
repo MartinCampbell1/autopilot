@@ -89,3 +89,44 @@ def test_validate_gate_shell_command_rejects_suspicious_unicode_whitespace() -> 
 
     assert result.allowed is False
     assert "unicode whitespace" in result.reason.lower()
+
+
+def test_validate_gate_shell_command_accepts_git_diff_with_string_search_flag() -> None:
+    result = validate_gate_shell_command("git diff -S needle -- README.md")
+
+    assert result.allowed is True
+    assert result.argv == ("git", "diff", "-S", "needle", "--", "README.md")
+
+
+def test_validate_gate_shell_command_rejects_git_checkout_write_subcommand() -> None:
+    result = validate_gate_shell_command("git checkout README.md")
+
+    assert result.allowed is False
+    assert "read-only allowlist" in result.reason.lower()
+
+
+def test_validate_gate_shell_command_rejects_inline_python_eval() -> None:
+    result = validate_gate_shell_command("python3 -c 'print(1)'")
+
+    assert result.allowed is False
+    assert "inline python" in result.reason.lower()
+
+
+def test_validate_gate_shell_command_rejects_unknown_package_script() -> None:
+    result = validate_gate_shell_command("npm run deploy")
+
+    assert result.allowed is False
+    assert "verification-safe allowlist" in result.reason.lower()
+
+
+def test_validate_gate_shell_command_accepts_autodetected_gate_families() -> None:
+    allowed_commands = [
+        "pnpm run build",
+        "ruff check autopilot tests",
+        "cargo clippy --all-targets --all-features -- -D warnings",
+        "go test ./...",
+    ]
+
+    for command in allowed_commands:
+        result = validate_gate_shell_command(command)
+        assert result.allowed is True, command
