@@ -10,6 +10,7 @@ import yaml
 from autopilot.core.config import AutopilotConfig, ProviderConfig
 from autopilot.core.models import StoryDependencyError
 from autopilot.core.project_store import (
+    append_guidance,
     auto_pause_project_run,
     build_project_detail,
     build_project_summary,
@@ -168,6 +169,24 @@ def test_build_project_summary_exposes_runtime_control_availability(tmp_path: Pa
     summary = build_project_summary(config, project)
 
     assert summary["runtime_control_available"] is False
+
+
+def test_append_guidance_appends_human_entries_to_guardrails_markdown(tmp_path: Path) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    project_dir = tmp_path / "guided-project"
+    project_dir.mkdir(parents=True)
+
+    project = register_project(config, name="Guided Project", project_path=project_dir)
+
+    append_guidance(config, project["id"], "Use smaller commits.")
+    append_guidance(config, project["id"], "Run tests before handoff.")
+
+    guardrails = (project_dir / ".ralph" / "guardrails.md").read_text()
+
+    assert guardrails.startswith("# Guardrails\n\nDo not repeat these mistakes:\n\n")
+    assert "- [HUMAN]: Use smaller commits." in guardrails
+    assert guardrails.count("- [HUMAN]:") == 2
+    assert guardrails.rstrip().endswith("- [HUMAN]: Run tests before handoff.")
 
 
 def test_normalize_prd_enriches_story_routing_and_phases() -> None:
