@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
@@ -45,11 +47,13 @@ from autopilot.core.execution_plane import (
     get_execution_plane_runtime_agent_task,
     get_execution_plane_runtime_agent_task_output,
     get_execution_plane_runtime_agent_task_transcript,
+    get_execution_plane_tool_permission_runtime,
     summarize_execution_plane_orchestrator_session_actions,
     summarize_execution_plane_orchestrator_session_control_passes,
     summarize_execution_plane_orchestrator_sessions,
     summarize_execution_plane_agent_action_runs,
     summarize_execution_plane_agents,
+    resolve_execution_plane_tool_permission_runtime,
     update_execution_plane_orchestrator_session_status,
     update_project_command_policy,
 )
@@ -104,6 +108,12 @@ class ExecutionCommandRequest(BaseModel):
 class ApprovalDecisionRequest(BaseModel):
     actor: str = "human"
     note: str = ""
+
+
+class ToolPermissionRuntimeDecisionRequest(BaseModel):
+    actor: str = "human"
+    note: str = ""
+    source: Literal["user", "channel"] = "user"
 
 
 class AgentActionExecutionRequest(BaseModel):
@@ -1377,6 +1387,66 @@ async def apply_execution_approval(approval_id: str, request: ApprovalDecisionRe
         raise HTTPException(404, f"Approval {approval_id} not found") from exc
     except (RuntimeError, ValueError) as exc:
         raise HTTPException(409, str(exc)) from exc
+
+
+@router.get("/tool-permission-runtimes/{approval_runtime_id}")
+async def get_tool_permission_runtime_detail(approval_runtime_id: str) -> dict[str, object]:
+    config = get_config()
+    try:
+        runtime = get_execution_plane_tool_permission_runtime(config, approval_runtime_id)
+    except KeyError as exc:
+        raise HTTPException(404, f"Tool-permission runtime {approval_runtime_id} not found") from exc
+    return {"runtime": runtime}
+
+
+@router.post("/tool-permission-runtimes/{approval_runtime_id}/allow")
+async def allow_tool_permission_runtime(
+    approval_runtime_id: str,
+    request: ToolPermissionRuntimeDecisionRequest | None = None,
+) -> dict[str, object]:
+    config = get_config()
+    payload = request or ToolPermissionRuntimeDecisionRequest()
+    try:
+        runtime = resolve_execution_plane_tool_permission_runtime(
+            config,
+            approval_runtime_id=approval_runtime_id,
+            outcome="allow",
+            actor=payload.actor,
+            note=payload.note,
+            source=payload.source,
+        )
+    except KeyError as exc:
+        raise HTTPException(404, f"Tool-permission runtime {approval_runtime_id} not found") from exc
+    except RuntimeError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"status": "ok", "runtime": runtime}
+
+
+@router.post("/tool-permission-runtimes/{approval_runtime_id}/deny")
+async def deny_tool_permission_runtime(
+    approval_runtime_id: str,
+    request: ToolPermissionRuntimeDecisionRequest | None = None,
+) -> dict[str, object]:
+    config = get_config()
+    payload = request or ToolPermissionRuntimeDecisionRequest()
+    try:
+        runtime = resolve_execution_plane_tool_permission_runtime(
+            config,
+            approval_runtime_id=approval_runtime_id,
+            outcome="deny",
+            actor=payload.actor,
+            note=payload.note,
+            source=payload.source,
+        )
+    except KeyError as exc:
+        raise HTTPException(404, f"Tool-permission runtime {approval_runtime_id} not found") from exc
+    except RuntimeError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"status": "ok", "runtime": runtime}
 
 
 @router.post("/projects/from-brief")

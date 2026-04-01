@@ -8,7 +8,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -55,6 +55,7 @@ from autopilot.core.approvals import (
     save_approval,
 )
 from autopilot.core.approval_runtime import create_or_reuse_approval_runtime
+from autopilot.core.tool_permission_runtime import get_tool_permission_runtime, resolve_tool_permission_runtime
 from autopilot.core.agent_action_runs import (
     AgentActionBatchRunRecord,
     create_agent_action_batch_run,
@@ -5291,6 +5292,40 @@ def apply_execution_command_approval(
         "approval": applied.model_dump(),
         "command_result": command_result,
     }
+
+
+def get_execution_plane_tool_permission_runtime(
+    config: AutopilotConfig,
+    approval_runtime_id: str,
+) -> dict[str, Any]:
+    """Return one tool-permission runtime context for external control consumers."""
+
+    runtime = get_tool_permission_runtime(config, approval_runtime_id)
+    if runtime is None:
+        raise KeyError(approval_runtime_id)
+    return runtime.model_dump()
+
+
+def resolve_execution_plane_tool_permission_runtime(
+    config: AutopilotConfig,
+    *,
+    approval_runtime_id: str,
+    outcome: Literal["allow", "deny"],
+    actor: str,
+    note: str = "",
+    source: Literal["user", "channel"] = "user",
+) -> dict[str, Any]:
+    """Resolve one explicit tool-permission runtime through user/channel control."""
+
+    runtime = resolve_tool_permission_runtime(
+        config,
+        approval_runtime_id,
+        outcome=outcome,
+        actor=actor,
+        note=note,
+        source=source,
+    )
+    return runtime.model_dump()
 
 
 def ingest_execution_brief_project(
