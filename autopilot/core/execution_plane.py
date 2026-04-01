@@ -105,6 +105,7 @@ from autopilot.core.runtime_agent_tasks import (
 )
 from autopilot.core.runtime_budgets import ensure_budget_state
 from autopilot.core.runtime_control import list_project_work_item_leases
+from autopilot.core.task_output import get_task_output, read_task_output_text
 from autopilot.core.workspace_policy import inspect_project_workspace_policy
 
 EXECUTION_BRIEF_RELPATH = ".agents/tasks/execution-brief.json"
@@ -1248,6 +1249,12 @@ def _materialize_execution_plane_runtime_agent_task_record(
 ) -> dict[str, Any]:
     payload = record.model_dump()
     payload["artifact_ref"] = f"/api/execution-plane/agents/tasks/{record.id}"
+    payload["output_artifact_ref"] = (
+        f"/api/execution-plane/agents/tasks/{record.id}/output"
+        if str(record.output_artifact_id or "").strip()
+        else ""
+    )
+    payload["output_available"] = bool(str(record.output_artifact_id or "").strip())
     payload["active"] = record.status in {"queued", "running"}
     payload["terminal"] = record.status in {"completed", "failed", "cancelled"}
     return payload
@@ -2460,6 +2467,32 @@ def get_execution_plane_runtime_agent_task(
     if task is None:
         raise KeyError(task_id)
     return _materialize_execution_plane_runtime_agent_task_record(refresh_runtime_agent_task(config, task))
+
+
+def get_execution_plane_runtime_agent_task_output(
+    config: AutopilotConfig,
+    task_id: str,
+) -> dict[str, Any]:
+    """Load one durable output artifact for an async runtime-agent task."""
+
+    task = get_runtime_agent_task(config, task_id)
+    if task is None:
+        raise KeyError(task_id)
+    task = refresh_runtime_agent_task(config, task)
+    output_artifact_id = str(task.output_artifact_id or "").strip()
+    if not output_artifact_id:
+        raise FileNotFoundError(task_id)
+
+    output_record = get_task_output(config, output_artifact_id)
+    if output_record is None:
+        raise FileNotFoundError(output_artifact_id)
+
+    return {
+        **output_record.model_dump(),
+        "task_id": task.id,
+        "artifact_ref": f"/api/execution-plane/agents/tasks/{task.id}/output",
+        "content": read_task_output_text(config, output_artifact_id),
+    }
 
 
 def list_execution_plane_orchestrator_sessions(

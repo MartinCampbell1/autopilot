@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 
 from autopilot.core.config import AutopilotConfig
 from autopilot.core.project_store import emit_project_event, ensure_project_state, get_project_entry
+from autopilot.core.task_output import load_text_from_source, persist_task_output
 
 SUPPORTED_RUNTIME_AGENT_TASK_STATUSES = {
     "queued",
@@ -71,6 +72,8 @@ class RuntimeAgentTaskRecord(BaseModel):
     result_summary: str = ""
     result_payload: dict[str, Any] = Field(default_factory=dict)
     output_path: str = ""
+    output_artifact_id: str = ""
+    output_preview: str = ""
     metadata: dict[str, Any] = Field(default_factory=dict)
     created_at: str
     updated_at: str
@@ -197,6 +200,7 @@ def _emit_runtime_agent_task_event(
         "command": task.command,
         "runtime_agent_id": task.runtime_agent_id,
         "runtime_agent_ids": list(task.runtime_agent_ids),
+        "output_artifact_id": task.output_artifact_id,
     }
     emit_project_event(
         config,
@@ -335,12 +339,42 @@ def _state_is_newer_than_task(state: dict[str, Any], task: RuntimeAgentTaskRecor
 
 
 def _terminal_task_update(
+    config: AutopilotConfig,
     task: RuntimeAgentTaskRecord,
     *,
     status: str,
     summary: str,
     project_state: dict[str, Any],
 ) -> RuntimeAgentTaskRecord:
+    output_source_path = str(project_state.get("log_path") or task.output_path or "").strip()
+    source_output = load_text_from_source(output_source_path)
+    fallback_output = "\n".join(
+        [
+            f"Task: {task.id}",
+            f"Command: {task.command}",
+            f"Status: {status}",
+            f"Summary: {summary}",
+            f"Project status: {str(project_state.get('status') or '')}",
+            f"Finished at: {str(project_state.get('finished_at') or '')}",
+            f"Last error: {str(project_state.get('last_error') or '')}",
+            f"Log path: {output_source_path}",
+        ]
+    ).strip()
+    output_record = persist_task_output(
+        config,
+        owner_kind="runtime_agent_task",
+        owner_id=task.id,
+        content=source_output or fallback_output,
+        source_path=output_source_path,
+        metadata={
+            "project_id": task.project_id,
+            "orchestrator_session_id": task.orchestrator_session_id,
+            "agent_action_run_id": task.agent_action_run_id,
+            "command": task.command,
+            "status": status,
+        },
+    )
+
     task.status = status
     task.placeholder_result = ""
     task.result_summary = summary
@@ -350,7 +384,11 @@ def _terminal_task_update(
         "finished_at": project_state.get("finished_at"),
         "last_error": project_state.get("last_error"),
         "log_path": project_state.get("log_path"),
+        "output_artifact_id": output_record.id,
+        "output_source_path": output_source_path,
     }
+    task.output_artifact_id = output_record.id
+    task.output_preview = output_record.preview
     task.completed_at = str(project_state.get("finished_at") or "").strip() or _utcnow_iso()
     return task
 
@@ -426,6 +464,7 @@ def refresh_runtime_agent_task(
     next_status, event_status, summary = transition
     prior_status = task.status
     task = _terminal_task_update(
+        config,
         task,
         status=next_status,
         summary=summary,

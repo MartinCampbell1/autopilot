@@ -1227,7 +1227,10 @@ def test_execution_plane_orchestrator_session_tracks_async_tasks_honestly(
     state["status"] = "completed"
     state["paused"] = False
     state["finished_at"] = "2026-04-01T12:34:56+00:00"
-    state["log_path"] = str(config.autopilot_home / "logs" / f"{project_id}.log")
+    log_path = config.autopilot_home / "logs" / f"{project_id}.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path.write_text("launch started\nlaunch finished\n", encoding="utf-8")
+    state["log_path"] = str(log_path)
     save_project_state(config, project_id, state)
 
     refreshed_detail_response = client.get(f"/api/execution-plane/orchestrator-sessions/{session['id']}")
@@ -1236,10 +1239,18 @@ def test_execution_plane_orchestrator_session_tracks_async_tasks_honestly(
     assert refreshed_detail["async_tasks"][0]["id"] == task.id
     assert refreshed_detail["async_tasks"][0]["status"] == "completed"
     assert refreshed_detail["async_tasks"][0]["result_summary"] == "Background run completed."
+    assert refreshed_detail["async_tasks"][0]["output_artifact_ref"].endswith(f"/{task.id}/output")
     assert refreshed_detail["runtime_state"] == "requires_action"
     assert refreshed_detail["pending_action"]["kind"] == "complete_session"
     assert refreshed_detail["summary"]["active_async_task_count"] == 0
     assert refreshed_detail["summary"]["by_event"]["execution_plane_runtime_agent_task_completed"] >= 1
+
+    output_response = client.get(f"/api/execution-plane/agents/tasks/{task.id}/output")
+    assert output_response.status_code == 200
+    output_payload = output_response.json()
+    assert output_payload["task_id"] == task.id
+    assert output_payload["artifact_ref"].endswith(f"/{task.id}/output")
+    assert "launch finished" in output_payload["content"]
 
 
 @patch("autopilot.core.execution_plane.generate_prd_from_spec")
