@@ -7,7 +7,12 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from autopilot.core.approval_runtime import create_or_reuse_approval_runtime
+from autopilot.core.approval_runtime import (
+    annotate_approval_runtime,
+    create_or_reuse_approval_runtime,
+    settle_approval_runtime,
+    wait_for_approval_runtime_resolution,
+)
 from autopilot.core.structured_runtime import get_active_structured_io
 from autopilot.core.tool_contracts import (
     ToolDef,
@@ -40,6 +45,70 @@ class ToolRunResult(BaseModel):
     hooks: list[HookExecutionRecord] = Field(default_factory=list)
 
 
+def _tool_permission_runtime_key(
+    tool: ToolDef,
+    use_context: ToolUseContext,
+    tool_use_id: str,
+) -> str:
+    normalized_project_id = str(use_context.project_id or "").strip()
+    normalized_tool_use_id = str(tool_use_id or "").strip()
+    if not normalized_project_id or not normalized_tool_use_id:
+        return ""
+    return f"tool-permission:{normalized_project_id}:{tool.name}:{normalized_tool_use_id}"
+
+
+def _ensure_tool_permission_runtime(
+    tool: ToolDef,
+    use_context: ToolUseContext,
+    *,
+    tool_use_id: str,
+    permission_source: str,
+) -> str:
+    if use_context.config is None:
+        return ""
+    runtime_key = _tool_permission_runtime_key(tool, use_context, tool_use_id)
+    if not runtime_key:
+        return ""
+    runtime = create_or_reuse_approval_runtime(
+        use_context.config,
+        key=runtime_key,
+        project_id=use_context.project_id,
+        runtime_agent_ids=use_context.runtime_agent_ids,
+        metadata={
+            "kind": "tool_permission_request",
+            "tool_name": tool.name,
+            "tool_use_id": tool_use_id,
+            "actor": use_context.actor,
+            "source": permission_source,
+        },
+    )
+    use_context.metadata["approval_runtime_id"] = runtime.id
+    return runtime_key
+
+
+def _permission_decision_from_runtime(
+    *,
+    runtime_record: Any,
+) -> PermissionDecision | None:
+    behavior = str(getattr(runtime_record, "outcome", "") or "").strip().lower()
+    if behavior not in {"allow", "ask", "deny"}:
+        return None
+    payload = dict(getattr(runtime_record, "payload", {}) or {})
+    reasons = [str(reason) for reason in payload.get("reasons") or [] if str(reason).strip()]
+    message = str(getattr(runtime_record, "message", "") or payload.get("message") or "").strip()
+    if not reasons and message:
+        reasons = [message]
+    return PermissionDecision(
+        behavior=behavior,
+        message=message,
+        reasons=reasons,
+        rule_source=payload.get("rule_source"),
+        matched_rule=payload.get("matched_rule"),
+        denial_count=int(payload.get("denial_count") or 0),
+        escalation_required=bool(payload.get("escalation_required")),
+    )
+
+
 def _bridge_permission_decision(
     tool: ToolDef,
     tool_input: dict[str, Any],
@@ -68,6 +137,12 @@ def _bridge_permission_decision(
         or tool_input.get("tool_use_id")
         or f"toolu_{uuid.uuid4().hex[:12]}"
     ).strip()
+    runtime_key = _ensure_tool_permission_runtime(
+        tool,
+        use_context,
+        tool_use_id=tool_use_id,
+        permission_source="tool_runner.bridge",
+    )
     request_id = f"perm_{tool_use_id}"
     try:
         response = runtime.send_request(
@@ -85,10 +160,34 @@ def _bridge_permission_decision(
             request_id=request_id,
         )
     except (TimeoutError, RuntimeError, ValueError):
+        if runtime_key and use_context.config is not None:
+            try:
+                runtime_record = wait_for_approval_runtime_resolution(
+                    use_context.config,
+                    key=runtime_key,
+                    wait_timeout_sec=timeout,
+                )
+            except (KeyError, TimeoutError):
+                return None, "tool_runner.bridge_fallback"
+            runtime_decision = _permission_decision_from_runtime(runtime_record=runtime_record)
+            if runtime_decision is not None:
+                return runtime_decision, "tool_runner.bridge_runtime_fallback"
         return None, "tool_runner.bridge_fallback"
 
     behavior = str(response.get("behavior") or "").strip().lower()
     if behavior not in {"allow", "ask", "deny"}:
+        if runtime_key and use_context.config is not None:
+            try:
+                runtime_record = wait_for_approval_runtime_resolution(
+                    use_context.config,
+                    key=runtime_key,
+                    wait_timeout_sec=timeout,
+                )
+            except (KeyError, TimeoutError):
+                return None, "tool_runner.bridge_fallback"
+            runtime_decision = _permission_decision_from_runtime(runtime_record=runtime_record)
+            if runtime_decision is not None:
+                return runtime_decision, "tool_runner.bridge_runtime_fallback"
         return None, "tool_runner.bridge_fallback"
 
     try:
@@ -103,6 +202,50 @@ def _bridge_permission_decision(
         )
     except Exception:
         return None, "tool_runner.bridge_fallback"
+
+    if runtime_key and use_context.config is not None:
+        if decision.behavior == "ask":
+            annotate_approval_runtime(
+                use_context.config,
+                key=runtime_key,
+                metadata_updates={
+                    "bridge_decision": {
+                        "behavior": decision.behavior,
+                        "message": decision.message,
+                        "rule_source": decision.rule_source,
+                        "matched_rule": decision.matched_rule,
+                    }
+                },
+                payload_updates={
+                    "bridge_decision": {
+                        "reasons": list(decision.reasons),
+                        "tool_name": tool.name,
+                        "tool_use_id": tool_use_id,
+                    }
+                },
+            )
+            return decision, "tool_runner.bridge"
+        runtime_record = settle_approval_runtime(
+            use_context.config,
+            key=runtime_key,
+            source="bridge",
+            outcome=decision.behavior,
+            message=decision.message,
+            payload={
+                "reasons": list(decision.reasons),
+                "rule_source": decision.rule_source,
+                "matched_rule": decision.matched_rule,
+                "denial_count": decision.denial_count,
+                "escalation_required": decision.escalation_required,
+                "tool_name": tool.name,
+                "tool_use_id": tool_use_id,
+            },
+            mailbox_message_type=f"permission_bridge_{decision.behavior}",
+        )
+        runtime_decision = _permission_decision_from_runtime(runtime_record=runtime_record)
+        if runtime_decision is not None:
+            bridge_source = "tool_runner.bridge" if runtime_record.winner_source == "bridge" else "tool_runner.bridge_runtime"
+            return runtime_decision, bridge_source
 
     return decision, "tool_runner.bridge"
 
