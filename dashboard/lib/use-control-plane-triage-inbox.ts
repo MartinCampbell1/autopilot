@@ -4,6 +4,42 @@ import { agentTimelineEntryKey } from "@/lib/control-plane-linking";
 import { agentTimelineEntryStatusClass, agentTimelinePriority, sessionLineagePriority } from "@/lib/control-plane-triage";
 import { passStatusClass } from "@/lib/control-plane-ui";
 
+function formatToolPermissionStage(value?: string | null): string {
+  const normalized = (value || "").trim();
+  if (normalized === "pending_user") return "Waiting for user";
+  if (normalized === "pending_hook") return "Waiting for hook";
+  if (normalized === "pending_classifier") return "Waiting for classifier";
+  return normalized ? normalized.replaceAll("_", " ") : "Pending";
+}
+
+function triageLabelForSessionLineageEntry(
+  entry: SessionLineageEntry,
+  fallback: string
+): string {
+  if (entry.toolPermissionRuntimeId) {
+    return "Session Tool Gate";
+  }
+  return fallback;
+}
+
+function triageQueueDetailForSessionLineageEntry(
+  entry: SessionLineageEntry,
+  queuedCount: number
+): string {
+  if (entry.toolPermissionRuntimeId) {
+    return `${queuedCount} queued · ${formatToolPermissionStage(entry.toolPermissionPendingStage)}`;
+  }
+  return `${queuedCount} queued`;
+}
+
+function triageSubtitleForSessionLineageEntry(entry: SessionLineageEntry): string {
+  if (entry.toolPermissionRuntimeId) {
+    const toolUseId = entry.toolPermissionToolUseId || entry.toolPermissionRuntimeId;
+    return `${formatToolPermissionStage(entry.toolPermissionPendingStage)} · use ${toolUseId}`;
+  }
+  return `run ${entry.runId} · outcome ${entry.resultIndex + 1}`;
+}
+
 type UseControlPlaneTriageInboxArgs = {
   nextAttentionSessionLineageEntry: SessionLineageEntry | null;
   attentionSessionLineageEntries: SessionLineageEntry[];
@@ -76,10 +112,16 @@ export function useControlPlaneTriageInbox({
         nextAttentionSessionLineageEntry
           ? {
               key: "session-attention",
-              label: "Session Attention",
-              queueDetail: `${attentionSessionLineageEntries.length} queued`,
+              label: triageLabelForSessionLineageEntry(
+                nextAttentionSessionLineageEntry,
+                "Session Attention"
+              ),
+              queueDetail: triageQueueDetailForSessionLineageEntry(
+                nextAttentionSessionLineageEntry,
+                attentionSessionLineageEntries.length
+              ),
               title: nextAttentionSessionLineageEntry.title,
-              subtitle: `run ${nextAttentionSessionLineageEntry.runId} · outcome ${nextAttentionSessionLineageEntry.resultIndex + 1}`,
+              subtitle: triageSubtitleForSessionLineageEntry(nextAttentionSessionLineageEntry),
               timestamp: nextAttentionSessionLineageEntry.timestamp,
               status: nextAttentionSessionLineageEntry.status,
               statusClassName: passStatusClass(nextAttentionSessionLineageEntry.status),
@@ -100,10 +142,16 @@ export function useControlPlaneTriageInbox({
         nextDecisionSessionLineageEntry
           ? {
               key: "session-decisions",
-              label: "Session Decision",
-              queueDetail: `${decisionSessionLineageEntries.length} queued`,
+              label: triageLabelForSessionLineageEntry(
+                nextDecisionSessionLineageEntry,
+                "Session Decision"
+              ),
+              queueDetail: triageQueueDetailForSessionLineageEntry(
+                nextDecisionSessionLineageEntry,
+                decisionSessionLineageEntries.length
+              ),
               title: nextDecisionSessionLineageEntry.title,
-              subtitle: `run ${nextDecisionSessionLineageEntry.runId} · outcome ${nextDecisionSessionLineageEntry.resultIndex + 1}`,
+              subtitle: triageSubtitleForSessionLineageEntry(nextDecisionSessionLineageEntry),
               timestamp: nextDecisionSessionLineageEntry.timestamp,
               status: nextDecisionSessionLineageEntry.status,
               statusClassName: passStatusClass(nextDecisionSessionLineageEntry.status),
