@@ -90,6 +90,8 @@ type LinkedDecisionsCardProps = {
   onInspectIssue: (issue: ExecutionIssueRecord) => void;
   onInspectToolPermissionRuntime: (runtime: ToolPermissionRuntimeRecord) => void;
   onInspectAsyncTask: (task: ExecutionRuntimeAgentTaskRecord) => void;
+  onRefreshAsyncTask?: (task: ExecutionRuntimeAgentTaskRecord) => void;
+  onWaitForAsyncTaskSettlement?: (task: ExecutionRuntimeAgentTaskRecord) => void;
   onApproveApproval: (approval: ExecutionApprovalRecord) => void;
   onRejectApproval: (approval: ExecutionApprovalRecord) => void;
   onApplyApproval: (approval: ExecutionApprovalRecord) => void;
@@ -121,6 +123,8 @@ export function LinkedDecisionsCard({
   onInspectIssue,
   onInspectToolPermissionRuntime,
   onInspectAsyncTask,
+  onRefreshAsyncTask,
+  onWaitForAsyncTaskSettlement,
   onApproveApproval,
   onRejectApproval,
   onApplyApproval,
@@ -192,6 +196,32 @@ export function LinkedDecisionsCard({
               >
                 {selected ? "Selected" : "Inspect"}
               </Button>
+              {onRefreshAsyncTask && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-7 rounded-lg border-[#d3e5ef] bg-[#eef7fb] px-2 text-[11px] text-[#2a6690] hover:bg-[#e3f2f8]"
+                  disabled={Boolean(busyActionKey)}
+                  onClick={() => {
+                    onRefreshAsyncTask(task);
+                  }}
+                >
+                  {busyActionKey === `async-task-refresh:${task.id}` ? "Refreshing..." : "Refresh"}
+                </Button>
+              )}
+              {onWaitForAsyncTaskSettlement && !task.terminal && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-7 rounded-lg border-[#d6e9dc] bg-[#eef8f1] px-2 text-[11px] text-[#2b6e3f] hover:bg-[#e4f3e8]"
+                  disabled={Boolean(busyActionKey)}
+                  onClick={() => {
+                    onWaitForAsyncTaskSettlement(task);
+                  }}
+                >
+                  {busyActionKey === `async-task-wait:${task.id}` ? "Waiting..." : "Wait"}
+                </Button>
+              )}
               {relatedRun && (
                 <Button
                   size="sm"
