@@ -49,6 +49,7 @@ from autopilot.core.runtime_budgets import (
     update_budget_policy,
 )
 from autopilot.core.runtime_env import build_runtime_base_env
+from autopilot.core.tool_permission_runtime import list_tool_permission_runtimes
 
 TIMELINE_LIMIT = 300
 DISCOVERY_BOARD_LIMIT = 200
@@ -1803,6 +1804,10 @@ def build_project_summary(config: AutopilotConfig, project: dict[str, Any]) -> d
     launch_profile, provider_config, runtime_profile = _resolve_launch_contract(config, state.get("launch_profile"))
     stories = merge_project_stories(config, project, state)
     stories_done, stories_total = _project_progress_counts(stories)
+    tool_permission_runtimes = list_tool_permission_runtimes(config, project_id=str(project["id"]))
+    pending_tool_permission_runtimes = [
+        runtime for runtime in tool_permission_runtimes if str(runtime.status or "").strip() == "pending"
+    ]
     latest_handoff = _build_project_handoff_summary(stories)
     delivery_loop = _build_project_delivery_loop(project, state, stories)
     delivery_status = _build_project_delivery_status(delivery_loop)
@@ -1829,6 +1834,8 @@ def build_project_summary(config: AutopilotConfig, project: dict[str, Any]) -> d
             and str(state.get("status") or "") == "running"
             and not bool(state.get("paused"))
         ),
+        "tool_permission_runtime_count": len(tool_permission_runtimes),
+        "pending_tool_permission_runtime_count": len(pending_tool_permission_runtimes),
         "launch_profile": launch_profile,
         "provider_config": provider_config,
         "runtime_profile": runtime_profile,

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { requestProjectRuntimeControl } from "@/lib/api";
 import type {
   ControlRequestMessage,
@@ -8,12 +8,24 @@ import type {
   ProjectRuntimeControlExchangeRecord,
   ProjectRuntimeControlRequestResult,
   ProjectSummary,
+  ToolPermissionRuntimeListResponse,
+  ToolPermissionRuntimeRecord,
 } from "@/lib/types";
 
 const DEFAULT_HISTORY_LIMIT = 6;
 const PENDING_PHASES = new Set(["queued", "acknowledged"]);
 
 type ControlRequestInput = ControlRequestMessage["request"];
+type ToolPermissionRuntimeProjectState = {
+  runtimeSessionId: string;
+  runtimes: ToolPermissionRuntimeRecord[];
+  updatedAt: string;
+};
+type PendingControlResponseWaiter = {
+  resolve: (message: ControlResponseMessage) => void;
+  reject: (error: Error) => void;
+  timeoutId: ReturnType<typeof setTimeout>;
+};
 
 type UseProjectRuntimeControlClientArgs = {
   projects: ProjectSummary[];
@@ -32,6 +44,11 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
+function numberValue(value: unknown, fallback: number): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
 function buildRequestId(projectId: string): string {
   const random =
     typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
@@ -43,6 +60,103 @@ function buildRequestId(projectId: string): string {
 function requestSubtype(request: unknown): string {
   if (!isRecord(request)) return "unknown";
   return stringValue(request.subtype) || "unknown";
+}
+
+function toolPermissionRuntimeSort(left: ToolPermissionRuntimeRecord, right: ToolPermissionRuntimeRecord): number {
+  const pendingDelta =
+    Number(String(right.status || "").trim() === "pending")
+    - Number(String(left.status || "").trim() === "pending");
+  if (pendingDelta !== 0) return pendingDelta;
+  const updatedDelta = Date.parse(right.updated_at) - Date.parse(left.updated_at);
+  if (updatedDelta !== 0) return updatedDelta;
+  return right.id.localeCompare(left.id);
+}
+
+function parseToolPermissionRuntimeRecord(value: unknown): ToolPermissionRuntimeRecord | null {
+  if (!isRecord(value)) return null;
+  const id = stringValue(value.id);
+  const projectId = stringValue(value.project_id);
+  if (!id || !projectId) return null;
+  return {
+    id,
+    key: stringValue(value.key),
+    project_id: projectId,
+    status: stringValue(value.status),
+    claim_id: stringValue(value.claim_id),
+    resolution_id: stringValue(value.resolution_id),
+    approval_id: stringValue(value.approval_id),
+    issue_id: stringValue(value.issue_id),
+    permission_sync_key: stringValue(value.permission_sync_key),
+    runtime_agent_ids: Array.isArray(value.runtime_agent_ids)
+      ? value.runtime_agent_ids
+          .map((item) => (typeof item === "string" ? item.trim() : ""))
+          .filter(Boolean)
+      : [],
+    winner_source: stringValue(value.winner_source),
+    outcome: stringValue(value.outcome),
+    message: stringValue(value.message),
+    payload: isRecord(value.payload) ? value.payload : {},
+    metadata: isRecord(value.metadata) ? value.metadata : {},
+    settlement_attempts: Array.isArray(value.settlement_attempts)
+      ? value.settlement_attempts.filter((item): item is Record<string, unknown> => isRecord(item))
+      : [],
+    created_at: stringValue(value.created_at),
+    updated_at: stringValue(value.updated_at),
+    resolved_at: stringValue(value.resolved_at) || null,
+    kind: stringValue(value.kind),
+    pending_stage: stringValue(value.pending_stage),
+    tool_name: stringValue(value.tool_name),
+    tool_use_id: stringValue(value.tool_use_id),
+    resolved_behavior: stringValue(value.resolved_behavior),
+    resolved_by: stringValue(value.resolved_by),
+    resolved_source: stringValue(value.resolved_source),
+  };
+}
+
+function parseToolPermissionRuntimeListResponse(value: unknown): ToolPermissionRuntimeListResponse | null {
+  if (!isRecord(value)) return null;
+  const runtimes = Array.isArray(value.runtimes)
+    ? value.runtimes
+        .map((item) => parseToolPermissionRuntimeRecord(item))
+        .filter((item): item is ToolPermissionRuntimeRecord => item !== null)
+        .sort(toolPermissionRuntimeSort)
+    : [];
+  const summary = isRecord(value.summary) ? value.summary : {};
+  return {
+    summary: {
+      count: numberValue(summary.count, runtimes.length),
+      pending_count: numberValue(
+        summary.pending_count,
+        runtimes.filter((runtime) => runtime.status === "pending").length
+      ),
+    },
+    runtimes,
+  };
+}
+
+function extractToolPermissionRuntimeResponse(
+  subtype: string,
+  value: unknown
+): ToolPermissionRuntimeListResponse | null {
+  if (subtype === "list_tool_permission_runtimes") {
+    return parseToolPermissionRuntimeListResponse(value);
+  }
+  if (
+    subtype === "get_tool_permission_runtime"
+    || subtype === "resolve_tool_permission_runtime"
+  ) {
+    if (!isRecord(value)) return null;
+    const runtime = parseToolPermissionRuntimeRecord(value.runtime);
+    if (!runtime) return null;
+    return {
+      summary: {
+        count: 1,
+        pending_count: runtime.status === "pending" ? 1 : 0,
+      },
+      runtimes: [runtime],
+    };
+  }
+  return null;
 }
 
 function parseControlRequestMessage(value: unknown): ControlRequestMessage | null {
@@ -130,6 +244,11 @@ export function useProjectRuntimeControlClient({
   historyLimit = DEFAULT_HISTORY_LIMIT,
 }: UseProjectRuntimeControlClientArgs) {
   const [recordsById, setRecordsById] = useState<Record<string, ProjectRuntimeControlExchangeRecord>>({});
+  const [toolPermissionStateByProject, setToolPermissionStateByProject] = useState<
+    Record<string, ToolPermissionRuntimeProjectState>
+  >({});
+  const recordsByIdRef = useRef(recordsById);
+  const controlResponseWaitersRef = useRef<Map<string, PendingControlResponseWaiter>>(new Map());
 
   const projectMap = useMemo(() => {
     const map = new Map<string, ProjectSummary>();
@@ -164,6 +283,65 @@ export function useProjectRuntimeControlClient({
     [historyLimit]
   );
 
+  const applyToolPermissionResponse = useCallback(
+    (
+      projectId: string,
+      runtimeSessionId: string,
+      subtype: string,
+      response: Record<string, unknown>
+    ) => {
+      const extracted = extractToolPermissionRuntimeResponse(subtype, response);
+      if (!extracted) return;
+      setToolPermissionStateByProject((current) => {
+        const existing = current[projectId];
+        const existingRuntimes =
+          existing && existing.runtimeSessionId === runtimeSessionId ? existing.runtimes : [];
+        const merged =
+          subtype === "list_tool_permission_runtimes"
+            ? extracted.runtimes
+            : [
+                ...existingRuntimes.filter(
+                  (runtime) => !extracted.runtimes.some((nextRuntime) => nextRuntime.id === runtime.id)
+                ),
+                ...extracted.runtimes,
+              ];
+        return {
+          ...current,
+          [projectId]: {
+            runtimeSessionId,
+            runtimes: [...merged].sort(toolPermissionRuntimeSort),
+            updatedAt: nowIso(),
+          },
+        };
+      });
+    },
+    []
+  );
+
+  const settleControlResponseWaiter = useCallback((message: ControlResponseMessage) => {
+    const requestId = stringValue(message.response.request_id);
+    if (!requestId) return;
+    const waiter = controlResponseWaitersRef.current.get(requestId);
+    if (!waiter) return;
+    clearTimeout(waiter.timeoutId);
+    controlResponseWaitersRef.current.delete(requestId);
+    waiter.resolve(message);
+  }, []);
+
+  const failControlResponseWaiter = useCallback((requestId: string, error: Error) => {
+    const normalizedRequestId = stringValue(requestId);
+    if (!normalizedRequestId) return;
+    const waiter = controlResponseWaitersRef.current.get(normalizedRequestId);
+    if (!waiter) return;
+    clearTimeout(waiter.timeoutId);
+    controlResponseWaitersRef.current.delete(normalizedRequestId);
+    waiter.reject(error);
+  }, []);
+
+  useEffect(() => {
+    recordsByIdRef.current = recordsById;
+  }, [recordsById]);
+
   useEffect(() => {
     mutateRecords((current) => {
       let changed = false;
@@ -188,6 +366,35 @@ export function useProjectRuntimeControlClient({
       return changed ? next : current;
     });
   }, [mutateRecords, projectMap]);
+
+  useEffect(() => {
+    setToolPermissionStateByProject((current) => {
+      let changed = false;
+      const next = { ...current };
+      for (const [projectId, state] of Object.entries(current)) {
+        const project = projectMap.get(projectId);
+        const activeSessionId = stringValue(project?.runtime_session_id);
+        const controlAvailable = Boolean(project?.runtime_control_available);
+        if (controlAvailable && activeSessionId && activeSessionId === state.runtimeSessionId) {
+          continue;
+        }
+        delete next[projectId];
+        changed = true;
+      }
+      return changed ? next : current;
+    });
+  }, [projectMap]);
+
+  useEffect(
+    () => () => {
+      for (const [requestId, waiter] of controlResponseWaitersRef.current.entries()) {
+        clearTimeout(waiter.timeoutId);
+        waiter.reject(new Error("Runtime control client was disposed before a response arrived."));
+        controlResponseWaitersRef.current.delete(requestId);
+      }
+    },
+    []
+  );
 
   const handleSSEEvent = useCallback(
     (event: string, data: unknown) => {
@@ -229,25 +436,32 @@ export function useProjectRuntimeControlClient({
 
       const message = parseControlResponseMessage(data);
       if (!message) return;
+      const requestId = message.response.request_id;
+      const existing = recordsByIdRef.current[requestId];
+      const runtimeSessionId = stringValue(message.session_id) || existing?.runtimeSessionId || "";
+      const projectId = existing?.projectId || sessionProjectMap.get(runtimeSessionId) || "";
+      const subtype = existing?.subtype || "unknown";
       mutateRecords((current) => {
-        const requestId = message.response.request_id;
-        const existing = current[requestId];
-        const runtimeSessionId = stringValue(message.session_id) || existing?.runtimeSessionId || "";
-        const projectId = existing?.projectId || sessionProjectMap.get(runtimeSessionId);
-        if (!projectId) return current;
+        const currentExisting = current[requestId];
+        const currentRuntimeSessionId =
+          runtimeSessionId || currentExisting?.runtimeSessionId || "";
+        const currentProjectId =
+          projectId || currentExisting?.projectId || sessionProjectMap.get(currentRuntimeSessionId);
+        const currentSubtype = subtype || currentExisting?.subtype || "unknown";
+        if (!currentProjectId) return current;
         const timestamp = nowIso();
         return {
           ...current,
           [requestId]: {
             requestId,
-            projectId,
-            runtimeSessionId,
-            subtype: existing?.subtype || "unknown",
+            projectId: currentProjectId,
+            runtimeSessionId: currentRuntimeSessionId,
+            subtype: currentSubtype,
             phase: message.response.subtype === "error" ? "error" : "success",
-            source: existing?.source ?? "external",
-            queuedAt: existing?.queuedAt ?? timestamp,
+            source: currentExisting?.source ?? "external",
+            queuedAt: currentExisting?.queuedAt ?? timestamp,
             updatedAt: timestamp,
-            request: existing?.request ?? null,
+            request: currentExisting?.request ?? null,
             response: message.response,
             errorMessage:
               message.response.subtype === "error"
@@ -256,8 +470,12 @@ export function useProjectRuntimeControlClient({
           },
         };
       });
+      if (projectId && message.response.subtype === "success") {
+        applyToolPermissionResponse(projectId, runtimeSessionId, subtype, message.response.response);
+      }
+      settleControlResponseWaiter(message);
     },
-    [mutateRecords, sessionProjectMap]
+    [applyToolPermissionResponse, mutateRecords, sessionProjectMap, settleControlResponseWaiter]
   );
 
   const requestControl = useCallback(
@@ -323,6 +541,10 @@ export function useProjectRuntimeControlClient({
         });
         return result;
       } catch (error) {
+        failControlResponseWaiter(
+          requestId,
+          error instanceof Error ? error : new Error("Failed to queue runtime control request.")
+        );
         mutateRecords((current) => {
           const existing = current[requestId];
           if (!existing) return current;
@@ -340,7 +562,54 @@ export function useProjectRuntimeControlClient({
         throw error;
       }
     },
-    [mutateRecords, projectMap]
+    [failControlResponseWaiter, mutateRecords, projectMap]
+  );
+
+  const waitForControlResponse = useCallback((requestId: string, timeoutMs = 15000) => {
+    const normalizedRequestId = stringValue(requestId);
+    if (!normalizedRequestId) {
+      return Promise.reject(new Error("Runtime control response wait requested without a request id."));
+    }
+    const existing = recordsByIdRef.current[normalizedRequestId];
+    if (existing?.response) {
+      return Promise.resolve({
+        type: "control_response" as const,
+        response: existing.response,
+        session_id: existing.runtimeSessionId || null,
+      });
+    }
+    return new Promise<ControlResponseMessage>((resolve, reject) => {
+      const existingWaiter = controlResponseWaitersRef.current.get(normalizedRequestId);
+      if (existingWaiter) {
+        clearTimeout(existingWaiter.timeoutId);
+        existingWaiter.reject(new Error(`Runtime control waiter for ${normalizedRequestId} was replaced.`));
+        controlResponseWaitersRef.current.delete(normalizedRequestId);
+      }
+      const timeoutId = setTimeout(() => {
+        controlResponseWaitersRef.current.delete(normalizedRequestId);
+        reject(new Error(`Runtime control request ${normalizedRequestId} timed out waiting for a response.`));
+      }, timeoutMs);
+      controlResponseWaitersRef.current.set(normalizedRequestId, {
+        resolve,
+        reject,
+        timeoutId,
+      });
+    });
+  }, []);
+
+  const requestControlResponse = useCallback(
+    async (
+      projectId: string,
+      request: ControlRequestInput,
+      options?: { requestId?: string; timeoutMs?: number }
+    ): Promise<ControlResponseMessage> => {
+      const queued = await requestControl(projectId, request, options);
+      return waitForControlResponse(
+        queued.request.request_id,
+        Math.max(options?.timeoutMs ?? 15000, 1000)
+      );
+    },
+    [requestControl, waitForControlResponse]
   );
 
   const requestInitialize = useCallback(
@@ -383,6 +652,108 @@ export function useProjectRuntimeControlClient({
         ...(typeof ultraplan === "boolean" ? { ultraplan } : {}),
       }),
     [requestControl]
+  );
+
+  const requestListToolPermissionRuntimes = useCallback(
+    async (
+      projectId: string,
+      filters?: {
+        runtimeAgentId?: string | null;
+        status?: string | null;
+        pendingStage?: string | null;
+        timeoutMs?: number;
+      }
+    ): Promise<ToolPermissionRuntimeListResponse> => {
+      const message = await requestControlResponse(
+        projectId,
+        {
+          subtype: "list_tool_permission_runtimes",
+          runtime_agent_id: filters?.runtimeAgentId ?? null,
+          status: filters?.status ?? null,
+          pending_stage: filters?.pendingStage ?? null,
+        },
+        { timeoutMs: filters?.timeoutMs }
+      );
+      if (message.response.subtype === "error") {
+        throw new Error(message.response.error);
+      }
+      const parsed = parseToolPermissionRuntimeListResponse(message.response.response);
+      if (!parsed) {
+        throw new Error("Runtime returned a malformed tool-permission runtime list.");
+      }
+      return parsed;
+    },
+    [requestControlResponse]
+  );
+
+  const requestGetToolPermissionRuntime = useCallback(
+    async (
+      projectId: string,
+      approvalRuntimeId: string,
+      options?: { timeoutMs?: number }
+    ): Promise<ToolPermissionRuntimeRecord> => {
+      const message = await requestControlResponse(
+        projectId,
+        {
+          subtype: "get_tool_permission_runtime",
+          approval_runtime_id: approvalRuntimeId,
+        },
+        { timeoutMs: options?.timeoutMs }
+      );
+      if (message.response.subtype === "error") {
+        throw new Error(message.response.error);
+      }
+      const parsed = extractToolPermissionRuntimeResponse(
+        "get_tool_permission_runtime",
+        message.response.response
+      );
+      const runtime = parsed?.runtimes[0] ?? null;
+      if (!runtime) {
+        throw new Error("Runtime returned a malformed tool-permission runtime payload.");
+      }
+      return runtime;
+    },
+    [requestControlResponse]
+  );
+
+  const requestResolveToolPermissionRuntime = useCallback(
+    async (
+      projectId: string,
+      approvalRuntimeId: string,
+      outcome: "allow" | "deny",
+      options?: {
+        actor?: string | null;
+        note?: string | null;
+        source?: "user" | "channel";
+        timeoutMs?: number;
+      }
+    ): Promise<ToolPermissionRuntimeRecord> => {
+      const message = await requestControlResponse(
+        projectId,
+        {
+          subtype: "resolve_tool_permission_runtime",
+          approval_runtime_id: approvalRuntimeId,
+          outcome,
+          actor: options?.actor ?? "dashboard",
+          note: options?.note ?? "",
+          source: options?.source ?? "user",
+        },
+        { timeoutMs: options?.timeoutMs }
+      );
+      if (message.response.subtype === "error") {
+        throw new Error(message.response.error);
+      }
+      const parsed = extractToolPermissionRuntimeResponse(
+        "resolve_tool_permission_runtime",
+        message.response.response
+      );
+      const runtime = parsed?.runtimes[0] ?? null;
+      if (!runtime) {
+        throw new Error("Runtime returned a malformed tool-permission resolution payload.");
+      }
+      return runtime;
+    },
+    [requestControlResponse]
   );
 
   const records = useMemo(
@@ -430,10 +801,22 @@ export function useProjectRuntimeControlClient({
     [getLatestRequest]
   );
 
+  const getToolPermissionRuntimes = useCallback(
+    (projectId: string, options?: { pendingOnly?: boolean }) => {
+      const runtimes = toolPermissionStateByProject[projectId]?.runtimes ?? [];
+      if (!options?.pendingOnly) {
+        return runtimes;
+      }
+      return runtimes.filter((runtime) => runtime.status === "pending");
+    },
+    [toolPermissionStateByProject]
+  );
+
   return useMemo(
     () => ({
       records,
       recordsByProject,
+      toolPermissionRuntimesByProject: toolPermissionStateByProject,
       handleSSEEvent,
       requestControl,
       requestInitialize,
@@ -443,25 +826,34 @@ export function useProjectRuntimeControlClient({
       requestReloadPlugins,
       requestSetModel,
       requestSetPermissionMode,
+      requestListToolPermissionRuntimes,
+      requestGetToolPermissionRuntime,
+      requestResolveToolPermissionRuntime,
       getLatestRequest,
       getLatestResponse,
+      getToolPermissionRuntimes,
       isPending,
     }),
     [
       getLatestRequest,
       getLatestResponse,
+      getToolPermissionRuntimes,
       handleSSEEvent,
       isPending,
       records,
       recordsByProject,
       requestContextUsage,
       requestControl,
+      requestGetToolPermissionRuntime,
       requestInitialize,
       requestInterrupt,
+      requestListToolPermissionRuntimes,
       requestMcpStatus,
+      requestResolveToolPermissionRuntime,
       requestReloadPlugins,
       requestSetModel,
       requestSetPermissionMode,
+      toolPermissionStateByProject,
     ]
   );
 }

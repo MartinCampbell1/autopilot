@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 import yaml
 
+from autopilot.core.approval_runtime import annotate_approval_runtime, create_or_reuse_approval_runtime, save_approval_runtime
 from autopilot.core.config import AutopilotConfig, ProviderConfig
 from autopilot.core.models import StoryDependencyError
 from autopilot.core.project_store import (
@@ -169,6 +170,80 @@ def test_build_project_summary_exposes_runtime_control_availability(tmp_path: Pa
     summary = build_project_summary(config, project)
 
     assert summary["runtime_control_available"] is False
+
+
+def test_build_project_summary_surfaces_pending_tool_permission_runtime_counts(tmp_path: Path) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    project_dir = tmp_path / "tool-permission-summary"
+    project_dir.mkdir(parents=True)
+
+    project = register_project(config, name="Tool Permission Summary", project_path=project_dir)
+    prd = normalize_prd(
+        {
+            "title": "Tool Permission Summary",
+            "stories": [{"id": 1, "title": "Bootstrap", "description": "Start"}],
+        }
+    )
+    save_project_prd(project, prd)
+    ensure_project_state(config, project, seed_mode="new")
+
+    pending_runtime = create_or_reuse_approval_runtime(
+        config,
+        key=f"tool-permission:{project['id']}:shell_exec:toolu_pending",
+        project_id=str(project["id"]),
+        runtime_agent_ids=["proj_summary:1:worker:a"],
+        metadata={
+            "kind": "tool_permission_request",
+            "tool_name": "shell_exec",
+            "tool_use_id": "toolu_pending",
+        },
+        publish_pending=True,
+        pending_message_type="tool_permission_pending",
+        pending_payload={
+            "tool_name": "shell_exec",
+            "tool_use_id": "toolu_pending",
+            "behavior": "pending_user",
+            "message": "Need approval.",
+        },
+    )
+    annotate_approval_runtime(
+        config,
+        approval_runtime_id=pending_runtime.id,
+        metadata_updates={
+            "pending": {
+                "stage": "pending_user",
+                "tool_name": "shell_exec",
+                "tool_use_id": "toolu_pending",
+            }
+        },
+    )
+    resolved_runtime = create_or_reuse_approval_runtime(
+        config,
+        key=f"tool-permission:{project['id']}:shell_exec:toolu_resolved",
+        project_id=str(project["id"]),
+        runtime_agent_ids=["proj_summary:1:worker:b"],
+        metadata={
+            "kind": "tool_permission_request",
+            "tool_name": "shell_exec",
+            "tool_use_id": "toolu_resolved",
+            "pending": {
+                "stage": "pending_user",
+                "resolved_behavior": "allow",
+            },
+        },
+    )
+    resolved_runtime.status = "resolved"
+    resolved_runtime.outcome = "allow"
+    resolved_runtime.winner_source = "user"
+    resolved_runtime.message = "Approved."
+    resolved_runtime.resolved_at = "2026-04-01T00:00:00+00:00"
+    resolved_runtime.updated_at = "2026-04-01T00:00:00+00:00"
+    save_approval_runtime(config, resolved_runtime)
+
+    summary = build_project_summary(config, project)
+
+    assert summary["tool_permission_runtime_count"] == 2
+    assert summary["pending_tool_permission_runtime_count"] == 1
 
 
 def test_append_guidance_appends_human_entries_to_guardrails_markdown(tmp_path: Path) -> None:
