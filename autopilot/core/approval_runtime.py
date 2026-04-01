@@ -16,9 +16,19 @@ from pydantic import BaseModel, Field
 from autopilot.core.agent_mailbox import publish_agent_mailbox_messages
 from autopilot.core.config import AutopilotConfig
 
+_MAX_SETTLEMENT_ATTEMPTS = 25
+
+
+class _ApprovalRuntimeReclaimableWait(Exception):
+    """Internal signal that a stale runtime lock was reclaimed."""
+
 
 def _utcnow_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _new_runtime_token(prefix: str) -> str:
+    return f"{prefix}_{int(time.time() * 1000)}_{uuid.uuid4().hex[:8]}"
 
 
 def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
@@ -40,6 +50,8 @@ class ApprovalRuntimeRecord(BaseModel):
     key: str
     project_id: str
     status: str = "pending"
+    claim_id: str = ""
+    resolution_id: str = ""
     approval_id: str = ""
     issue_id: str = ""
     permission_sync_key: str = ""
@@ -49,9 +61,20 @@ class ApprovalRuntimeRecord(BaseModel):
     message: str = ""
     payload: dict[str, Any] = Field(default_factory=dict)
     metadata: dict[str, Any] = Field(default_factory=dict)
+    settlement_attempts: list[dict[str, Any]] = Field(default_factory=list)
     created_at: str
     updated_at: str
     resolved_at: str | None = None
+
+
+class ApprovalRuntimeClaim(BaseModel):
+    """Exclusive claim over one in-flight approval runtime settlement."""
+
+    id: str
+    key: str
+    source: str
+    outcome: str
+    created_at: str
 
 
 def approval_runtime_path(config: AutopilotConfig, approval_runtime_id: str) -> Path:
@@ -132,24 +155,183 @@ def list_approval_runtimes(
     return records
 
 
-def _try_claim_lock(lock_path: Path) -> bool:
+def _read_lock_claim(lock_path: Path) -> ApprovalRuntimeClaim | None:
+    try:
+        raw = lock_path.read_text().strip()
+    except FileNotFoundError:
+        return None
+    if not raw:
+        return None
+    try:
+        return ApprovalRuntimeClaim.model_validate(json.loads(raw))
+    except Exception:
+        return ApprovalRuntimeClaim(
+            id="",
+            key="",
+            source="",
+            outcome="",
+            created_at="",
+        )
+
+
+def _try_claim_lock(lock_path: Path, *, key: str, source: str, outcome: str) -> ApprovalRuntimeClaim | None:
     lock_path.parent.mkdir(parents=True, exist_ok=True)
+    claim = ApprovalRuntimeClaim(
+        id=_new_runtime_token("apprtclaim"),
+        key=str(key or "").strip(),
+        source=str(source or "").strip(),
+        outcome=str(outcome or "").strip(),
+        created_at=_utcnow_iso(),
+    )
     try:
         fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
     except FileExistsError:
-        return False
+        return None
     try:
-        os.write(fd, str(time.time()).encode("utf-8"))
+        os.write(fd, json.dumps(claim.model_dump(), ensure_ascii=False).encode("utf-8"))
     finally:
         os.close(fd)
-    return True
+    return claim
 
 
-def _release_lock(lock_path: Path) -> None:
+def _release_lock(lock_path: Path, *, claim_id: str | None = None, force: bool = False) -> None:
+    if not force:
+        current_claim = _read_lock_claim(lock_path)
+        normalized_claim_id = str(claim_id or "").strip()
+        if current_claim is None or not normalized_claim_id or current_claim.id != normalized_claim_id:
+            return
     try:
         lock_path.unlink()
     except FileNotFoundError:
         pass
+
+
+def _merge_metadata(
+    base: dict[str, Any],
+    updates: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    merged = dict(base)
+    for key, value in (updates or {}).items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = {**dict(merged.get(key) or {}), **value}
+        else:
+            merged[key] = value
+    return merged
+
+
+def _append_settlement_attempt(
+    record: ApprovalRuntimeRecord,
+    *,
+    attempt_id: str,
+    source: str,
+    outcome: str,
+    message: str = "",
+    payload: dict[str, Any] | None = None,
+    metadata: dict[str, Any] | None = None,
+    applied: bool,
+    ignored_reason: str = "",
+) -> ApprovalRuntimeRecord:
+    attempts = list(record.settlement_attempts)
+    if any(str(existing.get("id") or "") == attempt_id for existing in attempts):
+        return record
+    attempts.append(
+        {
+            "id": attempt_id,
+            "source": str(source or "").strip(),
+            "outcome": str(outcome or "").strip(),
+            "message": str(message or "").strip(),
+            "payload": dict(payload or {}),
+            "metadata": dict(metadata or {}),
+            "applied": bool(applied),
+            "ignored_reason": str(ignored_reason or "").strip(),
+            "created_at": _utcnow_iso(),
+        }
+    )
+    return record.model_copy(update={"settlement_attempts": attempts[-_MAX_SETTLEMENT_ATTEMPTS:]})
+
+
+def _wait_for_runtime_resolution(
+    config: AutopilotConfig,
+    *,
+    approval_runtime_id: str,
+    wait_timeout_sec: float,
+    stale_after_sec: float,
+    allow_stale_reclaim: bool = False,
+) -> ApprovalRuntimeRecord:
+    deadline = time.monotonic() + wait_timeout_sec
+    lock_path = approval_runtime_lock_path(config, approval_runtime_id)
+    while time.monotonic() < deadline:
+        current = get_approval_runtime(config, approval_runtime_id=approval_runtime_id)
+        if current is None:
+            raise KeyError(approval_runtime_id)
+        if current.status == "resolved":
+            return current
+        try:
+            age = time.time() - lock_path.stat().st_mtime
+        except FileNotFoundError:
+            age = 0.0
+        if age >= stale_after_sec:
+            _release_lock(lock_path, force=True)
+            if allow_stale_reclaim:
+                raise _ApprovalRuntimeReclaimableWait(approval_runtime_id)
+            break
+        time.sleep(0.02)
+
+    current = get_approval_runtime(config, approval_runtime_id=approval_runtime_id)
+    if current is not None and current.status == "resolved":
+        return current
+    raise TimeoutError(f"Timed out settling approval runtime `{approval_runtime_id}`.")
+
+
+def _record_ignored_attempt(
+    config: AutopilotConfig,
+    *,
+    approval_runtime_id: str,
+    attempt_id: str,
+    source: str,
+    outcome: str,
+    message: str = "",
+    payload: dict[str, Any] | None = None,
+    metadata: dict[str, Any] | None = None,
+    wait_timeout_sec: float,
+    stale_after_sec: float,
+) -> ApprovalRuntimeRecord:
+    lock_path = approval_runtime_lock_path(config, approval_runtime_id)
+    deadline = time.monotonic() + wait_timeout_sec
+    while True:
+        current = get_approval_runtime(config, approval_runtime_id=approval_runtime_id)
+        if current is None:
+            raise KeyError(approval_runtime_id)
+        claim = _try_claim_lock(lock_path, key=current.key, source=source, outcome=outcome)
+        if claim is not None:
+            try:
+                latest = get_approval_runtime(config, approval_runtime_id=approval_runtime_id)
+                if latest is None:
+                    raise KeyError(approval_runtime_id)
+                ignored = _append_settlement_attempt(
+                    latest,
+                    attempt_id=attempt_id,
+                    source=source,
+                    outcome=outcome,
+                    message=message,
+                    payload=payload,
+                    metadata=metadata,
+                    applied=False,
+                    ignored_reason="already_resolved" if latest.status == "resolved" else "superseded",
+                )
+                return save_approval_runtime(config, ignored)
+            finally:
+                _release_lock(lock_path, claim_id=claim.id)
+        try:
+            age = time.time() - lock_path.stat().st_mtime
+        except FileNotFoundError:
+            age = 0.0
+        if age >= stale_after_sec:
+            _release_lock(lock_path, force=True)
+            continue
+        if time.monotonic() >= deadline:
+            return current
+        time.sleep(0.02)
 
 
 def create_or_reuse_approval_runtime(
@@ -235,32 +417,42 @@ def settle_approval_runtime(
     payload: dict[str, Any] | None = None,
     metadata_updates: dict[str, Any] | None = None,
     mailbox_message_type: str | None = None,
+    wait_timeout_sec: float = 2.0,
+    stale_after_sec: float = 30.0,
 ) -> ApprovalRuntimeRecord:
     """Resolve one approval runtime exactly once; later writers observe the winner."""
 
     record = get_approval_runtime(config, approval_runtime_id=approval_runtime_id, key=key)
     if record is None:
         raise KeyError(approval_runtime_id or key)
+    attempt_id = _new_runtime_token("apprtattempt")
     lock_path = approval_runtime_lock_path(config, record.id)
-    deadline = time.monotonic() + 2.0
     while True:
-        current = get_approval_runtime(config, approval_runtime_id=record.id)
-        if current is None:
-            raise KeyError(record.id)
-        if current.status == "resolved":
-            return current
-        if _try_claim_lock(lock_path):
+        claim = _try_claim_lock(lock_path, key=record.key, source=source, outcome=outcome)
+        if claim is not None:
             try:
                 latest = get_approval_runtime(config, approval_runtime_id=record.id)
                 if latest is None:
                     raise KeyError(record.id)
                 if latest.status == "resolved":
-                    return latest
-                merged_metadata = dict(latest.metadata)
-                merged_metadata.update(dict(metadata_updates or {}))
+                    latest = _append_settlement_attempt(
+                        latest,
+                        attempt_id=attempt_id,
+                        source=source,
+                        outcome=outcome,
+                        message=message,
+                        payload=payload,
+                        metadata=metadata_updates,
+                        applied=False,
+                        ignored_reason="already_resolved",
+                    )
+                    return save_approval_runtime(config, latest)
+                merged_metadata = _merge_metadata(latest.metadata, metadata_updates)
                 resolved = latest.model_copy(
                     update={
                         "status": "resolved",
+                        "claim_id": claim.id,
+                        "resolution_id": _new_runtime_token("apprtres"),
                         "winner_source": str(source or "").strip(),
                         "outcome": str(outcome or "").strip(),
                         "message": str(message or "").strip(),
@@ -268,6 +460,16 @@ def settle_approval_runtime(
                         "metadata": merged_metadata,
                         "resolved_at": _utcnow_iso(),
                     }
+                )
+                resolved = _append_settlement_attempt(
+                    resolved,
+                    attempt_id=attempt_id,
+                    source=source,
+                    outcome=outcome,
+                    message=message,
+                    payload=payload,
+                    metadata=metadata_updates,
+                    applied=True,
                 )
                 resolved = save_approval_runtime(config, resolved)
                 if resolved.runtime_agent_ids:
@@ -299,13 +501,29 @@ def settle_approval_runtime(
                     )
                 return resolved
             finally:
-                _release_lock(lock_path)
-        if time.monotonic() >= deadline:
-            latest = get_approval_runtime(config, approval_runtime_id=record.id)
-            if latest is not None:
-                return latest
-            raise TimeoutError(f"Timed out settling approval runtime `{record.id}`.")
-        time.sleep(0.02)
+                _release_lock(lock_path, claim_id=claim.id)
+        try:
+            _wait_for_runtime_resolution(
+                config,
+                approval_runtime_id=record.id,
+                wait_timeout_sec=wait_timeout_sec,
+                stale_after_sec=stale_after_sec,
+                allow_stale_reclaim=True,
+            )
+        except _ApprovalRuntimeReclaimableWait:
+            continue
+        return _record_ignored_attempt(
+            config,
+            approval_runtime_id=record.id,
+            attempt_id=attempt_id,
+            source=source,
+            outcome=outcome,
+            message=message,
+            payload=payload,
+            metadata=metadata_updates,
+            wait_timeout_sec=wait_timeout_sec,
+            stale_after_sec=stale_after_sec,
+        )
 
 
 def annotate_approval_runtime(
@@ -360,6 +578,7 @@ def annotate_approval_runtime(
 
 
 __all__ = [
+    "ApprovalRuntimeClaim",
     "ApprovalRuntimeRecord",
     "annotate_approval_runtime",
     "create_or_reuse_approval_runtime",
