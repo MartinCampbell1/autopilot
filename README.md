@@ -164,6 +164,7 @@ The intake dashboard now lets you choose both `Execution Provider` and `Runtime 
 - [cloud multi-provider project](/Users/martin/Desktop/autopilot/docs/examples/cloud-multi-provider-project.md)
 - [issue-driven flow](/Users/martin/Desktop/autopilot/docs/examples/issue-driven-flow.md)
 - [quickstart guide](/Users/martin/Desktop/autopilot/docs/quickstart.md)
+- [smoke and evaluation story](/Users/martin/Desktop/autopilot/docs/smoke-story.md)
 
 ## Comparison
 
@@ -217,6 +218,8 @@ For fresh-user setup failures, provider validation issues, dashboard smoke check
 ```
 
 For clean-checkout setup, dashboard smoke steps, and expected outcomes, see [docs/verification-baseline.md](/Users/martin/Desktop/autopilot/docs/verification-baseline.md).
+
+For the minimal public adoption and release-candidate evaluation path, see [docs/smoke-story.md](/Users/martin/Desktop/autopilot/docs/smoke-story.md).
 
 Supporting architecture docs:
 

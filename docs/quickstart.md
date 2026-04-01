@@ -66,6 +66,7 @@ Run the public release-gate commands before treating the environment as healthy:
 ```
 
 For the full clean-checkout contract, including dashboard smoke steps, see [docs/verification-baseline.md](/Users/martin/Desktop/autopilot/docs/verification-baseline.md).
+For the repeatable public adoption check that sits above those raw commands, see [docs/smoke-story.md](/Users/martin/Desktop/autopilot/docs/smoke-story.md).
 
 ## 6. Follow-On Guides
 

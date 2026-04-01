@@ -54,4 +54,5 @@ Run and record:
 - update [CHANGELOG.md](/Users/martin/Desktop/autopilot/CHANGELOG.md)
 - copy [release-notes-template.md](/Users/martin/Desktop/autopilot/docs/release-notes-template.md) into the actual release notes draft
 - include the verification baseline in the release notes
+- include the public smoke and evaluation story in the release body when the goal is external adoption
 - link to the main architecture and handoff docs in the release body
