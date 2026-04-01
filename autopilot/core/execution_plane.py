@@ -447,6 +447,8 @@ def evaluate_execution_command_policy(
         config=config,
         project_id=project_id,
         record_denial=record_denial,
+        actor="execution_plane",
+        source="execution_plane.evaluate",
     )
     reasons = list(decision.reasons)
     if decision.behavior == "deny" and not reasons and decision.message:

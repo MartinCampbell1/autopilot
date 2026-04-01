@@ -15,6 +15,7 @@ from autopilot.core.command_permissions import (
     sanitize_permission_context_for_mode,
 )
 from autopilot.core.config import AutopilotConfig
+from autopilot.core.permission_audit import append_permission_audit_entry
 from autopilot.core.tool_contracts import ToolDef, ToolPermissionContext, get_empty_tool_permission_context
 
 PermissionMode = Literal["default", "approved", "bypass_permissions", "dont_ask", "plan"]
@@ -639,6 +640,8 @@ def resolve_tool_permission_decision(
     config: AutopilotConfig | None = None,
     project_id: str = "",
     record_denial: bool,
+    actor: str = "",
+    source: str = "",
 ) -> PermissionDecision:
     """Resolve one permission decision, including repeated-denial escalation."""
 
@@ -649,7 +652,17 @@ def resolve_tool_permission_decision(
     normalized_project_id = str(project_id or "").strip()
     if decision.behavior != "deny":
         reset_denial_breaker(config, project_id=normalized_project_id, tool_name=tool.name)
-        return decision.model_copy(update={"denial_count": 0, "escalation_required": False})
+        final_decision = decision.model_copy(update={"denial_count": 0, "escalation_required": False})
+        append_permission_audit_entry(
+            config,
+            project_id=normalized_project_id,
+            tool=tool,
+            tool_input=tool_input,
+            decision=final_decision,
+            actor=actor,
+            source=source,
+        )
+        return final_decision
 
     tracker = (
         _record_denial(
@@ -668,7 +681,17 @@ def resolve_tool_permission_decision(
         )
     )
     if not tracker.triggered:
-        return decision.model_copy(update={"denial_count": tracker.count, "escalation_required": False})
+        final_decision = decision.model_copy(update={"denial_count": tracker.count, "escalation_required": False})
+        append_permission_audit_entry(
+            config,
+            project_id=normalized_project_id,
+            tool=tool,
+            tool_input=tool_input,
+            decision=final_decision,
+            actor=actor,
+            source=source,
+        )
+        return final_decision
 
     escalation_message = (
         f"Tool `{tool.name}` hit the denial breaker after {tracker.count} denied attempts "
@@ -679,7 +702,7 @@ def resolve_tool_permission_decision(
         escalation_reasons.append(decision.message)
     if escalation_message not in escalation_reasons:
         escalation_reasons.append(escalation_message)
-    return PermissionDecision(
+    final_decision = PermissionDecision(
         behavior="ask",
         message=escalation_message,
         reasons=escalation_reasons,
@@ -688,3 +711,13 @@ def resolve_tool_permission_decision(
         denial_count=tracker.count,
         escalation_required=True,
     )
+    append_permission_audit_entry(
+        config,
+        project_id=normalized_project_id,
+        tool=tool,
+        tool_input=tool_input,
+        decision=final_decision,
+        actor=actor,
+        source=source,
+    )
+    return final_decision
