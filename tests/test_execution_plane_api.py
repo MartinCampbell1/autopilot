@@ -14,6 +14,7 @@ from autopilot.core.agent_mailbox import list_agent_mailbox_messages
 from autopilot.core.agent_action_runs import create_agent_action_batch_run
 from autopilot.core.approval_runtime import annotate_approval_runtime, create_or_reuse_approval_runtime
 from autopilot.core.config import AutopilotConfig
+from autopilot.core import execution_plane as execution_plane_core
 from autopilot.core.project_store import (
     emit_project_event,
     load_project_state,
@@ -3039,6 +3040,91 @@ def test_execution_plane_agent_action_run_wait_for_async_settlement_observes_lin
         message_type="runtime_agent_task_resolved",
     )
     assert any(message.payload["task_id"] == task.id for message in mailbox)
+
+
+@patch("autopilot.core.execution_plane.wait_for_runtime_agent_task_mailbox_resolution")
+@patch("autopilot.core.execution_plane.generate_prd_from_spec")
+def test_execution_plane_agent_action_run_wait_for_async_settlement_routes_tasks_to_their_runtime_agent(
+    mock_generate_prd_from_spec,
+    mock_wait_for_runtime_agent_task_mailbox_resolution,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    client = _build_client(config, monkeypatch)
+    mock_generate_prd_from_spec.return_value = {
+        "title": "FounderOS Copilot",
+        "description": "Execution-ready FounderOS project.",
+        "stories": [{"id": 1, "title": "Bootstrap", "description": "Create the app shell"}],
+    }
+
+    created = _create_execution_project(client, tmp_path / "action-run-multi-agent-mailbox-project")
+    project_id = created["project"]["project_id"]
+    session = _create_orchestrator_session(
+        client,
+        project_ids=[project_id],
+        actor="founderos",
+        title="Async action run multi-agent routing",
+    )
+
+    task_a = create_or_reuse_runtime_agent_task(
+        config,
+        project_id=project_id,
+        command="launch",
+        actor="founderos",
+        reason="Launch background execution A.",
+        orchestrator_session_id=session["id"],
+        runtime_agent_ids=["runtime-agent-task-a"],
+        output_path=str(config.autopilot_home / "logs" / f"{project_id}-a.log"),
+    )
+    task_b = create_or_reuse_runtime_agent_task(
+        config,
+        project_id=project_id,
+        command="launch",
+        actor="founderos",
+        reason="Launch background execution B.",
+        orchestrator_session_id=session["id"],
+        runtime_agent_ids=["runtime-agent-task-b"],
+        output_path=str(config.autopilot_home / "logs" / f"{project_id}-b.log"),
+    )
+    run = create_agent_action_batch_run(
+        config,
+        run_kind="single_action",
+        orchestrator_session_id=session["id"],
+        actor="founderos",
+        mode="auto",
+        selection={"mode": "single_action", "project_id": project_id},
+        summary={"selected_count": 2, "processed_count": 2, "status_counts": {"ok": 2}},
+        results=[
+            {"status": "ok", "command_result": {"command": "launch"}, "async_task": {"id": task_a.id}},
+            {"status": "ok", "command_result": {"command": "launch"}, "async_task": {"id": task_b.id}},
+        ],
+        status="ok",
+        project_ids=[project_id],
+        runtime_agent_ids=["runtime-agent-run"],
+    )
+    link_runtime_agent_task_run(config, task_a.id, agent_action_run_id=run.id)
+    link_runtime_agent_task_run(config, task_b.id, agent_action_run_id=run.id)
+    mock_wait_for_runtime_agent_task_mailbox_resolution.side_effect = [task_a, task_b]
+
+    payload = execution_plane_core.wait_for_execution_plane_agent_action_run_async_settlement(
+        config,
+        run.id,
+        wait_timeout_sec=0.1,
+    )
+
+    assert payload["completion_state"] == "pending_async"
+    observed_routes = {
+        (
+            str(call.kwargs.get("task_id") or ""),
+            str(call.kwargs.get("runtime_agent_id") or ""),
+        )
+        for call in mock_wait_for_runtime_agent_task_mailbox_resolution.call_args_list
+    }
+    assert observed_routes == {
+        (task_a.id, "runtime-agent-task-a"),
+        (task_b.id, "runtime-agent-task-b"),
+    }
 
 
 @patch("autopilot.core.execution_plane.generate_prd_from_spec")
