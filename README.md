@@ -46,6 +46,8 @@ Compared with adjacent categories:
 - swarm tools optimize for autonomous agent collaboration; Autopilot optimizes for founder-visible execution control
 - coding copilots optimize for interactive coding help; Autopilot optimizes for tracked execution loops across projects, stories, reviews, and handoffs
 
+For the public category-level comparison, see [docs/comparison.md](/Users/martin/Desktop/autopilot/docs/comparison.md).
+
 ## Architecture
 
 At a high level, the system is:
@@ -61,6 +63,7 @@ Key docs:
 - [docs/execution-brief-bridge.md](/Users/martin/Desktop/autopilot/docs/execution-brief-bridge.md)
 - [docs/phase3-founderos-execution-plane.md](/Users/martin/Desktop/autopilot/docs/phase3-founderos-execution-plane.md)
 - [docs/phase4-approval-foundation.md](/Users/martin/Desktop/autopilot/docs/phase4-approval-foundation.md)
+- [docs/workflow.md](/Users/martin/Desktop/autopilot/docs/workflow.md)
 
 ## Quickstart
 
@@ -90,6 +93,8 @@ Useful patterns:
 - `autopilot doctor` checks provider readiness, onboarding state, and project gating
 - `autopilot trace` shows the structured worker/runtime history for a project
 - `autopilot live` renders an SSH-friendly snapshot of accounts, projects, stories, and recent events
+
+For the operator-facing path from source item or brief to final PR or handoff artifact, see [docs/workflow.md](/Users/martin/Desktop/autopilot/docs/workflow.md).
 
 ## Local-First Setup
 
@@ -145,6 +150,10 @@ The intake dashboard now lets you choose both `Execution Provider` and `Runtime 
 - [cloud multi-provider project](/Users/martin/Desktop/autopilot/docs/examples/cloud-multi-provider-project.md)
 - [issue-driven flow](/Users/martin/Desktop/autopilot/docs/examples/issue-driven-flow.md)
 
+## Comparison
+
+- [product comparison](/Users/martin/Desktop/autopilot/docs/comparison.md)
+
 ## Tool Layer And Extensions
 
 Autopilot now exposes one user-facing tools layer over the local connector registry instead of asking operators to reason about raw internal connector records.
@@ -191,6 +200,8 @@ For fresh-user setup failures, provider validation issues, dashboard smoke check
 ./.venv/bin/autopilot live --once
 ./.venv/bin/autopilot status
 ```
+
+For clean-checkout setup, dashboard smoke steps, and expected outcomes, see [docs/verification-baseline.md](/Users/martin/Desktop/autopilot/docs/verification-baseline.md).
 
 Supporting architecture docs:
 
