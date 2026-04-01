@@ -11,10 +11,14 @@ from autopilot.core.adapters import AdapterExecutionRequest, AdapterMode, get_ad
 from autopilot.core.capability_store import normalize_review_phases
 from autopilot.core.cost_accounting import merge_usage_records, summarize_invocation_usage
 from autopilot.core.models import CriticResult, Profile, ReviewPhaseResult, VerificationCheck
+from autopilot.core.verification_agent import (
+    NON_ACTIONABLE_VERIFICATION_FEEDBACK,
+    VERDICT_PATTERN,
+    validate_verifier_output,
+)
 
 TEMPLATE_DIR = Path(__file__).parent.parent / "templates"
 ISSUE_PATTERN = re.compile(r"^\s*-\s*Issue\b.*", re.IGNORECASE)
-VERDICT_PATTERN = re.compile(r"^\s*VERDICT:\s*(PASS|FAIL|PARTIAL)\s*$", re.IGNORECASE | re.MULTILINE)
 CHECK_HEADER_PATTERN = re.compile(r"^###\s*Check:\s*(.+?)\s*$", re.IGNORECASE)
 PLACEHOLDER_ISSUE_PATTERN = re.compile(
     r"^\s*(?:-\s*)?(?:"
@@ -28,7 +32,6 @@ PLACEHOLDER_ISSUE_PATTERN = re.compile(
     re.IGNORECASE,
 )
 NON_ACTIONABLE_FEEDBACK = "Critic returned NEEDS_WORK without actionable issues."
-NON_ACTIONABLE_VERIFICATION_FEEDBACK = "Critic returned VERDICT PASS without command-backed evidence."
 STOP_MARKERS = (
     "openai codex",
     "claude code",
@@ -117,8 +120,9 @@ Required rules:
 2. Treat passing tests as context, not proof.
 3. Use concrete commands against the changed behavior whenever the environment allows it.
 4. Include at least one adversarial probe relevant to the change: boundary input, invalid input, idempotency, regression, or similar.
-5. If you cannot verify a claim because the environment blocks it, return `VERDICT: PARTIAL`, not PASS.
-6. A PASS without command-backed evidence is invalid.
+5. Label that check title with the words `adversarial probe`, for example `### Check: adversarial probe - invalid token`.
+6. If you cannot verify a claim because the environment blocks it, return `VERDICT: PARTIAL`, not PASS.
+7. A PASS without command-backed evidence is invalid.
 
 ## Required Output Format
 For each concrete check, use:
@@ -146,13 +150,6 @@ STRICT_VERIFICATION_APPENDIX = """
 - If you cannot produce command-backed evidence, return `VERDICT: PARTIAL`.
 - Reject vague concerns without reproduction. Use FAIL for reproduced issues and PARTIAL for environmental limits.
 """
-
-
-def _extract_verdict(raw_output: str) -> str:
-    matches = VERDICT_PATTERN.findall(raw_output)
-    if not matches:
-        return ""
-    return matches[-1].upper()
 
 
 def _starts_section(line: str) -> bool:
@@ -286,11 +283,6 @@ def _verification_feedback(checks: list[VerificationCheck], raw_output: str, *, 
         return "\n".join(fallback_lines[-8:]).strip()
     return NON_ACTIONABLE_FEEDBACK
 
-
-def _has_command_backed_evidence(checks: list[VerificationCheck]) -> bool:
-    return any(check.command.strip() and check.output.strip() for check in checks)
-
-
 def feedback_is_actionable(feedback: str) -> bool:
     stripped = feedback.strip()
     if not stripped or stripped in {NON_ACTIONABLE_FEEDBACK, NON_ACTIONABLE_VERIFICATION_FEEDBACK}:
@@ -356,18 +348,18 @@ def parse_critic_output(raw_output: str) -> CriticResult:
     if not raw_output.strip():
         return CriticResult(approved=False, feedback="Empty output from critic", raw_output=raw_output)
 
-    verdict = _extract_verdict(raw_output)
     verification_checks = _parse_verification_checks(raw_output)
+    verdict, validation_feedback = validate_verifier_output(raw_output, verification_checks)
+    if validation_feedback:
+        return CriticResult(
+            approved=False,
+            feedback=validation_feedback,
+            raw_output=raw_output,
+            verdict=verdict,
+            verification_checks=verification_checks,
+        )
     if verdict:
         if verdict == "PASS":
-            if not _has_command_backed_evidence(verification_checks):
-                return CriticResult(
-                    approved=False,
-                    feedback=NON_ACTIONABLE_VERIFICATION_FEEDBACK,
-                    raw_output=raw_output,
-                    verdict=verdict,
-                    verification_checks=verification_checks,
-                )
             return CriticResult(
                 approved=True,
                 feedback="",

@@ -6,12 +6,16 @@ from unittest.mock import MagicMock, patch
 
 from autopilot.core.critic import (
     NON_ACTIONABLE_FEEDBACK,
-    NON_ACTIONABLE_VERIFICATION_FEEDBACK,
     build_critic_prompt,
     feedback_is_actionable,
     parse_critic_output,
     run_critic,
     run_review_plan,
+)
+from autopilot.core.verification_agent import (
+    NON_ACTIONABLE_ADVERSARIAL_PROBE_FEEDBACK,
+    NON_ACTIONABLE_VERDICT_FEEDBACK,
+    NON_ACTIONABLE_VERIFICATION_FEEDBACK,
 )
 
 
@@ -80,7 +84,35 @@ Then list one or more bullet points with concrete blocking issues.
         assert result.approved is False
         assert result.feedback == NON_ACTIONABLE_FEEDBACK
 
-    def test_verdict_pass_with_command_backed_evidence(self) -> None:
+    def test_verdict_pass_with_command_backed_evidence_and_adversarial_probe(self) -> None:
+        output = """### Check: unit tests
+**Command run:**
+  pytest -q
+**Output observed:**
+  3 passed in 0.12s
+**Result: PASS**
+
+### Check: adversarial probe - invalid OAuth state
+**Command run:**
+  python -m pytest tests/test_auth.py -k invalid_state
+**Output observed:**
+  1 passed in 0.05s
+**Result: PASS**
+
+VERDICT: PASS
+"""
+        result = parse_critic_output(output)
+        assert result.approved is True
+        assert result.verdict == "PASS"
+        assert len(result.verification_checks) == 2
+        assert result.verification_checks[0].command == "pytest -q"
+
+    def test_verdict_pass_without_command_backed_evidence_is_rejected(self) -> None:
+        result = parse_critic_output("VERDICT: PASS")
+        assert result.approved is False
+        assert result.feedback == NON_ACTIONABLE_VERIFICATION_FEEDBACK
+
+    def test_verdict_pass_without_adversarial_probe_is_rejected(self) -> None:
         output = """### Check: unit tests
 **Command run:**
   pytest -q
@@ -91,15 +123,38 @@ Then list one or more bullet points with concrete blocking issues.
 VERDICT: PASS
 """
         result = parse_critic_output(output)
-        assert result.approved is True
-        assert result.verdict == "PASS"
-        assert len(result.verification_checks) == 1
-        assert result.verification_checks[0].command == "pytest -q"
-
-    def test_verdict_pass_without_command_backed_evidence_is_rejected(self) -> None:
-        result = parse_critic_output("VERDICT: PASS")
         assert result.approved is False
-        assert result.feedback == NON_ACTIONABLE_VERIFICATION_FEEDBACK
+        assert result.feedback == NON_ACTIONABLE_ADVERSARIAL_PROBE_FEEDBACK
+
+    def test_verdict_must_be_single_terminal_line(self) -> None:
+        output = """### Check: adversarial probe - invalid OAuth state
+**Command run:**
+  pytest -q
+**Output observed:**
+  3 passed in 0.12s
+**Result: PASS**
+
+VERDICT: PASS
+extra trailing line
+"""
+        result = parse_critic_output(output)
+        assert result.approved is False
+        assert result.feedback == NON_ACTIONABLE_VERDICT_FEEDBACK
+
+    def test_multiple_verdict_lines_are_rejected(self) -> None:
+        output = """### Check: adversarial probe - invalid OAuth state
+**Command run:**
+  pytest -q
+**Output observed:**
+  3 passed in 0.12s
+**Result: PASS**
+
+VERDICT: PARTIAL
+VERDICT: PASS
+"""
+        result = parse_critic_output(output)
+        assert result.approved is False
+        assert result.feedback == NON_ACTIONABLE_VERDICT_FEEDBACK
 
     def test_verdict_partial_extracts_actionable_feedback(self) -> None:
         output = """### Check: CLI import
@@ -142,6 +197,7 @@ class TestBuildCriticPrompt:
         assert "**Command run:**" in prompt
         assert "VERDICT: PASS" in prompt
         assert "Do not modify project files" in prompt
+        assert "Label that check title with the words `adversarial probe`" in prompt
 
     def test_builds_strict_prompt_without_placeholder_language(self) -> None:
         prompt = build_critic_prompt(
