@@ -33,6 +33,35 @@ Current capabilities include:
 - execution/control-plane dashboard for projects, sessions, runtime agents, approvals, and action runs
 - execution-plane APIs for briefs, sessions, action previews, control passes, and command policy
 
+## Why It Exists
+
+Autopilot is not trying to hide orchestration in a black-box agent loop.
+
+- `Quorum` decides what to build and why
+- `Execution Brief` is the typed handoff contract
+- `Autopilot` executes with deterministic orchestration, visible quality gates, budgets, approvals, and handoff state
+
+Compared with adjacent categories:
+
+- swarm tools optimize for autonomous agent collaboration; Autopilot optimizes for founder-visible execution control
+- coding copilots optimize for interactive coding help; Autopilot optimizes for tracked execution loops across projects, stories, reviews, and handoffs
+
+## Architecture
+
+At a high level, the system is:
+
+1. `Execution Brief` in
+2. project and story plan persisted locally
+3. worker -> gates -> critic execution loop
+4. operator-visible previews, approvals, issues, and runtime control
+5. final PR or handoff artifact out
+
+Key docs:
+
+- [docs/execution-brief-bridge.md](/Users/martin/Desktop/autopilot/docs/execution-brief-bridge.md)
+- [docs/phase3-founderos-execution-plane.md](/Users/martin/Desktop/autopilot/docs/phase3-founderos-execution-plane.md)
+- [docs/phase4-approval-foundation.md](/Users/martin/Desktop/autopilot/docs/phase4-approval-foundation.md)
+
 ## Quickstart
 
 ```bash
@@ -110,6 +139,12 @@ Then validate and use it:
 
 The intake dashboard now lets you choose both `Execution Provider` and `Runtime Profile` before launch. For the full local-first contract, examples, and behavior notes, see [docs/local-first-runtime.md](/Users/martin/Desktop/autopilot/docs/local-first-runtime.md).
 
+## Examples
+
+- [local-only project](/Users/martin/Desktop/autopilot/docs/examples/local-only-project.md)
+- [cloud multi-provider project](/Users/martin/Desktop/autopilot/docs/examples/cloud-multi-provider-project.md)
+- [issue-driven flow](/Users/martin/Desktop/autopilot/docs/examples/issue-driven-flow.md)
+
 ## Tool Layer And Extensions
 
 Autopilot now exposes one user-facing tools layer over the local connector registry instead of asking operators to reason about raw internal connector records.
@@ -140,6 +175,10 @@ The repository now carries a minimal public contribution surface for external en
 - contributor setup and verification expectations
 - roadmap for pre-release scope versus explicitly deferred work
 - bug and feature request templates oriented around operator-visible product behavior
+
+## Troubleshooting
+
+For fresh-user setup failures, provider validation issues, dashboard smoke checks, and delivery-loop debugging, see [docs/troubleshooting.md](/Users/martin/Desktop/autopilot/docs/troubleshooting.md).
 
 ## Official Verification Baseline
 
