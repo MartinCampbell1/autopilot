@@ -121,6 +121,14 @@ export function SelectedActionRunCard({
                   >
                     {(selectedRun.apply_mode || (selectedRun.dry_run ? "manual" : "auto")).replaceAll("_", " ")}
                   </Badge>
+                  {selectedRun.completion_state === "pending_async" && (
+                    <Badge
+                      variant="outline"
+                      className="rounded-full border-[#d3e5ef] bg-[#eef7fb] px-2.5 py-1 text-[11px] font-medium text-[#2a6690]"
+                    >
+                      waiting on async follow-through
+                    </Badge>
+                  )}
                   {Boolean(selectedRun.approval_required) && (
                     <Badge
                       variant="outline"
@@ -193,6 +201,15 @@ export function SelectedActionRunCard({
                 label="Runtime Agents"
                 value={String(selectedRun.runtime_agent_ids.length)}
                 detail={formatScopeList(selectedRun.runtime_agent_ids, "No agent linkage")}
+              />
+              <SessionMetric
+                label="Async Follow-Through"
+                value={String(toNumber(selectedRun.async_task_count))}
+                detail={
+                  selectedRun.completion_state === "pending_async"
+                    ? selectedRun.completion_message || "Background follow-through is still running."
+                    : selectedRun.completion_message || "No async follow-through is pending."
+                }
               />
             </div>
 
