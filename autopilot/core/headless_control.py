@@ -25,9 +25,11 @@ from autopilot.core.control_messages import (
     make_control_success_response,
 )
 from autopilot.core.execution_plane import (
+    get_execution_plane_agent_action_run,
     get_execution_plane_runtime_agent_task,
     get_execution_plane_runtime_agent_task_output,
     get_execution_plane_runtime_agent_task_transcript,
+    wait_for_execution_plane_agent_action_run_async_settlement,
 )
 from autopilot.core.plugin_loader import clear_plugin_cache
 from autopilot.core.plugin_mcp import list_plugin_mcp_servers
@@ -585,6 +587,31 @@ class HeadlessControlSession:
             raise KeyError(task_id)
         return {"task": payload}
 
+    def get_runtime_agent_action_run_payload(self, request: Any) -> dict[str, Any]:
+        """Return one runtime-agent action run for the current headless project."""
+
+        run_id = str(request.run_id or "").strip()
+        wait_for_async_settlement = bool(request.wait_for_async_settlement)
+        runtime_agent_id = str(request.runtime_agent_id or "").strip()
+        wait_timeout_ms = max(int(request.wait_timeout_ms or 500), 0)
+        try:
+            payload = (
+                wait_for_execution_plane_agent_action_run_async_settlement(
+                    self.config,
+                    run_id,
+                    runtime_agent_id=runtime_agent_id,
+                    wait_timeout_sec=float(wait_timeout_ms) / 1000.0,
+                )
+                if wait_for_async_settlement
+                else get_execution_plane_agent_action_run(self.config, run_id)
+            )
+        except TimeoutError:
+            payload = get_execution_plane_agent_action_run(self.config, run_id)
+        project_ids = payload.get("project_ids")
+        if self.project_id not in {str(item).strip() for item in (project_ids or []) if str(item).strip()}:
+            raise KeyError(run_id)
+        return {"run": payload}
+
     def get_runtime_agent_task_output_payload(self, request: Any) -> dict[str, Any]:
         """Return one runtime-agent task output artifact for the current headless project."""
 
@@ -628,6 +655,20 @@ class HeadlessControlSession:
                 return make_control_error_response(
                     request.request_id,
                     error=f"Runtime-agent task `{request.request.task_id}` was not found in this session.",
+                    session_id=self.session_id,
+                )
+            return make_control_success_response(
+                request.request_id,
+                response=payload,
+                session_id=self.session_id,
+            )
+        if subtype == "get_runtime_agent_action_run":
+            try:
+                payload = self.get_runtime_agent_action_run_payload(request.request)
+            except KeyError:
+                return make_control_error_response(
+                    request.request_id,
+                    error=f"Runtime-agent action run `{request.request.run_id}` was not found in this session.",
                     session_id=self.session_id,
                 )
             return make_control_success_response(

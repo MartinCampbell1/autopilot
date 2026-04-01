@@ -121,6 +121,14 @@ class ControlGetRuntimeAgentTaskRequest(BaseModel):
     task_id: str
 
 
+class ControlGetRuntimeAgentActionRunRequest(BaseModel):
+    subtype: Literal["get_runtime_agent_action_run"]
+    run_id: str
+    wait_for_async_settlement: bool = False
+    runtime_agent_id: str | None = None
+    wait_timeout_ms: int | None = None
+
+
 class ControlGetRuntimeAgentTaskOutputRequest(BaseModel):
     subtype: Literal["get_runtime_agent_task_output"]
     task_id: str
@@ -163,6 +171,7 @@ ControlRequestPayload = Annotated[
     | ControlReloadPluginsRequest
     | ControlGetContextUsageRequest
     | ControlGetRuntimeAgentTaskRequest
+    | ControlGetRuntimeAgentActionRunRequest
     | ControlGetRuntimeAgentTaskOutputRequest
     | ControlGetRuntimeAgentTaskTranscriptRequest
     | ControlListToolPermissionRuntimesRequest
