@@ -4088,6 +4088,20 @@ def create_execution_command_approval(
                 approval_record.requested_by = requested_by.strip()
                 changed = True
             if changed:
+                latest_approval = get_approval(config, approval_record.id)
+                if latest_approval is not None:
+                    approval_record.runtime_agent_ids = sorted(
+                        {*(latest_approval.runtime_agent_ids or []), *(approval_record.runtime_agent_ids or [])}
+                    )
+                    approval_record.policy_reasons = sorted(
+                        {*(latest_approval.policy_reasons or []), *(approval_record.policy_reasons or [])}
+                    )
+                    if latest_approval.approval_runtime_id and not approval_record.approval_runtime_id:
+                        approval_record.approval_runtime_id = latest_approval.approval_runtime_id
+                    if latest_approval.reason.strip() and not approval_record.reason.strip():
+                        approval_record.reason = latest_approval.reason
+                    if latest_approval.requested_by.strip() and not approval_record.requested_by.strip():
+                        approval_record.requested_by = latest_approval.requested_by
                 approval_record = save_approval(config, approval_record)
             if normalized_issue_id:
                 link_issue_approval(config, issue_id=normalized_issue_id, approval_id=approval_record.id)
