@@ -51,6 +51,7 @@ export type LinkedSelectionContext = {
 };
 
 export type SessionLineageEntry = {
+  kind: "run_result" | "tool_permission_runtime";
   key: string;
   runId: string;
   resultIndex: number;
@@ -69,6 +70,9 @@ export type SessionLineageEntry = {
   storyId: number | null;
   storyTitle: string;
   event: Record<string, unknown> | null;
+  toolPermissionRuntimeId: string;
+  toolPermissionPendingStage: string;
+  toolPermissionToolUseId: string;
 };
 
 export type SessionLineageTrait = {

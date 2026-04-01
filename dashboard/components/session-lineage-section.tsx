@@ -119,6 +119,96 @@ function workspaceHrefForEntry(entry: SessionLineageEntry): string {
   return "";
 }
 
+function formatToolPermissionStage(value?: string | null): string {
+  const normalized = (value || "").trim();
+  if (normalized === "pending_user") return "Waiting for user";
+  if (normalized === "pending_hook") return "Waiting for hook";
+  if (normalized === "pending_classifier") return "Waiting for classifier";
+  return normalized ? normalized.replaceAll("_", " ") : "Pending";
+}
+
+function lineageEntrySummary(entry: SessionLineageEntry): string {
+  if (entry.toolPermissionRuntimeId) {
+    const stage = formatToolPermissionStage(entry.toolPermissionPendingStage);
+    const toolUseId = entry.toolPermissionToolUseId || entry.toolPermissionRuntimeId;
+    if (entry.runId) {
+      return `${stage} · use ${toolUseId} · run ${entry.runId}`;
+    }
+    return `${stage} · use ${toolUseId}`;
+  }
+  return `run ${entry.runId} · outcome ${entry.resultIndex + 1}`;
+}
+
+function relationshipStripItemsForEntry(
+  entry: SessionLineageEntry,
+  selected: boolean,
+  onSelectRunOutcome: (runId: string, resultIndex: number) => void,
+  onInspectSessionLineageEntry: (entry: SessionLineageEntry) => void
+): RelationshipStripItem[] {
+  return [
+    entry.toolPermissionRuntimeId
+      ? {
+          key: `lineage-tool-permission-${entry.toolPermissionRuntimeId}`,
+          label: `tool permission ${entry.toolPermissionRuntimeId}`,
+          tone: "approval" as const,
+          active: selected,
+          onClick: () => onInspectSessionLineageEntry(entry),
+        }
+      : null,
+    entry.runId
+      ? {
+          key: `lineage-run-${entry.runId}`,
+          label: `run ${entry.runId}`,
+          tone: "run" as const,
+          onClick: () => {
+            onSelectRunOutcome(entry.runId, 0);
+          },
+        }
+      : null,
+    entry.runId
+      ? {
+          key: `lineage-outcome-${entry.key}`,
+          label: `outcome ${entry.resultIndex + 1}`,
+          tone: "outcome" as const,
+          active: selected && !entry.toolPermissionRuntimeId,
+          onClick: () => onInspectSessionLineageEntry(entry),
+        }
+      : null,
+    entry.approvalId
+      ? {
+          key: `lineage-approval-${entry.approvalId}`,
+          label: `approval ${entry.approvalId}`,
+          tone: "approval" as const,
+          onClick: () => onInspectSessionLineageEntry(entry),
+        }
+      : null,
+    entry.issueId
+      ? {
+          key: `lineage-issue-${entry.issueId}`,
+          label: `issue ${entry.issueId}`,
+          tone: "issue" as const,
+          onClick: () => onInspectSessionLineageEntry(entry),
+        }
+      : null,
+    entry.eventKey
+      ? {
+          key: `lineage-event-${entry.eventKey}`,
+          label: `event ${entry.eventName || "event"}`,
+          tone: "event" as const,
+          onClick: () => onInspectSessionLineageEntry(entry),
+        }
+      : null,
+    entry.runtimeAgentId
+      ? {
+          key: `lineage-agent-${entry.runtimeAgentId}`,
+          label: `agent ${entry.runtimeAgentId}`,
+          tone: "agent" as const,
+          onClick: () => onInspectSessionLineageEntry(entry),
+        }
+      : null,
+  ].filter(Boolean) as RelationshipStripItem[];
+}
+
 export function SessionLineageSection({
   hasSelectedSession,
   sessionEventTotalCount,
@@ -180,6 +270,10 @@ export function SessionLineageSection({
   visibleSessionLineageEntries,
   onSelectRunOutcome,
 }: SessionLineageSectionProps) {
+  const runOutcomeCount = sessionLineageEntries.filter((entry) => entry.kind === "run_result").length;
+  const toolPermissionRuntimeCount = sessionLineageEntries.filter(
+    (entry) => entry.toolPermissionRuntimeId
+  ).length;
   const queueConfigs = [
     {
       key: "attention" as const,
@@ -212,8 +306,8 @@ export function SessionLineageSection({
           Session Lineage
         </CardTitle>
         <CardDescription className="text-[13px] text-[#787774]">
-          Run-linked picture of recent outcomes, decisions, events, and agents across the current
-          session.
+          Session-linked picture of recent outcomes, tool gates, decisions, events, and agents
+          across the current session.
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -223,20 +317,26 @@ export function SessionLineageSection({
           </div>
         ) : sessionLineageEntries.length === 0 ? (
           <div className="rounded-xl border border-dashed border-[#e5e5e3] bg-[#fafaf9] px-5 py-8 text-[13px] text-[#9b9a97]">
-            No run-linked lineage recorded for this session yet.
+            No lineage recorded for this session yet.
           </div>
         ) : (
           <div className="space-y-4">
             <div className="grid gap-3 sm:grid-cols-2">
               <SessionMetric
                 label="Outcomes"
-                value={String(sessionLineageEntries.length)}
-                detail={`${linkedRunCount} run${linkedRunCount === 1 ? "" : "s"} linked`}
+                value={String(runOutcomeCount)}
+                detail={`${linkedRunCount} run${linkedRunCount === 1 ? "" : "s"} linked${
+                  toolPermissionRuntimeCount ? ` · ${toolPermissionRuntimeCount} tool gate${toolPermissionRuntimeCount === 1 ? "" : "s"}` : ""
+                }`}
               />
               <SessionMetric
                 label="Decisions"
                 value={String(sessionLineageDecisionCount)}
-                detail={`${linkedApprovalCount} approvals · ${linkedIssueCount} issues`}
+                detail={`${linkedApprovalCount} approvals · ${linkedIssueCount} issues${
+                  toolPermissionRuntimeCount
+                    ? ` · ${toolPermissionRuntimeCount} tool gate${toolPermissionRuntimeCount === 1 ? "" : "s"}`
+                    : ""
+                }`}
               />
               <SessionMetric
                 label="Events"
@@ -383,18 +483,40 @@ export function SessionLineageSection({
                 ) : (
                   <>
                     <div className="mt-3 flex flex-wrap items-center gap-2">
-                      <Badge
-                        variant="outline"
-                        className="rounded-full border-[#e5e5e3] bg-[#fafaf9] px-2.5 py-1 text-[11px] font-medium text-[#37352f]"
-                      >
-                        run {selectedSessionLineageEntry.runId}
-                      </Badge>
-                      <Badge
-                        variant="outline"
-                        className="rounded-full border-[#e5e5e3] bg-[#fafaf9] px-2.5 py-1 text-[11px] font-medium text-[#37352f]"
-                      >
-                        outcome {selectedSessionLineageEntry.resultIndex + 1}
-                      </Badge>
+                      {selectedSessionLineageEntry.toolPermissionRuntimeId ? (
+                        <Badge
+                          variant="outline"
+                          className="rounded-full border-[#f4e0c4] bg-[#fff6e8] px-2.5 py-1 text-[11px] font-medium text-[#9a6700]"
+                        >
+                          {formatToolPermissionStage(
+                            selectedSessionLineageEntry.toolPermissionPendingStage
+                          )}
+                        </Badge>
+                      ) : null}
+                      {selectedSessionLineageEntry.toolPermissionRuntimeId ? (
+                        <Badge
+                          variant="outline"
+                          className="rounded-full border-[#e5e5e3] bg-[#fafaf9] px-2.5 py-1 text-[11px] font-medium text-[#37352f]"
+                        >
+                          tool permission {selectedSessionLineageEntry.toolPermissionRuntimeId}
+                        </Badge>
+                      ) : null}
+                      {selectedSessionLineageEntry.runId ? (
+                        <Badge
+                          variant="outline"
+                          className="rounded-full border-[#e5e5e3] bg-[#fafaf9] px-2.5 py-1 text-[11px] font-medium text-[#37352f]"
+                        >
+                          run {selectedSessionLineageEntry.runId}
+                        </Badge>
+                      ) : null}
+                      {selectedSessionLineageEntry.runId ? (
+                        <Badge
+                          variant="outline"
+                          className="rounded-full border-[#e5e5e3] bg-[#fafaf9] px-2.5 py-1 text-[11px] font-medium text-[#37352f]"
+                        >
+                          outcome {selectedSessionLineageEntry.resultIndex + 1}
+                        </Badge>
+                      ) : null}
                       {selectedSessionLineageTraits.map((trait) => (
                         <Badge
                           key={trait.key}
@@ -563,7 +685,7 @@ export function SessionLineageSection({
                             <QueueItemCard
                               key={`${queue.key}-queue-${entry.key}`}
                               title={entry.title}
-                              subtitle={`run ${entry.runId} · outcome ${entry.resultIndex + 1}`}
+                              subtitle={lineageEntrySummary(entry)}
                               timestamp={formatTimestamp(entry.timestamp)}
                               selected={selected}
                               badges={
@@ -725,55 +847,12 @@ export function SessionLineageSection({
 
                         <RelationshipStrip
                           label="Lineage Chain"
-                          items={[
-                            {
-                              key: `lineage-run-${entry.runId}`,
-                              label: `run ${entry.runId}`,
-                              tone: "run",
-                              onClick: () => {
-                                onSelectRunOutcome(entry.runId, 0);
-                              },
-                            },
-                            {
-                              key: `lineage-outcome-${entry.key}`,
-                              label: `outcome ${entry.resultIndex + 1}`,
-                              tone: "outcome",
-                              active: selected,
-                              onClick: () => onInspectSessionLineageEntry(entry),
-                            },
-                            entry.approvalId
-                              ? {
-                                  key: `lineage-approval-${entry.approvalId}`,
-                                  label: `approval ${entry.approvalId}`,
-                                  tone: "approval" as const,
-                                  onClick: () => onInspectSessionLineageEntry(entry),
-                                }
-                              : null,
-                            entry.issueId
-                              ? {
-                                  key: `lineage-issue-${entry.issueId}`,
-                                  label: `issue ${entry.issueId}`,
-                                  tone: "issue" as const,
-                                  onClick: () => onInspectSessionLineageEntry(entry),
-                                }
-                              : null,
-                            entry.eventKey
-                              ? {
-                                  key: `lineage-event-${entry.eventKey}`,
-                                  label: `event ${entry.eventName || "event"}`,
-                                  tone: "event" as const,
-                                  onClick: () => onInspectSessionLineageEntry(entry),
-                                }
-                              : null,
-                            entry.runtimeAgentId
-                              ? {
-                                  key: `lineage-agent-${entry.runtimeAgentId}`,
-                                  label: `agent ${entry.runtimeAgentId}`,
-                                  tone: "agent" as const,
-                                  onClick: () => onInspectSessionLineageEntry(entry),
-                                }
-                              : null,
-                          ].filter(Boolean) as RelationshipStripItem[]}
+                          items={relationshipStripItemsForEntry(
+                            entry,
+                            selected,
+                            onSelectRunOutcome,
+                            onInspectSessionLineageEntry
+                          )}
                         />
 
                         <p className="mt-3 text-[12px] text-[#6b6b6b]">{entry.message}</p>

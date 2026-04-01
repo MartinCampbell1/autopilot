@@ -454,6 +454,7 @@ export function useControlPlanePageController(
     selectedSessionId,
     selectedRunId,
     selectedRunResultIndex,
+    selectedSessionToolPermissionRuntimeId,
     sessionLineageFilter,
     dismissedLineageQueueKeys,
     snoozedLineageQueueUntil,
