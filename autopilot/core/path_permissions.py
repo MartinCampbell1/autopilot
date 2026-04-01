@@ -18,6 +18,7 @@ SHELL_INTERPRETERS = {"bash", "sh", "zsh", "ksh", "fish", "cmd", "powershell", "
 DESTRUCTIVE_COMMANDS = {"rm", "rmdir", "unlink", "shred", "srm"}
 DESTRUCTIVE_GIT_SUBCOMMANDS = {"clean", "reset"}
 DESTRUCTIVE_FIND_OPERATORS = {"-delete", "-exec", "-execdir", "-ok", "-okdir"}
+PROTECTED_INTERNAL_PATH_SEGMENTS = {".git", ".hg", ".svn"}
 
 
 @dataclass(frozen=True)
@@ -101,6 +102,12 @@ def _looks_like_path_token(token: str) -> bool:
     )
 
 
+def _touches_protected_internal_path(token: str) -> bool:
+    normalized = token.replace("\\", "/")
+    segments = [segment for segment in normalized.split("/") if segment not in {"", "."}]
+    return any(segment in PROTECTED_INTERNAL_PATH_SEGMENTS for segment in segments)
+
+
 def validate_gate_shell_command(command: str) -> ShellCommandValidationResult:
     """Validate one gate command before any shell expansion or mutation happens."""
 
@@ -176,6 +183,11 @@ def validate_gate_shell_command(command: str) -> ShellCommandValidationResult:
     for token in executable_argv[1:]:
         if not _looks_like_path_token(token):
             continue
+        if _touches_protected_internal_path(token):
+            return ShellCommandValidationResult(
+                False,
+                reason="Gate command references protected VCS-internal paths and is not trusted.",
+            )
         if SHELL_EXPANSION_PATTERN.search(token):
             return ShellCommandValidationResult(
                 False,

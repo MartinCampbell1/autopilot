@@ -98,6 +98,13 @@ def test_validate_gate_shell_command_accepts_git_diff_with_string_search_flag() 
     assert result.argv == ("git", "diff", "-S", "needle", "--", "README.md")
 
 
+def test_validate_gate_shell_command_rejects_git_diff_string_flag_without_value() -> None:
+    result = validate_gate_shell_command("git diff -S -- README.md")
+
+    assert result.allowed is False
+    assert "explicit string argument" in result.reason.lower()
+
+
 def test_validate_gate_shell_command_rejects_git_checkout_write_subcommand() -> None:
     result = validate_gate_shell_command("git checkout README.md")
 
@@ -130,3 +137,10 @@ def test_validate_gate_shell_command_accepts_autodetected_gate_families() -> Non
     for command in allowed_commands:
         result = validate_gate_shell_command(command)
         assert result.allowed is True, command
+
+
+def test_validate_gate_shell_command_rejects_protected_internal_path() -> None:
+    result = validate_gate_shell_command("rg token .git/config")
+
+    assert result.allowed is False
+    assert "protected vcs-internal paths" in result.reason.lower()

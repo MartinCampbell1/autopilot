@@ -17,6 +17,7 @@ CARGO_SUBCOMMANDS = {"build", "test", "check", "clippy"}
 READ_ONLY_GIT_SUBCOMMANDS = {"diff", "status", "show", "log", "rev-parse", "ls-files"}
 FORBIDDEN_GIT_FLAGS = {"--exec-path", "--output", "--ext-diff"}
 RUFF_MUTATING_FLAGS = {"--fix", "--unsafe-fixes", "--fix-only"}
+GIT_DIFF_STRING_FLAGS = {"-S", "-G", "-O"}
 
 
 @dataclass(frozen=True)
@@ -125,6 +126,25 @@ def _validate_git(args: Sequence[str]) -> GateCommandPolicyResult:
     for token in args[1:]:
         if token in FORBIDDEN_GIT_FLAGS or any(token.startswith(f"{flag}=") for flag in FORBIDDEN_GIT_FLAGS):
             return _deny(f"Gate command `git {subcommand}` uses the unsafe flag `{token}`.", "unsafe")
+
+    if subcommand == "diff":
+        index = 1
+        while index < len(args):
+            token = args[index]
+            if token == "--":
+                break
+            if token in GIT_DIFF_STRING_FLAGS:
+                if index + 1 >= len(args) or args[index + 1] == "--":
+                    return _deny(
+                        f"Gate command `git diff` flag `{token}` must include an explicit string argument.",
+                        "too_complex",
+                    )
+                index += 2
+                continue
+            if any(token.startswith(flag) and token != flag for flag in GIT_DIFF_STRING_FLAGS):
+                index += 1
+                continue
+            index += 1
 
     return _allow("read_only")
 
