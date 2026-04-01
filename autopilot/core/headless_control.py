@@ -34,6 +34,7 @@ from autopilot.core.execution_plane import (
     summarize_execution_plane_agent_action_runs,
     wait_for_execution_plane_agent_action_run_async_settlement,
 )
+from autopilot.core.runtime_agent_tasks import wait_for_runtime_agent_task_mailbox_resolution
 from autopilot.core.plugin_loader import clear_plugin_cache
 from autopilot.core.plugin_mcp import list_plugin_mcp_servers
 from autopilot.core.plugins import resolve_loaded_plugins
@@ -585,7 +586,25 @@ class HeadlessControlSession:
         """Return one runtime-agent task for the current headless project."""
 
         task_id = str(request.task_id or "").strip()
-        payload = get_execution_plane_runtime_agent_task(self.config, task_id)
+        wait_for_async_settlement = bool(request.wait_for_async_settlement)
+        runtime_agent_id = str(request.runtime_agent_id or "").strip()
+        wait_timeout_ms = max(int(request.wait_timeout_ms or 500), 0)
+        try:
+            payload = (
+                get_execution_plane_runtime_agent_task(
+                    self.config,
+                    wait_for_runtime_agent_task_mailbox_resolution(
+                        self.config,
+                        runtime_agent_id=runtime_agent_id,
+                        task_id=task_id,
+                        wait_timeout_sec=float(wait_timeout_ms) / 1000.0,
+                    ).id,
+                )
+                if wait_for_async_settlement
+                else get_execution_plane_runtime_agent_task(self.config, task_id)
+            )
+        except TimeoutError:
+            payload = get_execution_plane_runtime_agent_task(self.config, task_id)
         if str(payload.get("project_id") or "").strip() != self.project_id:
             raise KeyError(task_id)
         return {"task": payload}

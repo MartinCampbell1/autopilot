@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import io
 import json
+import threading
+import time
 from pathlib import Path
 
 from autopilot.core.agent_action_runs import create_agent_action_batch_run
@@ -871,6 +873,75 @@ def test_headless_control_can_get_runtime_agent_task_and_artifacts(tmp_path: Pat
     assert transcript_response.response.subtype == "success"
     assert transcript_response.response.response["transcript"]["task_id"] == refreshed.id
     assert "Runtime Agent Task Transcript" in transcript_response.response.response["transcript"]["content"]
+
+
+def test_headless_control_can_wait_for_runtime_agent_task_settlement(tmp_path: Path) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    project = _create_project(config, tmp_path / "project")
+    log_path = config.autopilot_home / "logs" / "headless-task-wait.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path.write_text("launch started\nlaunch finished cleanly\n", encoding="utf-8")
+
+    task = create_or_reuse_runtime_agent_task(
+        config,
+        project_id=str(project["id"]),
+        command="launch",
+        actor="founderos",
+        reason="Launch background work.",
+        orchestrator_session_id="sess_headless",
+        runtime_agent_ids=["proj_headless_runtime:1:worker:a"],
+        output_path=str(log_path),
+    )
+    save_project_state(
+        config,
+        str(project["id"]),
+        {
+            "status": "running",
+            "paused": False,
+            "started_at": "2026-04-02T00:00:00+00:00",
+            "log_path": str(log_path),
+        },
+    )
+    refresh_runtime_agent_task(config, task.id)
+    session = create_headless_control_session(config, project_entry=project, session_id="sess_headless")
+
+    def _complete_task() -> None:
+        time.sleep(0.05)
+        save_project_state(
+            config,
+            str(project["id"]),
+            {
+                "status": "completed",
+                "paused": False,
+                "started_at": "2026-04-02T00:00:00+00:00",
+                "finished_at": "2026-04-02T00:01:00+00:00",
+                "log_path": str(log_path),
+            },
+        )
+
+    worker = threading.Thread(target=_complete_task)
+    worker.start()
+    try:
+        task_response = session.handle_request(
+            {
+                "type": "control_request",
+                "request_id": "req_wait_runtime_agent_task",
+                "request": {
+                    "subtype": "get_runtime_agent_task",
+                    "task_id": task.id,
+                    "wait_for_async_settlement": True,
+                    "runtime_agent_id": "proj_headless_runtime:1:worker:a",
+                    "wait_timeout_ms": 500,
+                },
+                "session_id": "sess_headless",
+            }
+        )
+    finally:
+        worker.join(timeout=1.0)
+
+    assert task_response.response.subtype == "success"
+    assert task_response.response.response["task"]["id"] == task.id
+    assert task_response.response.response["task"]["status"] == "completed"
 
 
 def test_headless_control_can_get_runtime_agent_action_run_and_wait_for_async_settlement(

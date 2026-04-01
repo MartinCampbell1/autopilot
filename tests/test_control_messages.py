@@ -114,6 +114,32 @@ def test_parse_control_message_supports_runtime_agent_task_artifact_requests() -
     assert parsed.session_id == "sess_1"
 
 
+def test_parse_control_message_supports_runtime_agent_task_wait_requests() -> None:
+    parsed = parse_control_message(
+        {
+            "type": "control_request",
+            "requestId": "req_task_wait",
+            "request": {
+                "subtype": "get_runtime_agent_task",
+                "taskId": "rat_123",
+                "waitForAsyncSettlement": True,
+                "runtimeAgentId": "runtime-agent-1",
+                "waitTimeoutMs": 250,
+            },
+            "sessionId": "sess_1",
+        }
+    )
+
+    assert parsed is not None
+    assert parsed.type == "control_request"
+    assert parsed.request.subtype == "get_runtime_agent_task"
+    assert parsed.request.task_id == "rat_123"
+    assert parsed.request.wait_for_async_settlement is True
+    assert parsed.request.runtime_agent_id == "runtime-agent-1"
+    assert parsed.request.wait_timeout_ms == 250
+    assert parsed.session_id == "sess_1"
+
+
 def test_parse_control_message_supports_runtime_agent_action_run_requests() -> None:
     parsed = parse_control_message(
         {

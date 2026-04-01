@@ -119,6 +119,9 @@ class ControlGetContextUsageRequest(BaseModel):
 class ControlGetRuntimeAgentTaskRequest(BaseModel):
     subtype: Literal["get_runtime_agent_task"]
     task_id: str
+    wait_for_async_settlement: bool = False
+    runtime_agent_id: str | None = None
+    wait_timeout_ms: int | None = None
 
 
 class ControlGetRuntimeAgentActionRunRequest(BaseModel):
