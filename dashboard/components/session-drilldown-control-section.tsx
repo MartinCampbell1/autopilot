@@ -275,7 +275,7 @@ export function SessionDrilldownControlSection({
         </div>
       </div>
 
-      <div className="grid gap-3 md:grid-cols-4">
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
         <SessionMetric
           label="Pending Approvals"
           value={String(selectedSession.summary.pending_approval_count)}
@@ -287,6 +287,11 @@ export function SessionDrilldownControlSection({
           detail={`${selectedSession.summary.issue_count} linked issues`}
         />
         <SessionMetric
+          label="Pending Tool Permissions"
+          value={String(selectedSession.summary.pending_tool_permission_runtime_count || 0)}
+          detail={`${selectedSession.summary.tool_permission_runtime_count || 0} linked runtimes`}
+        />
+        <SessionMetric
           label="Safe Actions"
           value={String(selectedControl?.counts.safe_actions || 0)}
           detail={`${selectedControl?.counts.approval_required_actions || 0} approval-gated`}
@@ -295,6 +300,11 @@ export function SessionDrilldownControlSection({
           label="Control Passes"
           value={String(selectedSession.summary.control_pass_count)}
           detail={`${selectedSession.summary.run_count} linked runs`}
+        />
+        <SessionMetric
+          label="Events"
+          value={String(selectedSession.summary.event_count)}
+          detail={formatTimestamp(selectedSession.summary.latest_event_at)}
         />
       </div>
 
