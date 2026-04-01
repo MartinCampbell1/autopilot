@@ -145,6 +145,24 @@ def test_inspect_project_workspace_policy_marks_stale_lease(tmp_path: Path, monk
     assert story_one["health"]["lease_status"] == "stale"
 
 
+def test_inspect_project_workspace_policy_flags_invalid_worktree_path(tmp_path: Path) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    project_dir = tmp_path / "workspace-project"
+    project = _setup_project(config, project_dir)
+
+    state = load_project_state(config, project["id"])
+    state["story_state"]["1"]["status"] = "in_progress"
+    state["story_state"]["1"]["ownership"] = {"role": "coordinator", "owner": "run:123", "acquired_at": "2026-03-29T00:00:00+00:00"}
+    state["story_state"]["1"]["checkout"] = {"mode": "worktree", "path": str(tmp_path / "rogue"), "branch_name": "story-1"}
+    save_project_state(config, project["id"], state)
+
+    inspection = inspect_project_workspace_policy(config, project["id"])
+
+    story_one = next(item for item in inspection["stories"] if item["story_id"] == 1)
+    assert story_one["health"]["status"] == "degraded"
+    assert any("naming contract" in issue or "parent directory" in issue for issue in story_one["health"]["issues"])
+
+
 @patch("autopilot.core.workspace_policy.remove_worktree")
 def test_sweep_stale_project_checkouts_recovers_all_stale(mock_remove_worktree, tmp_path: Path, monkeypatch) -> None:
     config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
@@ -186,3 +204,30 @@ def test_sweep_stale_project_checkouts_recovers_all_stale(mock_remove_worktree, 
     assert len(result["recovered"]) == 1
     assert repaired["story_state"]["1"]["status"] == "open"
     mock_remove_worktree.assert_called_once()
+
+
+@patch("autopilot.core.workspace_policy.remove_worktree")
+def test_recover_story_checkout_skips_unsafe_cleanup_path(mock_remove_worktree, tmp_path: Path) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    project_dir = tmp_path / "workspace-project"
+    project = _setup_project(config, project_dir)
+    rogue_checkout = tmp_path / "rogue-cleanup"
+    rogue_checkout.mkdir()
+
+    state = load_project_state(config, project["id"])
+    state["story_state"]["1"].update(
+        {
+            "status": "merge_blocked",
+            "ownership": {"role": "coordinator", "owner": "run:123", "acquired_at": "2026-03-29T00:00:00+00:00"},
+            "checkout": {"mode": "worktree", "path": str(rogue_checkout), "branch_name": "story-1"},
+            "worktree_path": str(rogue_checkout),
+            "branch_name": "story-1",
+        }
+    )
+    save_project_state(config, project["id"], state)
+
+    result = recover_story_checkout(config, project["id"], 1, cleanup_worktree=True, reopen_story=True)
+
+    assert result["cleanup_performed"] is False
+    assert result["cleanup_skipped_reason"]
+    mock_remove_worktree.assert_not_called()

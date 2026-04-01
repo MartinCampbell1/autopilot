@@ -41,14 +41,24 @@ class TestWorktree:
         assert mock_run.call_args_list[0][0][0] == ["git", "worktree", "remove", "/Users/example/project-story-3", "--force"]
         assert mock_run.call_args_list[1][0][0] == ["git", "worktree", "prune"]
 
+    def test_remove_worktree_rejects_unsafe_path(self) -> None:
+        try:
+            remove_worktree(Path("/Users/example/project"), Path("/tmp/not-this-project"))
+        except ValueError as exc:
+            assert "naming contract" in str(exc) or "parent directory" in str(exc)
+        else:
+            raise AssertionError("Expected unsafe worktree path to be rejected.")
+
     @patch("autopilot.core.worktree.shutil.rmtree")
     @patch("autopilot.core.worktree.subprocess.run")
     def test_remove_worktree_cleans_residual_path(self, mock_run: MagicMock, mock_rmtree: MagicMock, tmp_path: Path) -> None:
         mock_run.return_value = MagicMock(returncode=0)
-        wt_path = tmp_path / "project-story-3"
+        project_path = tmp_path / "project"
+        project_path.mkdir()
+        wt_path = project_path.parent / "project-story-3"
         wt_path.mkdir()
 
-        remove_worktree(Path("/Users/example/project"), wt_path)
+        remove_worktree(project_path, wt_path)
 
         mock_rmtree.assert_called_once_with(wt_path, ignore_errors=True)
 

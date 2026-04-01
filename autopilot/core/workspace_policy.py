@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from autopilot.core.config import AutopilotConfig
+from autopilot.core.path_permissions import validate_story_worktree_path
 from autopilot.core.project_store import load_project_state
 from autopilot.core.runtime_control import WorkItemLease, list_project_work_item_leases, release_work_item_lease
 from autopilot.core.worktree import remove_worktree
@@ -85,6 +86,9 @@ def _checkout_health(
             issues.append("Reserved worktree path does not exist on disk.")
         if not branch_name:
             issues.append("Worktree checkout is missing branch metadata.")
+        validation = validate_story_worktree_path(project_path, checkout_path)
+        if not validation.allowed:
+            issues.append(validation.reason)
     elif checkout_path != project_path:
         issues.append("Shared-main checkout should point to the primary project path.")
 
@@ -241,9 +245,14 @@ def recover_story_checkout(
     checkout_path = Path(str(checkout_path_raw)).expanduser().resolve() if checkout_path_raw else None
 
     cleanup_performed = False
+    cleanup_skipped_reason: str | None = None
     if cleanup_worktree and checkout_path is not None and checkout_path != project_path and checkout_path.exists():
-        remove_worktree(project_path, checkout_path)
-        cleanup_performed = True
+        validation = validate_story_worktree_path(project_path, checkout_path, expected_story_id=story_id)
+        if validation.allowed:
+            remove_worktree(project_path, validation.normalized_path)
+            cleanup_performed = True
+        else:
+            cleanup_skipped_reason = validation.reason
 
     release_work_item_lease(config, project_id=project_id, story_id=story_id)
 
@@ -264,6 +273,7 @@ def recover_story_checkout(
     return {
         "story_id": story_id,
         "cleanup_performed": cleanup_performed,
+        "cleanup_skipped_reason": cleanup_skipped_reason,
         "reopened": reopen_story and story_state.get("status") == "open",
     }
 
