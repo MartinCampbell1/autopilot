@@ -210,6 +210,8 @@ def test_run_headless_structured_enables_bridge_first_permission_mode(monkeypatc
     assert captured["metadata"] == {
         "mode": "run",
         "permission_bridge_mode": "bridge_first",
+        "tool_permission_wait_for_resolution": True,
+        "tool_permission_resolution_timeout_sec": 30.0,
     }
 
 

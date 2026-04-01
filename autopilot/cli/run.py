@@ -2277,6 +2277,8 @@ def run(
         metadata={
             "mode": "run",
             "permission_bridge_mode": "bridge_first",
+            "tool_permission_wait_for_resolution": True,
+            "tool_permission_resolution_timeout_sec": 30.0,
         },
     ):
         if resolved_schedule:

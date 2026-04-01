@@ -54,6 +54,96 @@ class ToolRunResult(BaseModel):
     hooks: list[HookExecutionRecord] = Field(default_factory=list)
 
 
+def _coerce_optional_bool(value: Any) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return bool(value)
+    normalized = str(value).strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    return None
+
+
+def _pending_tool_permission_wait_settings(use_context: ToolUseContext) -> tuple[bool, float]:
+    runtime = get_active_structured_io()
+    enabled_raw = use_context.metadata.get("tool_permission_wait_for_resolution")
+    if enabled_raw is None and runtime is not None:
+        enabled_raw = runtime.metadata.get("tool_permission_wait_for_resolution")
+    enabled = _coerce_optional_bool(enabled_raw)
+
+    timeout_raw = use_context.metadata.get("tool_permission_resolution_timeout_sec")
+    if timeout_raw is None and runtime is not None:
+        timeout_raw = runtime.metadata.get("tool_permission_resolution_timeout_sec")
+    try:
+        timeout = float(timeout_raw)
+    except (TypeError, ValueError):
+        timeout = 0.0
+
+    if enabled is None:
+        enabled = timeout > 0
+    if not enabled or timeout <= 0:
+        return False, 0.0
+    return True, timeout
+
+
+def _await_pending_tool_permission_resolution(
+    *,
+    tool: ToolDef,
+    use_context: ToolUseContext,
+    tool_use_id: str,
+    approval_runtime_id: str = "",
+    runtime_key: str = "",
+) -> tuple[PermissionDecision | None, str]:
+    wait_enabled, wait_timeout_sec = _pending_tool_permission_wait_settings(use_context)
+    if not wait_enabled or wait_timeout_sec <= 0 or use_context.config is None:
+        return None, ""
+
+    resolved_runtime_key = runtime_key or _tool_permission_runtime_key(tool, use_context, tool_use_id)
+    resolved_approval_runtime_id = str(approval_runtime_id or "").strip()
+    mailbox_runtime_agent_id = next(
+        (str(item).strip() for item in use_context.runtime_agent_ids if str(item).strip()),
+        "",
+    )
+    if mailbox_runtime_agent_id and (resolved_approval_runtime_id or resolved_runtime_key):
+        try:
+            runtime_record = wait_for_approval_runtime_mailbox_resolution(
+                use_context.config,
+                approval_runtime_id=resolved_approval_runtime_id,
+                key=resolved_runtime_key,
+                runtime_agent_id=mailbox_runtime_agent_id,
+                wait_timeout_sec=wait_timeout_sec,
+            )
+        except (KeyError, TimeoutError, ValueError):
+            runtime_record = None
+        else:
+            runtime_decision = _permission_decision_from_runtime(runtime_record=runtime_record)
+            if runtime_decision is not None and runtime_decision.behavior in {"allow", "deny"}:
+                use_context.metadata["approval_runtime_id"] = runtime_record.id
+                return runtime_decision, "tool_runner.pending_runtime_mailbox"
+
+    if not resolved_approval_runtime_id and not resolved_runtime_key:
+        return None, ""
+    try:
+        runtime_record = wait_for_approval_runtime_resolution(
+            use_context.config,
+            approval_runtime_id=resolved_approval_runtime_id,
+            key=resolved_runtime_key,
+            wait_timeout_sec=wait_timeout_sec,
+        )
+    except (KeyError, TimeoutError):
+        return None, ""
+    runtime_decision = _permission_decision_from_runtime(runtime_record=runtime_record)
+    if runtime_decision is not None and runtime_decision.behavior in {"allow", "deny"}:
+        use_context.metadata["approval_runtime_id"] = runtime_record.id
+        return runtime_decision, "tool_runner.pending_runtime_fallback"
+    return None, ""
+
+
 def _permission_classifier_context_from_use_context(use_context: ToolUseContext) -> dict[str, Any]:
     raw = dict(use_context.metadata.get("permission_classifier") or {})
     enabled = raw.get("enabled")
@@ -594,7 +684,7 @@ def run_tool_use(
     resolved_permission_context = permission_context or get_empty_tool_permission_context()
     hook_records: list[HookExecutionRecord] = []
     tool_use_id = _resolve_tool_use_id(use_context, normalized_input)
-    _, reused_approval_runtime_id, reused_runtime_decision = _observe_existing_tool_permission_runtime(
+    reused_runtime_key, reused_approval_runtime_id, reused_runtime_decision = _observe_existing_tool_permission_runtime(
         tool,
         use_context,
         tool_use_id=tool_use_id,
@@ -664,15 +754,27 @@ def run_tool_use(
         "pending_hook",
         "pending_user",
     }:
-        return ToolRunResult(
-            status="approval_required",
-            tool_name=tool.name,
-            message=permission_decision.message,
-            input=normalized_input,
-            permission=permission_decision,
+        awaited_decision, awaited_source = _await_pending_tool_permission_resolution(
+            tool=tool,
+            use_context=use_context,
+            tool_use_id=tool_use_id,
             approval_runtime_id=reused_approval_runtime_id,
-            hooks=hook_records,
+            runtime_key=reused_runtime_key,
         )
+        if awaited_decision is not None:
+            permission_decision = awaited_decision
+            if awaited_source:
+                permission_source = awaited_source
+        else:
+            return ToolRunResult(
+                status="approval_required",
+                tool_name=tool.name,
+                message=permission_decision.message,
+                input=normalized_input,
+                permission=permission_decision,
+                approval_runtime_id=reused_approval_runtime_id,
+                hooks=hook_records,
+            )
 
     if permission_decision.behavior == "pending_classifier":
         approval_runtime_id = _materialize_pending_classifier_runtime(
@@ -683,15 +785,25 @@ def run_tool_use(
             permission_decision=permission_decision,
             classifier_context=classifier_context,
         )
-        return ToolRunResult(
-            status="approval_required",
-            tool_name=tool.name,
-            message=permission_decision.message,
-            input=normalized_input,
-            permission=permission_decision,
+        awaited_decision, awaited_source = _await_pending_tool_permission_resolution(
+            tool=tool,
+            use_context=use_context,
+            tool_use_id=tool_use_id,
             approval_runtime_id=approval_runtime_id,
-            hooks=hook_records,
         )
+        if awaited_decision is None:
+            return ToolRunResult(
+                status="approval_required",
+                tool_name=tool.name,
+                message=permission_decision.message,
+                input=normalized_input,
+                permission=permission_decision,
+                approval_runtime_id=approval_runtime_id,
+                hooks=hook_records,
+            )
+        permission_decision = awaited_decision
+        if awaited_source:
+            permission_source = awaited_source
 
     if permission_decision.behavior == "pending_hook":
         approval_runtime_id = _materialize_pending_permission_runtime(
@@ -703,15 +815,25 @@ def run_tool_use(
             specific_message_type="tool_permission_hook_pending",
             source="tool_runner.pending_hook",
         )
-        return ToolRunResult(
-            status="approval_required",
-            tool_name=tool.name,
-            message=permission_decision.message,
-            input=normalized_input,
-            permission=permission_decision,
+        awaited_decision, awaited_source = _await_pending_tool_permission_resolution(
+            tool=tool,
+            use_context=use_context,
+            tool_use_id=tool_use_id,
             approval_runtime_id=approval_runtime_id,
-            hooks=hook_records,
         )
+        if awaited_decision is None:
+            return ToolRunResult(
+                status="approval_required",
+                tool_name=tool.name,
+                message=permission_decision.message,
+                input=normalized_input,
+                permission=permission_decision,
+                approval_runtime_id=approval_runtime_id,
+                hooks=hook_records,
+            )
+        permission_decision = awaited_decision
+        if awaited_source:
+            permission_source = awaited_source
 
     if permission_decision.behavior in {"ask", "pending_user"}:
         pending_user_decision = (
@@ -728,15 +850,25 @@ def run_tool_use(
             specific_message_type="tool_permission_user_pending",
             source=permission_source,
         )
-        return ToolRunResult(
-            status="approval_required",
-            tool_name=tool.name,
-            message=pending_user_decision.message,
-            input=normalized_input,
-            permission=pending_user_decision,
+        awaited_decision, awaited_source = _await_pending_tool_permission_resolution(
+            tool=tool,
+            use_context=use_context,
+            tool_use_id=tool_use_id,
             approval_runtime_id=approval_runtime_id,
-            hooks=hook_records,
         )
+        if awaited_decision is None:
+            return ToolRunResult(
+                status="approval_required",
+                tool_name=tool.name,
+                message=pending_user_decision.message,
+                input=normalized_input,
+                permission=pending_user_decision,
+                approval_runtime_id=approval_runtime_id,
+                hooks=hook_records,
+            )
+        permission_decision = awaited_decision
+        if awaited_source:
+            permission_source = awaited_source
 
     if permission_decision.behavior == "deny":
         return ToolRunResult(
