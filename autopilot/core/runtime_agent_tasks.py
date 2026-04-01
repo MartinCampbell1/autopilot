@@ -753,6 +753,9 @@ def wait_for_runtime_agent_task_mailbox_resolution(
     deadline = time.monotonic() + max(float(wait_timeout_sec), 0.0)
     cursor = max(int(after_sequence or 0), 0)
     while True:
+        task = refresh_runtime_agent_task(config, task.id)
+        if task.status in TERMINAL_RUNTIME_AGENT_TASK_STATUSES:
+            return task
         messages = poll_agent_mailbox_messages(
             config,
             runtime_agent_id=normalized_runtime_agent_id,
@@ -767,8 +770,8 @@ def wait_for_runtime_agent_task_mailbox_resolution(
             message_task_id = str(payload.get("task_id") or metadata.get("task_id") or "").strip()
             if message_task_id != task.id:
                 continue
-            refreshed = get_runtime_agent_task(config, task.id)
-            if refreshed is not None and refreshed.status in TERMINAL_RUNTIME_AGENT_TASK_STATUSES:
+            refreshed = refresh_runtime_agent_task(config, task.id)
+            if refreshed.status in TERMINAL_RUNTIME_AGENT_TASK_STATUSES:
                 return refreshed
         if time.monotonic() >= deadline:
             raise TimeoutError(f"Timed out waiting for mailbox settlement of runtime-agent task `{task.id}`.")

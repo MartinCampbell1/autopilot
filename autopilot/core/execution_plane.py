@@ -2846,14 +2846,17 @@ def wait_for_execution_plane_agent_action_run_async_settlement(
     if not async_tasks:
         return payload
 
-    normalized_runtime_agent_id = str(runtime_agent_id or "").strip()
-    if not normalized_runtime_agent_id:
+    fallback_runtime_agent_id = str(runtime_agent_id or "").strip()
+    if not fallback_runtime_agent_id:
         runtime_agent_ids = payload.get("runtime_agent_ids")
         if isinstance(runtime_agent_ids, list) and runtime_agent_ids:
-            normalized_runtime_agent_id = str(runtime_agent_ids[0] or "").strip()
-    if not normalized_runtime_agent_id:
-        normalized_runtime_agent_id = str(async_tasks[0].get("runtime_agent_id") or "").strip()
-    if not normalized_runtime_agent_id:
+            fallback_runtime_agent_id = str(runtime_agent_ids[0] or "").strip()
+    if not fallback_runtime_agent_id:
+        fallback_runtime_agent_id = str(async_tasks[0].get("runtime_agent_id") or "").strip()
+    if not fallback_runtime_agent_id and not any(
+        str(task.get("runtime_agent_id") or "").strip() or list(task.get("runtime_agent_ids") or [])
+        for task in async_tasks
+    ):
         return payload
 
     deadline = time.monotonic() + max(float(wait_timeout_sec), 0.0)
@@ -2864,10 +2867,19 @@ def wait_for_execution_plane_agent_action_run_async_settlement(
         task_id = str(task.get("id") or "").strip()
         if not task_id:
             continue
+        task_runtime_agent_id = str(task.get("runtime_agent_id") or "").strip()
+        if not task_runtime_agent_id:
+            task_runtime_agent_ids = task.get("runtime_agent_ids")
+            if isinstance(task_runtime_agent_ids, list) and task_runtime_agent_ids:
+                task_runtime_agent_id = str(task_runtime_agent_ids[0] or "").strip()
+        if not task_runtime_agent_id:
+            task_runtime_agent_id = fallback_runtime_agent_id
+        if not task_runtime_agent_id:
+            continue
         try:
             wait_for_runtime_agent_task_mailbox_resolution(
                 config,
-                runtime_agent_id=normalized_runtime_agent_id,
+                runtime_agent_id=task_runtime_agent_id,
                 task_id=task_id,
                 wait_timeout_sec=remaining,
             )

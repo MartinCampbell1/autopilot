@@ -199,7 +199,9 @@ def test_runtime_agent_task_terminal_transition_publishes_resolution_mailbox(tmp
     assert specific.payload["resume_contract"]["task_id"] == task.id
 
 
-def test_wait_for_runtime_agent_task_mailbox_resolution_returns_terminal_task(tmp_path: Path) -> None:
+def test_wait_for_runtime_agent_task_mailbox_resolution_refreshes_terminal_task_without_prior_mailbox_event(
+    tmp_path: Path,
+) -> None:
     config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
     project = _seed_project(config, tmp_path / "async-task-mailbox-wait-project")
     log_path = config.autopilot_home / "logs" / "mailbox-wait.log"
@@ -223,7 +225,6 @@ def test_wait_for_runtime_agent_task_mailbox_resolution_returns_terminal_task(tm
     state["log_path"] = str(log_path)
     save_project_state(config, str(project["id"]), state)
 
-    refresh_runtime_agent_task(config, task.id)
     resolved = wait_for_runtime_agent_task_mailbox_resolution(
         config,
         runtime_agent_id="proj:1:worker:a",
@@ -233,3 +234,10 @@ def test_wait_for_runtime_agent_task_mailbox_resolution_returns_terminal_task(tm
 
     assert resolved.id == task.id
     assert resolved.status == "completed"
+    mailbox = list_agent_mailbox_messages(
+        config,
+        project_id=str(project["id"]),
+        runtime_agent_id="proj:1:worker:a",
+        message_type="runtime_agent_task_resolved",
+    )
+    assert any(message.payload["task_id"] == task.id for message in mailbox)
