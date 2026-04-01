@@ -362,7 +362,7 @@ def _bridge_permission_decision(
         return _wait_for_runtime_from_mailbox_or_disk()
 
     behavior = str(response.get("behavior") or "").strip().lower()
-    if behavior not in {"allow", "ask", "deny"}:
+    if behavior not in {"allow", "ask", "deny", "pending_classifier", "pending_user", "pending_hook"}:
         return _wait_for_runtime_from_mailbox_or_disk()
 
     try:
@@ -377,8 +377,33 @@ def _bridge_permission_decision(
         )
     except Exception:
         return None, "tool_runner.bridge_fallback"
+    approval_runtime_id = str(response.get("approval_runtime_id") or "").strip()
+    if approval_runtime_id:
+        use_context.metadata["approval_runtime_id"] = approval_runtime_id
 
     if runtime_key and use_context.config is not None:
+        if decision.behavior in {"pending_classifier", "pending_user", "pending_hook"}:
+            annotate_approval_runtime(
+                use_context.config,
+                key=runtime_key,
+                metadata_updates={
+                    "bridge_decision": {
+                        "behavior": decision.behavior,
+                        "message": decision.message,
+                        "rule_source": decision.rule_source,
+                        "matched_rule": decision.matched_rule,
+                        "approval_runtime_id": approval_runtime_id,
+                    }
+                },
+                payload_updates={
+                    "bridge_decision": {
+                        "reasons": list(decision.reasons),
+                        "tool_name": tool.name,
+                        "tool_use_id": tool_use_id,
+                    }
+                },
+            )
+            return decision, "tool_runner.bridge"
         if decision.behavior == "ask":
             annotate_approval_runtime(
                 use_context.config,
@@ -567,7 +592,7 @@ def run_tool_use(
         actor=use_context.actor,
         source=permission_source,
     )
-    if permission_decision.behavior in {"ask", "pending_classifier"}:
+    if permission_decision.behavior in {"ask", "pending_classifier", "pending_user"}:
         permission_hook_result = execute_permission_request_hooks(
             tool,
             normalized_input,
@@ -627,8 +652,12 @@ def run_tool_use(
             hooks=hook_records,
         )
 
-    if permission_decision.behavior == "ask":
-        pending_user_decision = permission_decision.model_copy(update={"behavior": "pending_user"})
+    if permission_decision.behavior in {"ask", "pending_user"}:
+        pending_user_decision = (
+            permission_decision
+            if permission_decision.behavior == "pending_user"
+            else permission_decision.model_copy(update={"behavior": "pending_user"})
+        )
         approval_runtime_id = _materialize_pending_permission_runtime(
             tool,
             use_context,

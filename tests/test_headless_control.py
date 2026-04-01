@@ -6,6 +6,8 @@ import io
 import json
 from pathlib import Path
 
+from autopilot.core.agent_mailbox import list_agent_mailbox_messages
+from autopilot.core.approval_runtime import get_approval_runtime
 from autopilot.core.config import AutopilotConfig
 from autopilot.core.headless_control import (
     attach_headless_control_handlers,
@@ -548,3 +550,46 @@ def test_headless_control_can_return_pending_classifier_runtime(tmp_path: Path) 
     assert payload["behavior"] == "pending_classifier"
     assert payload["rule_source"] == "classifier"
     assert payload["approval_runtime_id"]
+
+
+def test_headless_control_can_return_pending_user_runtime(tmp_path: Path) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    project = _create_project(config, tmp_path / "project")
+    session = create_headless_control_session(config, project_entry=project, session_id="sess_headless")
+
+    response = session.handle_request(
+        {
+            "type": "control_request",
+            "request_id": "req_can_use_tool_user_pending",
+            "request": {
+                "subtype": "can_use_tool",
+                "tool_name": "demo.read",
+                "input": {"path": "README.md"},
+                "tool_use_id": "toolu_user_pending",
+                "agent_id": "proj_headless_user:1:worker:a",
+            },
+            "session_id": "sess_headless",
+        }
+    )
+
+    payload = response.response.response
+    runtime = get_approval_runtime(config, approval_runtime_id=str(payload["approval_runtime_id"]))
+    generic_mailbox = list_agent_mailbox_messages(
+        config,
+        project_id=str(project["id"]),
+        runtime_agent_id="proj_headless_user:1:worker:a",
+        message_type="tool_permission_pending",
+    )
+    user_mailbox = list_agent_mailbox_messages(
+        config,
+        project_id=str(project["id"]),
+        runtime_agent_id="proj_headless_user:1:worker:a",
+        message_type="tool_permission_user_pending",
+    )
+
+    assert payload["behavior"] == "pending_user"
+    assert payload["approval_runtime_id"]
+    assert runtime is not None
+    assert runtime.metadata["pending"]["stage"] == "pending_user"
+    assert len(generic_mailbox) == 1
+    assert len(user_mailbox) == 1
