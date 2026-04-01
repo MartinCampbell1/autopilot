@@ -143,6 +143,14 @@ export function RuntimeAgentActivitySection({
                       >
                         {run.dry_run ? "preview" : "execute"}
                       </Badge>
+                      {run.completion_state === "pending_async" && (
+                        <Badge
+                          variant="outline"
+                          className="rounded-full border-[#d3e5ef] bg-[#eef7fb] px-2.5 py-1 text-[11px] font-medium text-[#2a6690]"
+                        >
+                          async pending
+                        </Badge>
+                      )}
                     </div>
                   </div>
                   <p className="mt-2 text-[12px] text-[#6b6b6b]">
@@ -159,7 +167,11 @@ export function RuntimeAgentActivitySection({
                     <SessionMetric
                       label="Policy"
                       value={run.policy_profile || "Custom"}
-                      detail={run.mode || "auto"}
+                      detail={
+                        run.completion_state === "pending_async"
+                          ? `${run.mode || "auto"} · ${run.active_async_task_count ?? 0} active async task${(run.active_async_task_count ?? 0) === 1 ? "" : "s"}`
+                          : run.mode || "auto"
+                      }
                     />
                   </div>
                   <div className="mt-3 flex flex-wrap gap-2">

@@ -21,7 +21,7 @@ from autopilot.core.project_store import (
     update_project_runtime,
     update_story_runtime,
 )
-from autopilot.core.runtime_agent_tasks import create_or_reuse_runtime_agent_task
+from autopilot.core.runtime_agent_tasks import create_or_reuse_runtime_agent_task, link_runtime_agent_task_run
 from autopilot.core.tool_permissions import PermissionRuleValue, PermissionUpdate, persist_permission_update
 
 
@@ -2591,7 +2591,12 @@ def test_execution_plane_agent_action_run_tracks_pending_async_completion_honest
     assert detail_response.status_code == 200
     detail = detail_response.json()
     assert detail["completion_state"] == "pending_async"
+    assert detail["async_task_count"] == 1
     assert detail["active_async_task_count"] == 1
+    assert detail["async_tasks"][0]["id"] == task.id
+    assert detail["async_tasks"][0]["resume_contract"]["task_id"] == task.id
+    assert detail["resume_contracts"][0]["task_id"] == task.id
+    assert detail["resume_contract"]["task_id"] == task.id
     assert detail["completed_at"] is None
     assert "do not treat this run as complete yet" in detail["completion_message"]
 
@@ -2623,7 +2628,10 @@ def test_execution_plane_agent_action_run_tracks_pending_async_completion_honest
     assert refreshed_response.status_code == 200
     refreshed = refreshed_response.json()
     assert refreshed["completion_state"] == "completed"
+    assert refreshed["async_task_count"] == 1
     assert refreshed["active_async_task_count"] == 0
+    assert refreshed["async_tasks"][0]["id"] == task.id
+    assert refreshed["resume_contract"]["task_id"] == task.id
     assert refreshed["completed_at"] == "2026-04-01T12:34:56+00:00"
     assert refreshed["async_task_status_counts"]["completed"] == 1
     assert refreshed["completion_message"] == "Async follow-through reached terminal state."
@@ -2643,6 +2651,88 @@ def test_execution_plane_agent_action_run_tracks_pending_async_completion_honest
         and event["agent_action_run_id"] == run.id
         for event in settled_events.json()["events"]
     )
+
+
+@patch("autopilot.core.execution_plane.generate_prd_from_spec")
+def test_execution_plane_agent_action_run_surfaces_linked_async_task_without_inline_result_payload(
+    mock_generate_prd_from_spec,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    client = _build_client(config, monkeypatch)
+    mock_generate_prd_from_spec.return_value = {
+        "title": "FounderOS Copilot",
+        "description": "Execution-ready FounderOS project.",
+        "stories": [{"id": 1, "title": "Bootstrap", "description": "Create the app shell"}],
+    }
+
+    created = _create_execution_project(client, tmp_path / "linked-async-run-project")
+    project_id = created["project"]["project_id"]
+    session = _create_orchestrator_session(
+        client,
+        project_ids=[project_id],
+        actor="founderos",
+        title="Linked async action run lifecycle",
+    )
+
+    task = create_or_reuse_runtime_agent_task(
+        config,
+        project_id=project_id,
+        command="launch",
+        actor="founderos",
+        reason="Launch background execution.",
+        orchestrator_session_id=session["id"],
+        runtime_agent_ids=["runtime-agent-1"],
+        output_path=str(config.autopilot_home / "logs" / f"{project_id}.log"),
+    )
+    run = create_agent_action_batch_run(
+        config,
+        run_kind="single_action",
+        orchestrator_session_id=session["id"],
+        actor="founderos",
+        mode="auto",
+        selection={"mode": "single_action", "project_id": project_id},
+        summary={"selected_count": 1, "processed_count": 1, "status_counts": {"ok": 1}},
+        results=[
+            {
+                "status": "ok",
+                "message": "Background launch requested.",
+                "command_result": {"command": "launch"},
+            }
+        ],
+        status="ok",
+        project_ids=[project_id],
+        runtime_agent_ids=["runtime-agent-1"],
+    )
+    link_runtime_agent_task_run(config, task.id, agent_action_run_id=run.id)
+
+    detail_response = client.get(f"/api/execution-plane/agents/action-runs/{run.id}")
+    assert detail_response.status_code == 200
+    detail = detail_response.json()
+    assert detail["completion_state"] == "pending_async"
+    assert detail["async_task_count"] == 1
+    assert detail["active_async_task_count"] == 1
+    assert detail["async_tasks"][0]["id"] == task.id
+    assert detail["resume_contract"]["task_id"] == task.id
+
+    state = load_project_state(config, project_id)
+    state["status"] = "completed"
+    state["paused"] = False
+    state["finished_at"] = "2026-04-01T12:45:00+00:00"
+    log_path = config.autopilot_home / "logs" / f"{project_id}.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path.write_text("launch started\nlaunch finished\n", encoding="utf-8")
+    state["log_path"] = str(log_path)
+    save_project_state(config, project_id, state)
+
+    refreshed_response = client.get(f"/api/execution-plane/agents/action-runs/{run.id}")
+    assert refreshed_response.status_code == 200
+    refreshed = refreshed_response.json()
+    assert refreshed["completion_state"] == "completed"
+    assert refreshed["active_async_task_count"] == 0
+    assert refreshed["async_task_status_counts"]["completed"] == 1
+    assert refreshed["async_tasks"][0]["id"] == task.id
 
 
 @patch("autopilot.core.execution_plane.generate_prd_from_spec")

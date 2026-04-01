@@ -747,6 +747,61 @@ export interface ExecutionIssueRecord {
   resolution_note: string;
 }
 
+export interface ExecutionRuntimeAgentTaskResumeContract {
+  task_id: string;
+  project_id: string;
+  command: string;
+  status: string;
+  orchestrator_session_id: string;
+  agent_action_run_id: string;
+  approval_id: string;
+  issue_id: string;
+  runtime_agent_id: string;
+  runtime_agent_ids: string[];
+  output_artifact_id?: string;
+  output_artifact_ref?: string;
+  transcript_artifact_id?: string;
+  transcript_artifact_ref?: string;
+  active: boolean;
+  terminal: boolean;
+}
+
+export interface ExecutionRuntimeAgentTaskRecord {
+  id: string;
+  project_id: string;
+  orchestrator_session_id: string;
+  agent_action_run_id: string;
+  approval_id: string;
+  issue_id: string;
+  command: string;
+  actor: string;
+  reason: string;
+  title: string;
+  status: string;
+  runtime_agent_id: string;
+  runtime_agent_ids: string[];
+  placeholder_result: string;
+  result_summary: string;
+  result_payload: Record<string, unknown>;
+  output_path: string;
+  output_artifact_id: string;
+  output_preview: string;
+  history: Array<Record<string, unknown>>;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+  started_at?: string | null;
+  completed_at?: string | null;
+  artifact_ref?: string;
+  output_artifact_ref?: string;
+  transcript_artifact_id?: string;
+  transcript_artifact_ref?: string;
+  output_available?: boolean;
+  active?: boolean;
+  terminal?: boolean;
+  resume_contract?: ExecutionRuntimeAgentTaskResumeContract | null;
+}
+
 export interface ExecutionAgentActionRunSummary {
   selected_count?: number;
   processed_count?: number;
@@ -774,6 +829,14 @@ export interface ExecutionAgentActionRunRecord {
   artifact_ref?: string;
   approval_required?: boolean;
   apply_mode?: string;
+  completion_state: string;
+  completion_message: string;
+  async_task_status_counts: ExecutionPlaneCountMap;
+  async_task_count?: number;
+  active_async_task_count?: number;
+  async_tasks?: ExecutionRuntimeAgentTaskRecord[];
+  resume_contracts?: ExecutionRuntimeAgentTaskResumeContract[];
+  resume_contract?: ExecutionRuntimeAgentTaskResumeContract | null;
   results: Array<Record<string, unknown>>;
   status: string;
   project_ids: string[];
@@ -859,7 +922,7 @@ export interface ExecutionRuntimeAgentDetail {
   issues: ExecutionIssueRecord[];
   approvals: ExecutionApprovalRecord[];
   tool_permission_runtimes?: ToolPermissionRuntimeRecord[];
-  async_tasks?: Array<Record<string, unknown>>;
+  async_tasks?: ExecutionRuntimeAgentTaskRecord[];
   events: ExecutionPlaneEvent[];
 }
 
@@ -877,6 +940,14 @@ export interface ExecutionAgentActionExecuteResult {
   artifact_ref?: string;
   approval_required?: boolean;
   apply_mode?: string;
+  completion_state?: string;
+  completion_message?: string;
+  async_task_count?: number;
+  active_async_task_count?: number;
+  async_tasks?: ExecutionRuntimeAgentTaskRecord[];
+  resume_contracts?: ExecutionRuntimeAgentTaskResumeContract[];
+  resume_contract?: ExecutionRuntimeAgentTaskResumeContract | null;
+  async_task?: ExecutionRuntimeAgentTaskRecord;
   run?: ExecutionAgentActionRunRecord;
   idempotent_replay?: boolean;
 }
@@ -892,6 +963,13 @@ export interface ExecutionAgentActionBatchResult {
   artifact_ref?: string;
   approval_required?: boolean;
   apply_mode?: string;
+  completion_state?: string;
+  completion_message?: string;
+  async_task_count?: number;
+  active_async_task_count?: number;
+  async_tasks?: ExecutionRuntimeAgentTaskRecord[];
+  resume_contracts?: ExecutionRuntimeAgentTaskResumeContract[];
+  resume_contract?: ExecutionRuntimeAgentTaskResumeContract | null;
   dry_run: boolean;
   results: Array<Record<string, unknown>>;
   run: ExecutionAgentActionRunRecord;
@@ -905,7 +983,7 @@ export interface OrchestratorSessionDetail extends OrchestratorSessionRecord {
   approvals: ExecutionApprovalRecord[];
   issues: ExecutionIssueRecord[];
   tool_permission_runtimes?: ToolPermissionRuntimeRecord[];
-  async_tasks?: Array<Record<string, unknown>>;
+  async_tasks?: ExecutionRuntimeAgentTaskRecord[];
   events: ExecutionPlaneEvent[];
   control: OrchestratorSessionControl;
   summary: {
