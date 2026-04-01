@@ -20,12 +20,21 @@ import type {
 } from "@/lib/control-plane-models";
 import { approvalStatusClass, passStatusClass } from "@/lib/control-plane-ui";
 
-export function matchesRunFilter(run: { dry_run: boolean; status: string; results: Array<Record<string, unknown>> }, filter: string): boolean {
+export function matchesRunFilter(
+  run: {
+    dry_run: boolean;
+    status: string;
+    results: Array<Record<string, unknown>>;
+    completion_state?: string;
+  },
+  filter: string
+): boolean {
   if (filter === "all") return true;
   if (filter === "execute") return !run.dry_run;
   if (filter === "preview") return run.dry_run;
   if (filter === "attention") {
     return (
+      run.completion_state === "pending_async" ||
       run.status === "error" ||
       run.status === "partial" ||
       run.results.some((result) =>
