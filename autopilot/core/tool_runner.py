@@ -7,6 +7,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from autopilot.core.approval_runtime import create_or_reuse_approval_runtime
 from autopilot.core.structured_runtime import get_active_structured_io
 from autopilot.core.tool_contracts import (
     ToolDef,
@@ -34,6 +35,7 @@ class ToolRunResult(BaseModel):
     message: str = ""
     input: dict[str, Any] = Field(default_factory=dict)
     permission: PermissionDecision | None = None
+    approval_runtime_id: str = ""
     tool_result: ToolResult | None = None
     hooks: list[HookExecutionRecord] = Field(default_factory=list)
 
@@ -105,6 +107,19 @@ def _bridge_permission_decision(
     return decision, "tool_runner.bridge"
 
 
+def _resolve_tool_use_id(
+    use_context: ToolUseContext,
+    tool_input: dict[str, Any],
+) -> str:
+    """Return one stable tool-use id for runtime coordination."""
+
+    resolved = str(use_context.metadata.get("tool_use_id") or tool_input.get("tool_use_id") or "").strip()
+    if not resolved:
+        resolved = f"toolu_{uuid.uuid4().hex[:12]}"
+        use_context.metadata["tool_use_id"] = resolved
+    return resolved
+
+
 def run_tool_use(
     tool: ToolDef,
     tool_input: dict[str, Any] | None,
@@ -118,6 +133,7 @@ def run_tool_use(
     normalized_input = dict(tool_input or {})
     resolved_permission_context = permission_context or get_empty_tool_permission_context()
     hook_records: list[HookExecutionRecord] = []
+    tool_use_id = _resolve_tool_use_id(use_context, normalized_input)
     bridge_decision, permission_source = _bridge_permission_decision(tool, normalized_input, use_context)
 
     permission_decision = resolve_tool_permission_decision(
@@ -153,12 +169,37 @@ def run_tool_use(
         permission_decision = permission_hook_result.permission_decision or permission_decision
 
     if permission_decision.behavior == "ask":
+        approval_runtime_id = ""
+        if use_context.config is not None and str(use_context.project_id or "").strip():
+            approval_runtime = create_or_reuse_approval_runtime(
+                use_context.config,
+                key=f"tool-permission:{use_context.project_id}:{tool.name}:{tool_use_id}",
+                project_id=use_context.project_id,
+                runtime_agent_ids=use_context.runtime_agent_ids,
+                metadata={
+                    "kind": "tool_permission_request",
+                    "tool_name": tool.name,
+                    "tool_use_id": tool_use_id,
+                    "actor": use_context.actor,
+                    "source": permission_source,
+                },
+                publish_pending=True,
+                pending_message_type="tool_permission_pending",
+                pending_payload={
+                    "tool_name": tool.name,
+                    "tool_use_id": tool_use_id,
+                    "message": permission_decision.message,
+                    "behavior": permission_decision.behavior,
+                },
+            )
+            approval_runtime_id = approval_runtime.id
         return ToolRunResult(
             status="approval_required",
             tool_name=tool.name,
             message=permission_decision.message,
             input=normalized_input,
             permission=permission_decision,
+            approval_runtime_id=approval_runtime_id,
             hooks=hook_records,
         )
 

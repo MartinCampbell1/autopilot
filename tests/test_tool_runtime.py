@@ -448,6 +448,48 @@ def test_tool_runner_denial_breaker_escalates_to_approval(tmp_path: Path) -> Non
     assert "explicit approval" in third.message
 
 
+def test_tool_runner_ask_creates_approval_runtime_and_pending_mailbox(tmp_path: Path) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    tool = build_tool(
+        name="demo.pause",
+        description="Pause demo execution.",
+        approval_policy="policy",
+        execute=lambda tool_input, _: ToolResult(status="ok", payload=tool_input),
+    )
+    permission_context = apply_permission_update(
+        get_empty_tool_permission_context(),
+        PermissionUpdate(
+            type="add_rules",
+            destination="session",
+            behavior="ask",
+            rules=[PermissionRuleValue(tool_name="demo.pause")],
+        ),
+    )
+
+    result = run_tool_use(
+        tool,
+        {},
+        ToolUseContext(
+            config=config,
+            actor="tester",
+            project_id="proj_tool_ask",
+            runtime_agent_ids=("proj_tool_ask:1:worker:a", "proj_tool_ask:1:review:b"),
+        ),
+        permission_context=permission_context,
+    )
+
+    runtime = get_approval_runtime(config, approval_runtime_id=result.approval_runtime_id)
+    mailbox = list_agent_mailbox_messages(config, project_id="proj_tool_ask", message_type="tool_permission_pending")
+
+    assert result.status == "approval_required"
+    assert result.approval_runtime_id
+    assert runtime is not None
+    assert runtime.metadata["tool_name"] == "demo.pause"
+    assert runtime.metadata["tool_use_id"].startswith("toolu_")
+    assert runtime.runtime_agent_ids == ["proj_tool_ask:1:review:b", "proj_tool_ask:1:worker:a"]
+    assert len(mailbox) == 2
+
+
 def test_tool_runner_uses_bridge_permission_decision_when_enabled(tmp_path: Path) -> None:
     config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
     runtime = StructuredIO(
