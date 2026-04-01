@@ -55,7 +55,11 @@ from autopilot.core.approvals import (
     save_approval,
 )
 from autopilot.core.approval_runtime import create_or_reuse_approval_runtime
-from autopilot.core.tool_permission_runtime import get_tool_permission_runtime, resolve_tool_permission_runtime
+from autopilot.core.tool_permission_runtime import (
+    get_tool_permission_runtime,
+    list_tool_permission_runtimes,
+    resolve_tool_permission_runtime,
+)
 from autopilot.core.agent_action_runs import (
     AgentActionBatchRunRecord,
     create_agent_action_batch_run,
@@ -177,6 +181,7 @@ class ExecutionPlaneProjectSnapshot(BaseModel):
     command_policy: dict[str, Any] = Field(default_factory=dict)
     runtime_agent_count: int = 0
     open_issue_count: int = 0
+    pending_tool_permission_runtime_count: int = 0
     runtime: ExecutionPlaneRuntime = Field(default_factory=ExecutionPlaneRuntime)
     progress: ExecutionPlaneProgress = Field(default_factory=ExecutionPlaneProgress)
     budget: ExecutionPlaneBudget = Field(default_factory=ExecutionPlaneBudget)
@@ -193,6 +198,7 @@ class ExecutionPlaneProjectDetail(ExecutionPlaneProjectSnapshot):
     runtime_control: dict[str, Any] = Field(default_factory=dict)
     runtime_agents: list[dict[str, Any]] = Field(default_factory=list)
     issues: list[dict[str, Any]] = Field(default_factory=list)
+    tool_permission_runtimes: list[dict[str, Any]] = Field(default_factory=list)
     brief: dict[str, Any] | None = None
     trace: dict[str, Any] = Field(default_factory=dict)
 
@@ -1729,10 +1735,17 @@ def _decorate_runtime_agent(
     agent: dict[str, Any],
     issues: list[dict[str, Any]],
     approvals: list[dict[str, Any]],
+    tool_permission_runtimes: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     budget = _runtime_agent_budget_summary(state, agent, role=str(agent.get("role") or ""))
     open_issues = [issue for issue in issues if issue.get("status") == "open"]
     pending_approvals = [approval for approval in approvals if approval.get("status") == "pending"]
+    runtime_tool_permissions = list(tool_permission_runtimes or [])
+    pending_tool_permission_runtimes = [
+        runtime
+        for runtime in runtime_tool_permissions
+        if str(runtime.get("status") or "") == "pending"
+    ]
     attention = _runtime_agent_attention_summary(
         agent=agent,
         project_snapshot=project_snapshot,
@@ -1754,11 +1767,52 @@ def _decorate_runtime_agent(
         **agent,
         "open_issue_count": len(open_issues),
         "pending_approval_count": len(pending_approvals),
+        "tool_permission_runtime_count": len(runtime_tool_permissions),
+        "pending_tool_permission_runtime_count": len(pending_tool_permission_runtimes),
         "budget": budget,
         "attention": attention,
         "recommendations": recommendations,
         "suggested_commands": suggested_commands,
     }
+
+
+def _materialize_tool_permission_runtime_record(record: Any) -> dict[str, Any]:
+    """Normalize one tool-permission runtime for execution-plane consumers."""
+
+    pending = dict(record.metadata.get("pending") or {})
+    resolution = dict(record.payload.get("resolution") or {})
+    return {
+        **record.model_dump(),
+        "kind": str(record.metadata.get("kind") or ""),
+        "pending_stage": str(pending.get("stage") or ""),
+        "tool_name": str(record.metadata.get("tool_name") or pending.get("tool_name") or ""),
+        "tool_use_id": str(record.metadata.get("tool_use_id") or pending.get("tool_use_id") or ""),
+        "resolved_behavior": str(pending.get("resolved_behavior") or record.outcome or ""),
+        "resolved_by": str(pending.get("resolved_by") or resolution.get("actor") or ""),
+        "resolved_source": str(pending.get("resolved_source") or resolution.get("source") or record.winner_source or ""),
+    }
+
+
+def list_execution_plane_tool_permission_runtimes(
+    config: AutopilotConfig,
+    *,
+    project_id: str | None = None,
+    runtime_agent_id: str | None = None,
+    status: str | None = None,
+    pending_stage: str | None = None,
+) -> list[dict[str, Any]]:
+    """List tool-permission runtimes for execution-plane consumers."""
+
+    return [
+        _materialize_tool_permission_runtime_record(record)
+        for record in list_tool_permission_runtimes(
+            config,
+            project_id=project_id,
+            runtime_agent_id=runtime_agent_id,
+            status=status,
+            pending_stage=pending_stage,
+        )
+    ]
 
 
 def build_execution_plane_project_snapshot(
@@ -1775,6 +1829,11 @@ def build_execution_plane_project_snapshot(
     command_policy = load_project_command_policy(config, project["id"])
     runtime_agents = build_execution_plane_runtime_agents(config, project, stories)
     open_issues = list_issues(config, project_id=project["id"], status="open")
+    pending_tool_permission_runtimes = list_execution_plane_tool_permission_runtimes(
+        config,
+        project_id=project["id"],
+        status="pending",
+    )
     task_source = TaskSource.model_validate(resolve_project_task_source(project))
     snapshot = ExecutionPlaneProjectSnapshot(
         project_id=project["id"],
@@ -1799,6 +1858,7 @@ def build_execution_plane_project_snapshot(
         command_policy=command_policy,
         runtime_agent_count=len(runtime_agents),
         open_issue_count=len(open_issues),
+        pending_tool_permission_runtime_count=len(pending_tool_permission_runtimes),
         runtime=ExecutionPlaneRuntime(
             status=str(summary.get("status") or "idle"),
             paused=bool(summary.get("paused", False)),
@@ -1839,6 +1899,7 @@ def build_execution_plane_project_detail(
     command_policy = load_project_command_policy(config, project_id)
     issues = [issue.model_dump() for issue in list_issues(config, project_id=project_id)]
     approvals = [approval.model_dump() for approval in list_approvals(config, project_id=project_id)]
+    tool_permission_runtimes = list_execution_plane_tool_permission_runtimes(config, project_id=project_id)
     task_source = TaskSource.model_validate(resolve_project_task_source(project))
     runtime_agents = [
         _decorate_runtime_agent(
@@ -1864,6 +1925,11 @@ def build_execution_plane_project_detail(
                 approval
                 for approval in approvals
                 if str(agent["agent_id"]) in (approval.get("runtime_agent_ids") or [])
+            ],
+            tool_permission_runtimes=[
+                runtime
+                for runtime in tool_permission_runtimes
+                if str(agent["agent_id"]) in (runtime.get("runtime_agent_ids") or [])
             ],
         )
         for agent in build_execution_plane_runtime_agents(config, project, detail.get("stories") or [])
@@ -1891,6 +1957,9 @@ def build_execution_plane_project_detail(
         command_policy=command_policy,
         runtime_agent_count=len(runtime_agents),
         open_issue_count=sum(1 for issue in issues if issue.get("status") == "open"),
+        pending_tool_permission_runtime_count=sum(
+            1 for runtime in tool_permission_runtimes if str(runtime.get("status") or "") == "pending"
+        ),
         runtime=ExecutionPlaneRuntime(
             status=str(detail.get("status") or "idle"),
             paused=bool(detail.get("paused", False)),
@@ -1918,6 +1987,7 @@ def build_execution_plane_project_detail(
         runtime_control=inspect_project_workspace_policy(config, project_id),
         runtime_agents=runtime_agents,
         issues=issues,
+        tool_permission_runtimes=tool_permission_runtimes,
         brief=brief.model_dump() if brief is not None else None,
         trace={
             "summary": detail.get("trace_summary") or {},
@@ -1985,6 +2055,13 @@ def list_execution_plane_agents(
     for approval in list_approvals(config):
         for runtime_agent_id in approval.runtime_agent_ids:
             approvals_by_agent.setdefault(runtime_agent_id, []).append(approval.model_dump())
+    tool_permission_runtimes_by_agent: dict[str, list[dict[str, Any]]] = {}
+    for runtime in list_execution_plane_tool_permission_runtimes(config, status="pending"):
+        for runtime_agent_id in runtime.get("runtime_agent_ids") or []:
+            normalized_runtime_agent_id = str(runtime_agent_id or "").strip()
+            if not normalized_runtime_agent_id:
+                continue
+            tool_permission_runtimes_by_agent.setdefault(normalized_runtime_agent_id, []).append(runtime)
 
     agents: list[dict[str, Any]] = []
     for project in load_projects_registry(config, include_archived=include_archived):
@@ -2010,6 +2087,7 @@ def list_execution_plane_agents(
                 agent=agent,
                 issues=issues_by_agent.get(str(agent["agent_id"]), []),
                 approvals=approvals_by_agent.get(str(agent["agent_id"]), []),
+                tool_permission_runtimes=tool_permission_runtimes_by_agent.get(str(agent["agent_id"]), []),
             )
             if attention_state and decorated["attention"]["state"] != attention_state:
                 continue
@@ -3625,6 +3703,16 @@ def get_execution_plane_orchestrator_session(
         for issue in list_issues(config)
         if issue.id in set(session.linked_issue_ids)
     ]
+    session_project_ids = set(session.project_ids)
+    runtime_agent_ids = set(session.linked_runtime_agent_ids)
+    tool_permission_runtimes = [
+        runtime
+        for runtime in list_execution_plane_tool_permission_runtimes(config)
+        if (
+            str(runtime.get("project_id") or "") in session_project_ids
+            or bool(runtime_agent_ids.intersection(set(runtime.get("runtime_agent_ids") or [])))
+        )
+    ]
     async_tasks = list_execution_plane_runtime_agent_tasks(
         config,
         orchestrator_session_id=session_id,
@@ -3646,6 +3734,7 @@ def get_execution_plane_orchestrator_session(
         "control_passes": control_passes,
         "approvals": approvals,
         "issues": issues,
+        "tool_permission_runtimes": tool_permission_runtimes,
         "async_tasks": async_tasks,
         "events": events,
         "control": control,
@@ -3654,6 +3743,10 @@ def get_execution_plane_orchestrator_session(
             "control_pass_count": len(control_passes),
             "approval_count": len(approvals),
             "pending_approval_count": sum(1 for approval in approvals if approval.get("status") == "pending"),
+            "tool_permission_runtime_count": len(tool_permission_runtimes),
+            "pending_tool_permission_runtime_count": sum(
+                1 for runtime in tool_permission_runtimes if str(runtime.get("status") or "") == "pending"
+            ),
             "issue_count": len(issues),
             "open_issue_count": sum(1 for issue in issues if issue.get("status") == "open"),
             "async_task_count": len(async_tasks),
@@ -3873,6 +3966,11 @@ def get_execution_plane_agent_detail(
         project_id=parsed.project_id,
         runtime_agent_id=runtime_agent_id,
     )]
+    tool_permission_runtimes = list_execution_plane_tool_permission_runtimes(
+        config,
+        project_id=parsed.project_id,
+        runtime_agent_id=runtime_agent_id,
+    )
     async_tasks = list_execution_plane_runtime_agent_tasks(
         config,
         project_id=parsed.project_id,
@@ -3885,7 +3983,7 @@ def get_execution_plane_agent_detail(
         limit=event_limit,
     )
 
-    if current_agent is None and not issues and not approvals and not async_tasks and not events:
+    if current_agent is None and not issues and not approvals and not tool_permission_runtimes and not async_tasks and not events:
         raise KeyError(runtime_agent_id)
 
     story = next((item for item in stories if int(item["id"]) == parsed.story_id), None)
@@ -3931,6 +4029,7 @@ def get_execution_plane_agent_detail(
             agent=current_agent,
             issues=issues,
             approvals=approvals,
+            tool_permission_runtimes=tool_permission_runtimes,
         )
 
     return {
@@ -3979,6 +4078,10 @@ def get_execution_plane_agent_detail(
             "open_issue_count": sum(1 for issue in issues if issue.get("status") == "open"),
             "approval_count": len(approvals),
             "pending_approval_count": sum(1 for approval in approvals if approval.get("status") == "pending"),
+            "tool_permission_runtime_count": len(tool_permission_runtimes),
+            "pending_tool_permission_runtime_count": sum(
+                1 for runtime in tool_permission_runtimes if str(runtime.get("status") or "") == "pending"
+            ),
             "async_task_count": len(async_tasks),
             "active_async_task_count": sum(
                 1 for task in async_tasks if str(task.get("status") or "") in {"queued", "running"}
@@ -3988,6 +4091,7 @@ def get_execution_plane_agent_detail(
         },
         "issues": issues,
         "approvals": approvals,
+        "tool_permission_runtimes": tool_permission_runtimes,
         "async_tasks": async_tasks,
         "events": events,
     }
@@ -5303,7 +5407,7 @@ def get_execution_plane_tool_permission_runtime(
     runtime = get_tool_permission_runtime(config, approval_runtime_id)
     if runtime is None:
         raise KeyError(approval_runtime_id)
-    return runtime.model_dump()
+    return _materialize_tool_permission_runtime_record(runtime)
 
 
 def resolve_execution_plane_tool_permission_runtime(

@@ -183,6 +183,78 @@ def test_execution_plane_tool_permission_runtime_routes_get_and_resolve(tmp_path
 
 
 @patch("autopilot.core.execution_plane.generate_prd_from_spec")
+def test_execution_plane_surfaces_pending_tool_permission_runtimes_in_project_and_agent_detail(
+    mock_generate_prd_from_spec,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    client = _build_client(config, monkeypatch)
+    mock_generate_prd_from_spec.return_value = {
+        "title": "FounderOS Copilot",
+        "description": "Execution-ready FounderOS project.",
+        "stories": [{"id": 1, "title": "Bootstrap", "description": "Create the app shell"}],
+    }
+    created = _create_execution_project(client, tmp_path / "tool-permission-runtime-project")
+    project_id = created["project"]["project_id"]
+    agents_response = client.get(f"/api/execution-plane/projects/{project_id}/agents")
+    assert agents_response.status_code == 200
+    runtime_agent_id = agents_response.json()["agents"][0]["agent_id"]
+
+    runtime = create_or_reuse_approval_runtime(
+        config,
+        key=f"tool-permission:{project_id}:demo.pause:toolu_surface_1",
+        project_id=project_id,
+        runtime_agent_ids=[runtime_agent_id],
+        metadata={
+            "kind": "tool_permission_request",
+            "tool_name": "demo.pause",
+            "tool_use_id": "toolu_surface_1",
+        },
+        publish_pending=True,
+        pending_message_type="tool_permission_pending",
+        pending_payload={
+            "tool_name": "demo.pause",
+            "tool_use_id": "toolu_surface_1",
+            "message": "Need explicit approval.",
+            "behavior": "pending_user",
+        },
+    )
+    annotate_approval_runtime(
+        config,
+        approval_runtime_id=runtime.id,
+        metadata_updates={"pending": {"stage": "pending_user", "tool_name": "demo.pause", "tool_use_id": "toolu_surface_1"}},
+        payload_updates={"pending_user": {"message": "Need explicit approval.", "tool_name": "demo.pause", "tool_use_id": "toolu_surface_1"}},
+        mailbox_message_type="tool_permission_user_pending",
+        mailbox_payload={"tool_name": "demo.pause", "tool_use_id": "toolu_surface_1"},
+    )
+
+    list_response = client.get(
+        "/api/execution-plane/tool-permission-runtimes",
+        params={"project_id": project_id, "status": "pending", "pending_stage": "pending_user"},
+    )
+    assert list_response.status_code == 200
+    listed = list_response.json()["runtimes"]
+    assert len(listed) == 1
+    assert listed[0]["id"] == runtime.id
+
+    project_detail_response = client.get(f"/api/execution-plane/projects/{project_id}")
+    assert project_detail_response.status_code == 200
+    project_detail = project_detail_response.json()
+    assert project_detail["pending_tool_permission_runtime_count"] == 1
+    assert len(project_detail["tool_permission_runtimes"]) == 1
+    assert project_detail["tool_permission_runtimes"][0]["pending_stage"] == "pending_user"
+
+    agent_detail_response = client.get(f"/api/execution-plane/agents/{runtime_agent_id}")
+    assert agent_detail_response.status_code == 200
+    agent_detail = agent_detail_response.json()
+    assert agent_detail["history"]["tool_permission_runtime_count"] == 1
+    assert agent_detail["history"]["pending_tool_permission_runtime_count"] == 1
+    assert len(agent_detail["tool_permission_runtimes"]) == 1
+    assert agent_detail["tool_permission_runtimes"][0]["id"] == runtime.id
+
+
+@patch("autopilot.core.execution_plane.generate_prd_from_spec")
 def test_execution_plane_orchestrator_sessions_create_list_detail_and_update(
     mock_generate_prd_from_spec,
     tmp_path: Path,

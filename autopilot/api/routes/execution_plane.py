@@ -44,6 +44,7 @@ from autopilot.core.execution_plane import (
     list_execution_plane_events,
     list_execution_plane_orchestrator_sessions,
     list_execution_plane_projects,
+    list_execution_plane_tool_permission_runtimes,
     get_execution_plane_runtime_agent_task,
     get_execution_plane_runtime_agent_task_output,
     get_execution_plane_runtime_agent_task_transcript,
@@ -929,6 +930,25 @@ async def get_execution_runtime_agent_task_transcript(task_id: str) -> dict[str,
         raise HTTPException(404, f"Runtime agent task {task_id} not found") from exc
     except FileNotFoundError as exc:
         raise HTTPException(404, f"Runtime agent task {task_id} has no transcript artifact") from exc
+
+
+@router.get("/tool-permission-runtimes")
+async def list_execution_tool_permission_runtimes(
+    project_id: str | None = Query(default=None),
+    runtime_agent_id: str | None = Query(default=None),
+    status: str | None = Query(default=None),
+    pending_stage: str | None = Query(default=None),
+) -> dict[str, list[dict]]:
+    config = get_config()
+    return {
+        "runtimes": list_execution_plane_tool_permission_runtimes(
+            config,
+            project_id=project_id,
+            runtime_agent_id=runtime_agent_id,
+            status=status,
+            pending_stage=pending_stage,
+        )
+    }
 
 
 @router.get("/agents/actions/{action_key:path}")

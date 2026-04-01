@@ -5,7 +5,12 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Literal
 
-from autopilot.core.approval_runtime import ApprovalRuntimeRecord, get_approval_runtime, settle_approval_runtime
+from autopilot.core.approval_runtime import (
+    ApprovalRuntimeRecord,
+    get_approval_runtime,
+    list_approval_runtimes,
+    settle_approval_runtime,
+)
 from autopilot.core.config import AutopilotConfig
 
 ToolPermissionResolutionOutcome = Literal["allow", "deny"]
@@ -31,6 +36,36 @@ def get_tool_permission_runtime(
     if record is None or not _is_tool_permission_runtime(record):
         return None
     return record
+
+
+def list_tool_permission_runtimes(
+    config: AutopilotConfig,
+    *,
+    project_id: str | None = None,
+    runtime_agent_id: str | None = None,
+    status: str | None = None,
+    pending_stage: str | None = None,
+) -> list[ApprovalRuntimeRecord]:
+    """List tool-permission runtimes with lightweight filters."""
+
+    records = list_approval_runtimes(
+        config,
+        project_id=project_id,
+        status=status,
+        runtime_agent_id=runtime_agent_id,
+    )
+    normalized_pending_stage = str(pending_stage or "").strip()
+    filtered: list[ApprovalRuntimeRecord] = []
+    for record in records:
+        if not _is_tool_permission_runtime(record):
+            continue
+        if normalized_pending_stage:
+            current_pending_stage = str((record.metadata.get("pending") or {}).get("stage") or "").strip()
+            if current_pending_stage != normalized_pending_stage:
+                continue
+        filtered.append(record)
+    filtered.sort(key=lambda item: (item.created_at, item.id))
+    return filtered
 
 
 def resolve_tool_permission_runtime(
@@ -104,5 +139,6 @@ __all__ = [
     "ToolPermissionResolutionOutcome",
     "ToolPermissionResolutionSource",
     "get_tool_permission_runtime",
+    "list_tool_permission_runtimes",
     "resolve_tool_permission_runtime",
 ]
