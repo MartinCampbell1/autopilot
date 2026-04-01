@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from autopilot.core.path_permissions import validate_story_worktree_path
+from autopilot.core.path_permissions import validate_gate_shell_command, validate_story_worktree_path
 
 
 def test_validate_story_worktree_path_accepts_expected_layout(tmp_path: Path) -> None:
@@ -32,3 +32,32 @@ def test_validate_story_worktree_path_rejects_outside_parent_directory(tmp_path:
 
     assert result.allowed is False
     assert "parent directory" in result.reason.lower()
+
+
+def test_validate_gate_shell_command_accepts_simple_gate_with_env_assignment() -> None:
+    result = validate_gate_shell_command("PYTHONPATH=. python -m pytest -q")
+
+    assert result.allowed is True
+    assert result.argv == ("python", "-m", "pytest", "-q")
+    assert result.env_updates == {"PYTHONPATH": "."}
+
+
+def test_validate_gate_shell_command_rejects_shell_control_operator() -> None:
+    result = validate_gate_shell_command("pytest && rm -rf dist")
+
+    assert result.allowed is False
+    assert "control operator" in result.reason.lower()
+
+
+def test_validate_gate_shell_command_rejects_shell_expansion_in_path() -> None:
+    result = validate_gate_shell_command("pytest ~/tests")
+
+    assert result.allowed is False
+    assert "shell expansion" in result.reason.lower()
+
+
+def test_validate_gate_shell_command_rejects_destructive_find_operator() -> None:
+    result = validate_gate_shell_command("find . -name '*.py' -delete")
+
+    assert result.allowed is False
+    assert "-delete" in result.reason
