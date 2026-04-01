@@ -26,9 +26,12 @@ from autopilot.core.control_messages import (
 )
 from autopilot.core.execution_plane import (
     get_execution_plane_agent_action_run,
+    list_execution_plane_agent_action_runs,
+    list_execution_plane_runtime_agent_tasks,
     get_execution_plane_runtime_agent_task,
     get_execution_plane_runtime_agent_task_output,
     get_execution_plane_runtime_agent_task_transcript,
+    summarize_execution_plane_agent_action_runs,
     wait_for_execution_plane_agent_action_run_async_settlement,
 )
 from autopilot.core.plugin_loader import clear_plugin_cache
@@ -612,6 +615,29 @@ class HeadlessControlSession:
             raise KeyError(run_id)
         return {"run": payload}
 
+    def list_runtime_agent_action_runs_payload(self, request: Any) -> dict[str, Any]:
+        """Return project-scoped runtime-agent action runs for the current headless project."""
+
+        runs = list_execution_plane_agent_action_runs(
+            self.config,
+            project_id=self.project_id,
+            orchestrator_session_id=str(request.orchestrator_session_id or "").strip() or None,
+            run_kind=str(request.run_kind or "").strip() or None,
+            actor=str(request.actor or "").strip() or None,
+            status=str(request.status or "").strip() or None,
+            dry_run=request.dry_run if isinstance(request.dry_run, bool) else None,
+        )
+        summary = summarize_execution_plane_agent_action_runs(
+            self.config,
+            project_id=self.project_id,
+            orchestrator_session_id=str(request.orchestrator_session_id or "").strip() or None,
+            run_kind=str(request.run_kind or "").strip() or None,
+            actor=str(request.actor or "").strip() or None,
+            status=str(request.status or "").strip() or None,
+            dry_run=request.dry_run if isinstance(request.dry_run, bool) else None,
+        )
+        return {"runs": runs, "summary": summary}
+
     def get_runtime_agent_task_output_payload(self, request: Any) -> dict[str, Any]:
         """Return one runtime-agent task output artifact for the current headless project."""
 
@@ -629,6 +655,34 @@ class HeadlessControlSession:
         if str(task_payload.get("project_id") or "").strip() != self.project_id:
             raise KeyError(task_id)
         return {"transcript": get_execution_plane_runtime_agent_task_transcript(self.config, task_id)}
+
+    def list_runtime_agent_tasks_payload(self, request: Any) -> dict[str, Any]:
+        """Return project-scoped runtime-agent tasks for the current headless project."""
+
+        tasks = list_execution_plane_runtime_agent_tasks(
+            self.config,
+            project_id=self.project_id,
+            orchestrator_session_id=str(request.orchestrator_session_id or "").strip() or None,
+            runtime_agent_id=str(request.runtime_agent_id or "").strip() or None,
+            status=str(request.status or "").strip() or None,
+            command=str(request.command or "").strip() or None,
+            agent_action_run_id=str(request.agent_action_run_id or "").strip() or None,
+        )
+        by_status: dict[str, int] = {}
+        active_count = 0
+        for task in tasks:
+            status = str(task.get("status") or "").strip() or "unknown"
+            by_status[status] = by_status.get(status, 0) + 1
+            if bool(task.get("active")):
+                active_count += 1
+        return {
+            "tasks": tasks,
+            "summary": {
+                "count": len(tasks),
+                "active_count": active_count,
+                "by_status": by_status,
+            },
+        }
 
     def handle_request(self, request: ControlRequestEnvelope | dict[str, Any]) -> ControlResponseEnvelope:
         """Resolve one inbound control request for the headless runtime."""
@@ -676,6 +730,12 @@ class HeadlessControlSession:
                 response=payload,
                 session_id=self.session_id,
             )
+        if subtype == "list_runtime_agent_action_runs":
+            return make_control_success_response(
+                request.request_id,
+                response=self.list_runtime_agent_action_runs_payload(request.request),
+                session_id=self.session_id,
+            )
         if subtype == "get_runtime_agent_task_output":
             try:
                 payload = self.get_runtime_agent_task_output_payload(request.request)
@@ -694,6 +754,12 @@ class HeadlessControlSession:
             return make_control_success_response(
                 request.request_id,
                 response=payload,
+                session_id=self.session_id,
+            )
+        if subtype == "list_runtime_agent_tasks":
+            return make_control_success_response(
+                request.request_id,
+                response=self.list_runtime_agent_tasks_payload(request.request),
                 session_id=self.session_id,
             )
         if subtype == "get_runtime_agent_task_transcript":

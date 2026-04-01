@@ -951,3 +951,72 @@ def test_headless_control_can_get_runtime_agent_action_run_and_wait_for_async_se
     assert settled_response.response.response["run"]["completion_state"] == "completed"
     assert settled_response.response.response["run"]["active_async_task_count"] == 0
     assert settled_response.response.response["run"]["async_tasks"][0]["id"] == task.id
+
+
+def test_headless_control_can_list_runtime_agent_runs_and_tasks(tmp_path: Path) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    project = _create_project(config, tmp_path / "project")
+    log_path = config.autopilot_home / "logs" / "headless-listing.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path.write_text("launch started\n", encoding="utf-8")
+
+    task = create_or_reuse_runtime_agent_task(
+        config,
+        project_id=str(project["id"]),
+        command="launch",
+        actor="founderos",
+        reason="Launch background work.",
+        orchestrator_session_id="sess_headless",
+        runtime_agent_ids=["proj_headless_runtime:1:worker:a"],
+        output_path=str(log_path),
+    )
+    run = create_agent_action_batch_run(
+        config,
+        run_kind="single_action",
+        orchestrator_session_id="sess_headless",
+        actor="founderos",
+        mode="auto",
+        selection={"mode": "single_action", "project_id": str(project["id"])},
+        summary={"selected_count": 1, "processed_count": 1, "status_counts": {"ok": 1}},
+        results=[{"status": "ok", "command_result": {"command": "launch"}, "async_task": {"id": task.id}}],
+        status="ok",
+        project_ids=[str(project["id"])],
+        runtime_agent_ids=["proj_headless_runtime:1:worker:a"],
+    )
+    link_runtime_agent_task_run(config, task.id, agent_action_run_id=run.id)
+    session = create_headless_control_session(config, project_entry=project, session_id="sess_headless")
+
+    runs_response = session.handle_request(
+        {
+            "type": "control_request",
+            "request_id": "req_list_runtime_agent_action_runs",
+            "request": {
+                "subtype": "list_runtime_agent_action_runs",
+                "orchestrator_session_id": "sess_headless",
+            },
+            "session_id": "sess_headless",
+        }
+    )
+    tasks_response = session.handle_request(
+        {
+            "type": "control_request",
+            "request_id": "req_list_runtime_agent_tasks",
+            "request": {
+                "subtype": "list_runtime_agent_tasks",
+                "agent_action_run_id": run.id,
+            },
+            "session_id": "sess_headless",
+        }
+    )
+
+    assert runs_response.response.subtype == "success"
+    assert runs_response.response.response["summary"]["totals"]["runs"] == 1
+    assert runs_response.response.response["summary"]["totals"]["pending_async"] == 1
+    assert runs_response.response.response["runs"][0]["id"] == run.id
+    assert runs_response.response.response["runs"][0]["project_ids"] == [str(project["id"])]
+
+    assert tasks_response.response.subtype == "success"
+    assert tasks_response.response.response["summary"]["count"] == 1
+    assert tasks_response.response.response["summary"]["active_count"] == 1
+    assert tasks_response.response.response["tasks"][0]["id"] == task.id
+    assert tasks_response.response.response["tasks"][0]["agent_action_run_id"] == run.id
