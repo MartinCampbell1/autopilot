@@ -6,12 +6,14 @@ import { PortfolioProjectCard } from "@/components/portfolio-project-card";
 import { archiveProject, fetchAccountsHealth, fetchProjects, launchProject, pauseProject, resumeProject } from "@/lib/api";
 import { useSSE } from "@/lib/sse";
 import { useProjectRuntimeControlClient } from "@/lib/use-project-runtime-control-client";
-import type { AccountHealth, ProjectSummary } from "@/lib/types";
+import type { AccountHealth, ProjectSummary, ToolPermissionRuntimeRecord } from "@/lib/types";
 
 export default function DashboardPage() {
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [health, setHealth] = useState<AccountHealth | null>(null);
   const [busyProjectId, setBusyProjectId] = useState<string>("");
+  const [busyToolPermissionKey, setBusyToolPermissionKey] = useState<string>("");
+  const [expandedToolPermissionProjects, setExpandedToolPermissionProjects] = useState<Record<string, boolean>>({});
   const [message, setMessage] = useState("");
 
   const loadData = useCallback(async () => {
@@ -42,9 +44,12 @@ export default function DashboardPage() {
   const runtimeControl = useProjectRuntimeControlClient({ projects: visibleProjects });
   const {
     getLatestRequest,
+    getToolPermissionRuntimes,
     handleSSEEvent,
     isPending,
     requestInterrupt,
+    requestListToolPermissionRuntimes,
+    requestResolveToolPermissionRuntime,
   } = runtimeControl;
 
   useSSE(
@@ -99,6 +104,63 @@ export default function DashboardPage() {
     [getLatestRequest]
   );
 
+  const toggleToolPermissionPanel = useCallback(
+    async (project: ProjectSummary) => {
+      const isOpen = Boolean(expandedToolPermissionProjects[project.id]);
+      if (isOpen) {
+        setExpandedToolPermissionProjects((current) => {
+          const next = { ...current };
+          delete next[project.id];
+          return next;
+        });
+        return;
+      }
+      setExpandedToolPermissionProjects((current) => ({
+        ...current,
+        [project.id]: true,
+      }));
+      setMessage("");
+      try {
+        await requestListToolPermissionRuntimes(project.id, { status: "pending" });
+      } catch (error) {
+        setMessage(error instanceof Error ? error.message : "Failed to load pending tool permissions.");
+      }
+    },
+    [expandedToolPermissionProjects, requestListToolPermissionRuntimes]
+  );
+
+  const resolveToolPermission = useCallback(
+    async (
+      project: ProjectSummary,
+      runtime: ToolPermissionRuntimeRecord,
+      outcome: "allow" | "deny"
+    ) => {
+      const actionKey = `${runtime.id}:${outcome}`;
+      setBusyToolPermissionKey(actionKey);
+      setMessage("");
+      try {
+        await requestResolveToolPermissionRuntime(project.id, runtime.id, outcome, {
+          actor: "dashboard",
+          note:
+            outcome === "allow"
+              ? `Dashboard allowed ${runtime.tool_name || runtime.id}.`
+              : `Dashboard denied ${runtime.tool_name || runtime.id}.`,
+          source: "user",
+        });
+        await requestListToolPermissionRuntimes(project.id, { status: "pending" });
+        await loadData();
+        setMessage(
+          `${outcome === "allow" ? "Allowed" : "Denied"} ${runtime.tool_name || "tool request"} for ${project.name}.`
+        );
+      } catch (error) {
+        setMessage(error instanceof Error ? error.message : "Failed to resolve tool permission runtime.");
+      } finally {
+        setBusyToolPermissionKey("");
+      }
+    },
+    [loadData, requestListToolPermissionRuntimes, requestResolveToolPermissionRuntime]
+  );
+
   return (
     <div className="flex min-h-screen bg-[#fafaf9]">
       <AppSidebar health={health} projects={visibleProjects} />
@@ -137,30 +199,62 @@ export default function DashboardPage() {
             </div>
           ) : (
             <div className="space-y-4">
-              {visibleProjects.map((project) => (
-                <PortfolioProjectCard
-                  key={project.id}
-                  project={project}
-                  busy={busyProjectId === project.id}
-                  interruptBusy={isPending(project.id, "interrupt")}
-                  interruptStateLabel={interruptStateLabel(project.id)}
-                  onLaunch={() => {
-                    const fn = project.status === "paused"
-                      ? () => resumeProject(project.id)
-                      : () => launchProject(project.id);
-                    void runAction(project.id, fn);
-                  }}
-                  onPause={() => {
-                    void runAction(project.id, () => pauseProject(project.id));
-                  }}
-                  onInterrupt={() => {
-                    void runInterruptAction(project);
-                  }}
-                  onArchive={() => {
-                    void runAction(project.id, () => archiveProject(project.id));
-                  }}
-                />
-              ))}
+              {visibleProjects.map((project) => {
+                const pendingToolPermissionRuntimes = getToolPermissionRuntimes(project.id, {
+                  pendingOnly: true,
+                });
+                const pendingToolPermissionCount = Math.max(
+                  Number(project.pending_tool_permission_runtime_count || 0),
+                  pendingToolPermissionRuntimes.length
+                );
+                const latestToolPermissionListRequest = getLatestRequest(
+                  project.id,
+                  "list_tool_permission_runtimes"
+                );
+                const toolPermissionError =
+                  latestToolPermissionListRequest?.phase === "error"
+                    ? latestToolPermissionListRequest.errorMessage || ""
+                    : "";
+                return (
+                  <PortfolioProjectCard
+                    key={project.id}
+                    project={project}
+                    busy={busyProjectId === project.id}
+                    interruptBusy={isPending(project.id, "interrupt")}
+                    interruptStateLabel={interruptStateLabel(project.id)}
+                    pendingToolPermissionCount={pendingToolPermissionCount}
+                    toolPermissionPanelOpen={Boolean(expandedToolPermissionProjects[project.id])}
+                    toolPermissionLoading={isPending(project.id, "list_tool_permission_runtimes")}
+                    toolPermissionError={toolPermissionError}
+                    toolPermissionBusyKey={busyToolPermissionKey}
+                    toolPermissionRuntimes={pendingToolPermissionRuntimes}
+                    onToggleToolPermissionPanel={() => {
+                      void toggleToolPermissionPanel(project);
+                    }}
+                    onAllowToolPermission={(runtime) => {
+                      void resolveToolPermission(project, runtime, "allow");
+                    }}
+                    onDenyToolPermission={(runtime) => {
+                      void resolveToolPermission(project, runtime, "deny");
+                    }}
+                    onLaunch={() => {
+                      const fn = project.status === "paused"
+                        ? () => resumeProject(project.id)
+                        : () => launchProject(project.id);
+                      void runAction(project.id, fn);
+                    }}
+                    onPause={() => {
+                      void runAction(project.id, () => pauseProject(project.id));
+                    }}
+                    onInterrupt={() => {
+                      void runInterruptAction(project);
+                    }}
+                    onArchive={() => {
+                      void runAction(project.id, () => archiveProject(project.id));
+                    }}
+                  />
+                );
+              })}
             </div>
           )}
         </div>

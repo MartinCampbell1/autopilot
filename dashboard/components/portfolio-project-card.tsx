@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
-import type { ProjectSummary } from "@/lib/types";
+import type { ProjectSummary, ToolPermissionRuntimeRecord } from "@/lib/types";
 
 const STATUS_LABELS: Record<ProjectSummary["status"], string> = {
   idle: "Idle",
@@ -25,6 +25,15 @@ interface PortfolioProjectCardProps {
   busy?: boolean;
   interruptBusy?: boolean;
   interruptStateLabel?: string;
+  pendingToolPermissionCount?: number;
+  toolPermissionPanelOpen?: boolean;
+  toolPermissionLoading?: boolean;
+  toolPermissionError?: string;
+  toolPermissionBusyKey?: string;
+  toolPermissionRuntimes?: ToolPermissionRuntimeRecord[];
+  onToggleToolPermissionPanel?: () => void;
+  onAllowToolPermission?: (runtime: ToolPermissionRuntimeRecord) => void;
+  onDenyToolPermission?: (runtime: ToolPermissionRuntimeRecord) => void;
   onLaunch?: () => void;
   onPause?: () => void;
   onInterrupt?: () => void;
@@ -54,11 +63,44 @@ function formatPhrase(value?: string | null) {
   return value ? value.replaceAll("_", " ") : "unknown";
 }
 
+function formatToolPermissionStage(value?: string | null) {
+  const normalized = (value || "").trim();
+  if (normalized === "pending_user") return "Waiting for user";
+  if (normalized === "pending_hook") return "Waiting for hook";
+  if (normalized === "pending_classifier") return "Waiting for classifier";
+  return formatPhrase(normalized);
+}
+
+function extractToolPermissionMessage(runtime: ToolPermissionRuntimeRecord) {
+  const stagePayload = runtime.pending_stage
+    ? runtime.payload?.[runtime.pending_stage]
+    : null;
+  if (
+    stagePayload
+    && typeof stagePayload === "object"
+    && !Array.isArray(stagePayload)
+    && typeof (stagePayload as Record<string, unknown>).message === "string"
+    && (stagePayload as Record<string, unknown>).message
+  ) {
+    return (stagePayload as Record<string, string>).message;
+  }
+  return runtime.message || "Tool permission request is waiting for a decision.";
+}
+
 export function PortfolioProjectCard({
   project,
   busy = false,
   interruptBusy = false,
   interruptStateLabel = "",
+  pendingToolPermissionCount = 0,
+  toolPermissionPanelOpen = false,
+  toolPermissionLoading = false,
+  toolPermissionError = "",
+  toolPermissionBusyKey = "",
+  toolPermissionRuntimes = [],
+  onToggleToolPermissionPanel,
+  onAllowToolPermission,
+  onDenyToolPermission,
   onLaunch,
   onPause,
   onInterrupt,
@@ -73,6 +115,9 @@ export function PortfolioProjectCard({
     || (project.latest_handoff?.number
       ? `PR #${project.latest_handoff.number}`
       : project.latest_handoff?.head_branch || project.latest_handoff?.story_title || "");
+  const reviewLabel = pendingToolPermissionCount > 0
+    ? `Review ${pendingToolPermissionCount}`
+    : "Review";
 
   return (
     <article className="rounded-[14px] border border-[#e5e5e3] bg-white p-5 shadow-[0_1px_3px_rgba(15,15,15,0.08),0_0_1px_rgba(15,15,15,0.04)]">
@@ -216,6 +261,94 @@ export function PortfolioProjectCard({
             <p className="w-full text-right text-[11px] text-[#787774]">
               {interruptStateLabel}
             </p>
+          ) : null}
+          {project.runtime_control_available && (pendingToolPermissionCount > 0 || toolPermissionPanelOpen) ? (
+            <div className="mt-3 w-full rounded-[12px] border border-[#ecebe8] bg-[#fbfbf9] p-3 text-left">
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <div>
+                  <p className="text-[11px] uppercase tracking-[0.08em] text-[#9b9a97]">Tool permissions</p>
+                  <p className="mt-1 text-[13px] font-medium text-[#37352f]">
+                    {pendingToolPermissionCount > 0
+                      ? `${pendingToolPermissionCount} pending runtime request${pendingToolPermissionCount === 1 ? "" : "s"}`
+                      : "No pending runtime requests"}
+                  </p>
+                </div>
+                {onToggleToolPermissionPanel ? (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-8 rounded-lg text-[12px]"
+                    disabled={busy || toolPermissionLoading}
+                    onClick={onToggleToolPermissionPanel}
+                  >
+                    {toolPermissionLoading && !toolPermissionPanelOpen
+                      ? "Loading..."
+                      : toolPermissionPanelOpen
+                        ? "Hide"
+                        : reviewLabel}
+                  </Button>
+                ) : null}
+              </div>
+
+              {toolPermissionPanelOpen ? (
+                <div className="mt-3 space-y-2">
+                  {toolPermissionError ? (
+                    <p className="text-[12px] text-[#93370d]">{toolPermissionError}</p>
+                  ) : null}
+                  {toolPermissionLoading && toolPermissionRuntimes.length === 0 ? (
+                    <p className="text-[12px] text-[#787774]">Loading pending tool permissions...</p>
+                  ) : null}
+                  {!toolPermissionLoading && toolPermissionRuntimes.length === 0 ? (
+                    <p className="text-[12px] text-[#787774]">
+                      No pending tool permissions are currently waiting in this runtime.
+                    </p>
+                  ) : null}
+                  {toolPermissionRuntimes.map((runtime) => (
+                    <div
+                      key={runtime.id}
+                      className="rounded-[10px] border border-[#ecebe8] bg-white px-3 py-3"
+                    >
+                      <div className="flex flex-wrap items-start justify-between gap-2">
+                        <div>
+                          <p className="text-[13px] font-medium text-[#37352f]">
+                            {runtime.tool_name || "Unknown tool"}
+                          </p>
+                          <p className="mt-1 text-[12px] text-[#787774]">
+                            {formatToolPermissionStage(runtime.pending_stage)} · use {runtime.tool_use_id || runtime.id}
+                          </p>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          {onDenyToolPermission ? (
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="h-8 rounded-lg text-[12px] text-[#93370d] hover:bg-[#fff2ef] hover:text-[#93370d]"
+                              disabled={busy || toolPermissionBusyKey === `${runtime.id}:allow` || toolPermissionBusyKey === `${runtime.id}:deny`}
+                              onClick={() => onDenyToolPermission(runtime)}
+                            >
+                              {toolPermissionBusyKey === `${runtime.id}:deny` ? "Denying..." : "Deny"}
+                            </Button>
+                          ) : null}
+                          {onAllowToolPermission ? (
+                            <Button
+                              size="sm"
+                              className="h-8 rounded-lg bg-[#1a1a1a] text-[12px] hover:bg-[#333]"
+                              disabled={busy || toolPermissionBusyKey === `${runtime.id}:allow` || toolPermissionBusyKey === `${runtime.id}:deny`}
+                              onClick={() => onAllowToolPermission(runtime)}
+                            >
+                              {toolPermissionBusyKey === `${runtime.id}:allow` ? "Allowing..." : "Allow"}
+                            </Button>
+                          ) : null}
+                        </div>
+                      </div>
+                      <p className="mt-2 text-[12px] leading-relaxed text-[#6b6b6b]">
+                        {extractToolPermissionMessage(runtime)}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+            </div>
           ) : null}
         </div>
       </div>

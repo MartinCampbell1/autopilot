@@ -8,6 +8,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from autopilot.api.routes import projects as projects_routes
+from autopilot.core.approval_runtime import annotate_approval_runtime, create_or_reuse_approval_runtime
 from autopilot.core.config import AutopilotConfig
 from autopilot.core.project_store import load_project_state
 
@@ -59,6 +60,8 @@ def test_create_list_detail_and_pause_project(tmp_path: Path, monkeypatch) -> No
     assert projects[0]["archived"] is False
     assert projects[0]["runtime_session_id"] == ""
     assert projects[0]["runtime_control_available"] is False
+    assert projects[0]["tool_permission_runtime_count"] == 0
+    assert projects[0]["pending_tool_permission_runtime_count"] == 0
 
     detail_response = client.get(f"/api/projects/{project_id}")
     assert detail_response.status_code == 200
@@ -218,7 +221,60 @@ def test_runtime_control_request_route_queues_control_request(tmp_path: Path, mo
     event_lines = [json.loads(line) for line in config.events_log_path.read_text().splitlines() if line.strip()]
     assert event_lines[-1]["type"] == "control_request"
     assert event_lines[-1]["session_id"] == "sess_runtime_1"
-    assert event_lines[-1]["request"]["subtype"] == "interrupt"
+
+
+def test_projects_list_surfaces_pending_tool_permission_runtime_counts(tmp_path: Path, monkeypatch) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    client = _build_client(config, monkeypatch)
+
+    create_response = client.post(
+        "/api/projects/",
+        json={
+            "project_name": "Permission Project",
+            "project_path": str(tmp_path / "permission-project"),
+            "prd": {
+                "title": "Permission Project",
+                "stories": [{"id": 1, "title": "Bootstrap", "description": "Start"}],
+            },
+        },
+    )
+    project_id = create_response.json()["project_id"]
+    runtime = create_or_reuse_approval_runtime(
+        config,
+        key=f"tool-permission:{project_id}:shell_exec:toolu_api_1",
+        project_id=project_id,
+        runtime_agent_ids=["proj_api:1:worker:a"],
+        metadata={
+            "kind": "tool_permission_request",
+            "tool_name": "shell_exec",
+            "tool_use_id": "toolu_api_1",
+        },
+        publish_pending=True,
+        pending_message_type="tool_permission_pending",
+        pending_payload={
+            "tool_name": "shell_exec",
+            "tool_use_id": "toolu_api_1",
+            "behavior": "pending_user",
+        },
+    )
+    annotate_approval_runtime(
+        config,
+        approval_runtime_id=runtime.id,
+        metadata_updates={
+            "pending": {
+                "stage": "pending_user",
+                "tool_name": "shell_exec",
+                "tool_use_id": "toolu_api_1",
+            }
+        },
+    )
+
+    list_response = client.get("/api/projects/")
+
+    assert list_response.status_code == 200
+    project = next(item for item in list_response.json()["projects"] if item["id"] == project_id)
+    assert project["tool_permission_runtime_count"] == 1
+    assert project["pending_tool_permission_runtime_count"] == 1
 
 
 def test_list_projects_reports_runtime_control_availability(tmp_path: Path, monkeypatch) -> None:

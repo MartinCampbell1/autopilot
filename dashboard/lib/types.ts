@@ -319,6 +319,8 @@ export interface ProjectSummary {
   pid?: number | null;
   runtime_session_id?: string;
   runtime_control_available?: boolean;
+  tool_permission_runtime_count?: number;
+  pending_tool_permission_runtime_count?: number;
   launch_profile?: LaunchProfile;
   provider_config?: ProviderConfig;
   runtime_profile?: RuntimeProfile;
@@ -429,6 +431,43 @@ export interface ProjectRuntimeControl {
   orphaned_worktrees: OrphanedWorktree[];
   runtime_session_id?: string;
   runtime_control_available?: boolean;
+}
+
+export interface ToolPermissionRuntimeRecord {
+  id: string;
+  key: string;
+  project_id: string;
+  status: string;
+  claim_id: string;
+  resolution_id: string;
+  approval_id: string;
+  issue_id: string;
+  permission_sync_key: string;
+  runtime_agent_ids: string[];
+  winner_source: string;
+  outcome: string;
+  message: string;
+  payload: Record<string, unknown>;
+  metadata: Record<string, unknown>;
+  settlement_attempts: Array<Record<string, unknown>>;
+  created_at: string;
+  updated_at: string;
+  resolved_at?: string | null;
+  kind: string;
+  pending_stage: string;
+  tool_name: string;
+  tool_use_id: string;
+  resolved_behavior: string;
+  resolved_by: string;
+  resolved_source: string;
+}
+
+export interface ToolPermissionRuntimeListResponse {
+  summary: {
+    count: number;
+    pending_count: number;
+  };
+  runtimes: ToolPermissionRuntimeRecord[];
 }
 
 export type ExecutionPlaneCountMap = Record<string, number>;
