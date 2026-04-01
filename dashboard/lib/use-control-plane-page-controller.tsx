@@ -140,6 +140,8 @@ export function useControlPlanePageController(
     setSelectedSessionApprovalId,
     selectedSessionIssueId,
     setSelectedSessionIssueId,
+    selectedSessionToolPermissionRuntimeId,
+    setSelectedSessionToolPermissionRuntimeId,
     selectedSessionEventKey,
     setSelectedSessionEventKey,
     selectedSessionContextKind,
@@ -299,6 +301,7 @@ export function useControlPlanePageController(
     setSelectedSession,
     setSelectedSessionApprovalId,
     setSelectedSessionIssueId,
+    setSelectedSessionToolPermissionRuntimeId,
     setSelectedSessionEventKey,
     setSelectedSessionContextKind,
     setEntitySearch,
@@ -368,10 +371,22 @@ export function useControlPlanePageController(
     linkedRuns,
     selectedRunId,
     selectedRunResultIndex,
-    preserveEmptyRunSelection: Boolean(selectedSessionApprovalId || selectedSessionIssueId || selectedSessionEventKey),
+    preserveEmptyRunSelection: Boolean(
+      selectedSessionApprovalId ||
+        selectedSessionIssueId ||
+        selectedSessionToolPermissionRuntimeId ||
+        selectedSessionEventKey
+    ),
     setSelectedRunId,
     setSelectedRunResultIndex,
   });
+  const selectedSessionToolPermissionRuntime = useMemo(
+    () =>
+      (selectedSession?.tool_permission_runtimes || []).find(
+        (runtime) => runtime.id === selectedSessionToolPermissionRuntimeId
+      ) ?? null,
+    [selectedSession, selectedSessionToolPermissionRuntimeId]
+  );
   const latestSessionPreviewRun = useMemo(() => {
     const previewRuns = linkedRuns.filter(
       (run) =>
@@ -460,6 +475,7 @@ export function useControlPlanePageController(
     selectedSession,
     selectedSessionApproval,
     selectedSessionIssue,
+    selectedSessionToolPermissionRuntime,
     selectedSessionEvent,
     selectedSessionEventKey,
     selectedSessionContextKind,
@@ -467,6 +483,7 @@ export function useControlPlanePageController(
     selectedRunResult,
     setSelectedSessionApprovalId,
     setSelectedSessionIssueId,
+    setSelectedSessionToolPermissionRuntimeId,
     setSelectedSessionEventKey,
     setSelectedSessionContextKind,
     setSelectedRunId,
@@ -493,6 +510,7 @@ export function useControlPlanePageController(
       sessionContextKind: selectedSessionContextKind || null,
       approvalId: selectedSessionApprovalId || null,
       issueId: selectedSessionIssueId || null,
+      toolPermissionRuntimeId: selectedSessionToolPermissionRuntimeId || null,
       eventKey: selectedSessionEventKey || null,
     }),
     [
@@ -505,6 +523,7 @@ export function useControlPlanePageController(
       selectedSessionEventKey,
       selectedSessionId,
       selectedSessionIssueId,
+      selectedSessionToolPermissionRuntimeId,
     ]
   );
 
@@ -543,6 +562,7 @@ export function useControlPlanePageController(
       sessionContextKind,
       approvalId: approvalId || null,
       issueId: issueId || null,
+      toolPermissionRuntimeId: null,
       eventKey: matchedEvent?.key || null,
     };
   }, [
@@ -558,24 +578,30 @@ export function useControlPlanePageController(
     if (!selectedSessionContext) return null;
 
     const eventContext = selectedSessionContext.kind === "event" ? selectedSessionContext.event : null;
+    const runtimeContext =
+      selectedSessionContext.kind === "tool_permission_runtime"
+        ? selectedSessionContext.runtime
+        : null;
     const approvalId =
       selectedSessionContext.kind === "approval"
         ? selectedSessionContext.approval.id
         : selectedSessionContext.kind === "issue"
           ? selectedSessionContext.issue.approval_id
-          : toStringValue(eventContext?.approval_id);
+          : runtimeContext?.approval_id || toStringValue(eventContext?.approval_id);
     const issueId =
       selectedSessionContext.kind === "issue"
         ? selectedSessionContext.issue.id
         : selectedSessionContext.kind === "approval"
           ? selectedSessionContext.approval.issue_id
-          : toStringValue(eventContext?.issue_id);
+          : runtimeContext?.issue_id || toStringValue(eventContext?.issue_id);
     const runtimeAgentId =
       selectedSessionContext.kind === "approval"
         ? selectedSessionContext.approval.runtime_agent_ids[0]
         : selectedSessionContext.kind === "issue"
           ? selectedSessionContext.issue.runtime_agent_ids[0] ||
             selectedSessionContext.issue.runtime_agent_id
+          : selectedSessionContext.kind === "tool_permission_runtime"
+            ? runtimeContext?.runtime_agent_ids[0] || ""
           : toStringValue(eventContext?.runtime_agent_id) ||
             toStringArray(eventContext?.runtime_agent_ids)[0];
     const directRunId =
@@ -597,8 +623,11 @@ export function useControlPlanePageController(
       resultIndex: relatedRunLink ? relatedRunLink.resultIndex : null,
       passId: null,
       sessionContextKind: selectedSessionContext.kind,
-      approvalId: approvalId || null,
-      issueId: issueId || null,
+      approvalId:
+        selectedSessionContext.kind === "tool_permission_runtime" ? null : approvalId || null,
+      issueId:
+        selectedSessionContext.kind === "tool_permission_runtime" ? null : issueId || null,
+      toolPermissionRuntimeId: runtimeContext?.id || null,
       eventKey:
         selectedSessionContext.kind === "event"
           ? selectedSessionEventKey || sessionEventKey(selectedSessionContext.event)
@@ -623,6 +652,7 @@ export function useControlPlanePageController(
       sessionContextKind: null,
       approvalId: null,
       issueId: null,
+      toolPermissionRuntimeId: null,
       eventKey: null,
     };
   }, [selectedAgent, selectedAgentId, selectedSessionId]);
@@ -1196,6 +1226,7 @@ export function useControlPlanePageController(
     setSelectedSessionId,
     selectedSessionApprovalId,
     selectedSessionIssueId,
+    selectedSessionToolPermissionRuntimeId,
     revealSelectedSessionContextRow,
     revealSelectedSessionContextInAgentTimeline,
     selectedSessionContext,
@@ -1281,6 +1312,7 @@ export function useControlPlanePageController(
     selectedPassId,
     selectedSessionApprovalId,
     selectedSessionIssueId,
+    selectedSessionToolPermissionRuntimeId,
     selectedSessionEventKey,
     selectedSessionContextKind,
     headerSectionProps,

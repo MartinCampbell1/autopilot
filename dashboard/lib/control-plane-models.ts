@@ -4,7 +4,7 @@ import type {
   ExecutionIssueRecord,
 } from "@/lib/types";
 
-export type SessionContextKind = "" | "approval" | "issue" | "event";
+export type SessionContextKind = "" | "approval" | "issue" | "event" | "tool_permission_runtime";
 export type LineageQueueKind = "attention" | "decisions";
 export type TriagePriority = "critical" | "high" | "normal";
 export type AgentPriorityQueueKind = "critical" | "high";
@@ -45,6 +45,7 @@ export type LinkedSelectionContext = {
   resultIndex?: number;
   approvalId?: string;
   issueId?: string;
+  toolPermissionRuntimeId?: string;
   runtimeAgentId?: string;
   event?: Record<string, unknown> | null;
 };

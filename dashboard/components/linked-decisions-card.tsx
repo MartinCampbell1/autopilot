@@ -57,13 +57,18 @@ type LinkedDecisionsCardProps = {
   filteredIssues: ExecutionIssueRecord[];
   visibleSessionIssues: ExecutionIssueRecord[];
   selectedSessionIssueId: string;
+  selectedSessionToolPermissionRuntimeId: string;
   busyActionKey: string;
   formatTimestamp: (value?: string | null) => string;
-  sessionContextRowDomId: (kind: "approval" | "issue" | "event", key: string) => string;
+  sessionContextRowDomId: (
+    kind: "approval" | "issue" | "event" | "tool_permission_runtime",
+    key: string
+  ) => string;
   onSearchEntity: (value: string) => void;
   onFocusRuntimeAgent: (runtimeAgentId: string) => void;
   onInspectApproval: (approval: ExecutionApprovalRecord) => void;
   onInspectIssue: (issue: ExecutionIssueRecord) => void;
+  onInspectToolPermissionRuntime: (runtime: ToolPermissionRuntimeRecord) => void;
   onApproveApproval: (approval: ExecutionApprovalRecord) => void;
   onRejectApproval: (approval: ExecutionApprovalRecord) => void;
   onApplyApproval: (approval: ExecutionApprovalRecord) => void;
@@ -82,6 +87,7 @@ export function LinkedDecisionsCard({
   filteredIssues,
   visibleSessionIssues,
   selectedSessionIssueId,
+  selectedSessionToolPermissionRuntimeId,
   busyActionKey,
   formatTimestamp,
   sessionContextRowDomId,
@@ -89,6 +95,7 @@ export function LinkedDecisionsCard({
   onFocusRuntimeAgent,
   onInspectApproval,
   onInspectIssue,
+  onInspectToolPermissionRuntime,
   onApproveApproval,
   onRejectApproval,
   onApplyApproval,
@@ -301,10 +308,15 @@ export function LinkedDecisionsCard({
                 </p>
               ) : (
                 <div className="mt-3 space-y-3">
-                  {pendingToolPermissionRuntimes.map((runtime) => (
+                  {pendingToolPermissionRuntimes.map((runtime) => {
+                    const selected = selectedSessionToolPermissionRuntimeId === runtime.id;
+                    return (
                     <div
                       key={`${selectedSession.id}-tool-permission-${runtime.id}`}
-                      className="rounded-xl border border-[#ecebe8] bg-white p-3"
+                      id={sessionContextRowDomId("tool_permission_runtime", runtime.id)}
+                      className={`rounded-xl border p-3 ${
+                        selected ? "border-[#d3e5ef] bg-[#f7fbfd]" : "border-[#ecebe8] bg-white"
+                      }`}
                     >
                       <div className="flex flex-wrap items-start justify-between gap-3">
                         <div>
@@ -322,6 +334,20 @@ export function LinkedDecisionsCard({
                             >
                               {formatToolPermissionStage(runtime.pending_stage)}
                             </Badge>
+                            <Button
+                              size="sm"
+                              variant={selected ? "default" : "outline"}
+                              className={`h-7 rounded-lg px-2 text-[11px] ${
+                                selected
+                                  ? "bg-[#1a1a1a] text-white hover:bg-[#333]"
+                                  : "border-[#e5e5e3] bg-white text-[#37352f] hover:bg-[#f7f7f5]"
+                              }`}
+                              onClick={() => {
+                                onInspectToolPermissionRuntime(runtime);
+                              }}
+                            >
+                              {selected ? "Selected" : "Inspect"}
+                            </Button>
                           </div>
                           <p className="mt-2 text-[13px] text-[#6b6b6b]">
                             {extractToolPermissionMessage(runtime)}
@@ -372,7 +398,8 @@ export function LinkedDecisionsCard({
                         </div>
                       </div>
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </div>
