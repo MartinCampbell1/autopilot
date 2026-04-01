@@ -193,6 +193,10 @@ class AutopilotConfig:
     def tool_permissions_json_path(self) -> Path:
         return self.control_plane_state_dir / "tool-permissions.json"
 
+    @property
+    def tool_permission_denials_json_path(self) -> Path:
+        return self.control_plane_state_dir / "tool-permission-denials.json"
+
     def plugin_data_dir(self, plugin_id: str) -> Path:
         normalized = str(plugin_id or "").strip().lower() or "unknown-plugin"
         return self.plugin_data_root_dir / normalized

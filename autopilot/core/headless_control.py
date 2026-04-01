@@ -24,7 +24,7 @@ from autopilot.core.plugin_storage import get_plugin_option_state
 from autopilot.core.project_store import build_project_summary
 from autopilot.core.structured_io import StructuredIO
 from autopilot.core.tool_contracts import ToolResult, build_tool
-from autopilot.core.tool_permissions import has_permissions_to_use_tool, load_tool_permission_context
+from autopilot.core.tool_permissions import load_tool_permission_context, resolve_tool_permission_decision
 
 
 def _utcnow_iso() -> str:
@@ -197,10 +197,13 @@ class HeadlessControlSession:
                 "rule_content": str((request.input or {}).get("rule_content") or "").strip(),
             },
         )
-        decision = has_permissions_to_use_tool(
+        decision = resolve_tool_permission_decision(
             tool,
             dict(request.input or {}),
             self._permission_context(),
+            config=self.config,
+            project_id=self.project_id,
+            record_denial=True,
         )
         return {
             "behavior": decision.behavior,
@@ -208,6 +211,8 @@ class HeadlessControlSession:
             "reasons": list(decision.reasons),
             "rule_source": decision.rule_source,
             "matched_rule": decision.matched_rule,
+            "denial_count": decision.denial_count,
+            "escalation_required": decision.escalation_required,
             "tool_use_id": str(request.tool_use_id),
             "tool_name": str(request.tool_name),
             "permission_mode": self.resolved_permission_mode(),

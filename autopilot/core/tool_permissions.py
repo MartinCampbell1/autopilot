@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
 
@@ -23,6 +24,7 @@ RULE_SOURCE_ORDER: tuple[PermissionRuleSource, ...] = (
     "user",
     "session",
 )
+DENIAL_BREAKER_THRESHOLD = 3
 
 
 class PermissionRuleValue(BaseModel):
@@ -49,6 +51,8 @@ class PermissionDecision(BaseModel):
     rule_source: PermissionRuleSource | None = None
     matched_rule: str | None = None
     updated_input: dict[str, Any] = Field(default_factory=dict)
+    denial_count: int = 0
+    escalation_required: bool = False
 
 
 class PermissionUpdate(BaseModel):
@@ -92,10 +96,46 @@ class PersistedToolPermissionState(BaseModel):
     projects: dict[str, PermissionScopeState] = Field(default_factory=dict)
 
 
+class PermissionDenialEntry(BaseModel):
+    """Tracked denied attempts for one tool scope."""
+
+    tool_name: str
+    project_id: str = ""
+    matched_rule: str = ""
+    count: int = 0
+    last_denied_at: str | None = None
+    last_message: str = ""
+
+
+class PersistedPermissionDenialState(BaseModel):
+    """File-backed repeated-denial tracker."""
+
+    entries: dict[str, PermissionDenialEntry] = Field(default_factory=dict)
+
+
+class DenialBreakerDecision(BaseModel):
+    """Resolved denial-breaker state."""
+
+    count: int = 0
+    threshold: int = DENIAL_BREAKER_THRESHOLD
+    triggered: bool = False
+    key: str = ""
+
+
 def permission_state_path(config: AutopilotConfig) -> Path:
     """Return the persisted tool permission state path."""
 
     return config.tool_permissions_json_path
+
+
+def permission_denial_state_path(config: AutopilotConfig) -> Path:
+    """Return the persisted repeated-denial tracker path."""
+
+    return config.tool_permission_denials_json_path
+
+
+def _utcnow_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
 def permission_rule_value_to_string(rule_value: PermissionRuleValue) -> str:
@@ -182,6 +222,102 @@ def _save_persisted_state(config: AutopilotConfig, state: PersistedToolPermissio
     temp_path.write_text(json.dumps(state.model_dump(), indent=2, ensure_ascii=False))
     temp_path.replace(path)
     return state
+
+
+def _load_permission_denials(config: AutopilotConfig) -> PersistedPermissionDenialState:
+    path = permission_denial_state_path(config)
+    if not path.exists():
+        return PersistedPermissionDenialState()
+    try:
+        return PersistedPermissionDenialState.model_validate(json.loads(path.read_text()))
+    except Exception:
+        return PersistedPermissionDenialState()
+
+
+def _save_permission_denials(
+    config: AutopilotConfig,
+    state: PersistedPermissionDenialState,
+) -> PersistedPermissionDenialState:
+    path = permission_denial_state_path(config)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = path.with_suffix(f"{path.suffix}.tmp")
+    temp_path.write_text(json.dumps(state.model_dump(), indent=2, ensure_ascii=False))
+    temp_path.replace(path)
+    return state
+
+
+def _denial_key(*, project_id: str, tool_name: str, matched_rule: str) -> str:
+    normalized_project_id = str(project_id or "").strip() or "*"
+    normalized_tool_name = str(tool_name or "").strip()
+    normalized_rule = str(matched_rule or "").strip()
+    return "::".join((normalized_project_id, normalized_tool_name, normalized_rule))
+
+
+def _get_denial_count(
+    config: AutopilotConfig,
+    *,
+    project_id: str,
+    tool_name: str,
+    matched_rule: str,
+) -> DenialBreakerDecision:
+    key = _denial_key(project_id=project_id, tool_name=tool_name, matched_rule=matched_rule)
+    state = _load_permission_denials(config)
+    entry = state.entries.get(key)
+    count = int(entry.count) if entry is not None else 0
+    return DenialBreakerDecision(
+        count=count,
+        threshold=DENIAL_BREAKER_THRESHOLD,
+        triggered=count >= DENIAL_BREAKER_THRESHOLD,
+        key=key,
+    )
+
+
+def _record_denial(
+    config: AutopilotConfig,
+    *,
+    project_id: str,
+    tool_name: str,
+    matched_rule: str,
+    message: str,
+) -> DenialBreakerDecision:
+    key = _denial_key(project_id=project_id, tool_name=tool_name, matched_rule=matched_rule)
+    state = _load_permission_denials(config)
+    entry = state.entries.get(key)
+    if entry is None:
+        entry = PermissionDenialEntry(
+            tool_name=tool_name,
+            project_id=str(project_id or "").strip(),
+            matched_rule=str(matched_rule or "").strip(),
+        )
+    entry.count = int(entry.count) + 1
+    entry.last_denied_at = _utcnow_iso()
+    entry.last_message = str(message or "").strip()
+    state.entries[key] = entry
+    _save_permission_denials(config, state)
+    return DenialBreakerDecision(
+        count=entry.count,
+        threshold=DENIAL_BREAKER_THRESHOLD,
+        triggered=entry.count >= DENIAL_BREAKER_THRESHOLD,
+        key=key,
+    )
+
+
+def reset_denial_breaker(
+    config: AutopilotConfig,
+    *,
+    project_id: str,
+    tool_name: str,
+) -> None:
+    """Clear tracked denials for one tool within one project scope."""
+
+    state = _load_permission_denials(config)
+    prefix = _denial_key(project_id=project_id, tool_name=tool_name, matched_rule="")
+    removed = [key for key in state.entries if key == prefix or key.startswith(f"{prefix}::")]
+    if not removed:
+        return
+    for key in removed:
+        state.entries.pop(key, None)
+    _save_permission_denials(config, state)
 
 
 def _scope_for_update(state: PersistedToolPermissionState, update: PermissionUpdate) -> PermissionScopeState:
@@ -474,3 +610,62 @@ def has_permissions_to_use_tool(
         )
 
     return PermissionDecision(behavior="allow")
+
+
+def resolve_tool_permission_decision(
+    tool: ToolDef,
+    tool_input: dict[str, Any] | None,
+    permission_context: ToolPermissionContext,
+    *,
+    config: AutopilotConfig | None = None,
+    project_id: str = "",
+    record_denial: bool,
+) -> PermissionDecision:
+    """Resolve one permission decision, including repeated-denial escalation."""
+
+    decision = has_permissions_to_use_tool(tool, tool_input, permission_context)
+    if config is None:
+        return decision
+
+    normalized_project_id = str(project_id or "").strip()
+    if decision.behavior != "deny":
+        reset_denial_breaker(config, project_id=normalized_project_id, tool_name=tool.name)
+        return decision.model_copy(update={"denial_count": 0, "escalation_required": False})
+
+    tracker = (
+        _record_denial(
+            config,
+            project_id=normalized_project_id,
+            tool_name=tool.name,
+            matched_rule=str(decision.matched_rule or "").strip(),
+            message=decision.message,
+        )
+        if record_denial
+        else _get_denial_count(
+            config,
+            project_id=normalized_project_id,
+            tool_name=tool.name,
+            matched_rule=str(decision.matched_rule or "").strip(),
+        )
+    )
+    if not tracker.triggered:
+        return decision.model_copy(update={"denial_count": tracker.count, "escalation_required": False})
+
+    escalation_message = (
+        f"Tool `{tool.name}` hit the denial breaker after {tracker.count} denied attempts "
+        "to break the denial loop and now requires explicit approval."
+    )
+    escalation_reasons = list(decision.reasons)
+    if decision.message and decision.message not in escalation_reasons:
+        escalation_reasons.append(decision.message)
+    if escalation_message not in escalation_reasons:
+        escalation_reasons.append(escalation_message)
+    return PermissionDecision(
+        behavior="ask",
+        message=escalation_message,
+        reasons=escalation_reasons,
+        rule_source=decision.rule_source,
+        matched_rule=decision.matched_rule,
+        denial_count=tracker.count,
+        escalation_required=True,
+    )

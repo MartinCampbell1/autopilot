@@ -1278,6 +1278,53 @@ def test_execution_plane_command_route_respects_project_deny_rule(
 
 
 @patch("autopilot.core.execution_plane.generate_prd_from_spec")
+def test_execution_plane_command_route_escalates_after_repeated_denials(
+    mock_generate_prd_from_spec,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    client = _build_client(config, monkeypatch)
+    mock_generate_prd_from_spec.return_value = {
+        "title": "FounderOS Copilot",
+        "description": "Execution-ready FounderOS project.",
+        "stories": [{"id": 1, "title": "Bootstrap", "description": "Create the app shell"}],
+    }
+
+    created = _create_execution_project(client, tmp_path / "deny-breaker-project")
+    project_id = created["project"]["project_id"]
+    persist_permission_update(
+        config,
+        PermissionUpdate(
+            type="add_rules",
+            destination="project",
+            behavior="deny",
+            project_id=project_id,
+            rules=[PermissionRuleValue(tool_name="execution.pause")],
+        ),
+    )
+
+    first = client.post(
+        f"/api/execution-plane/projects/{project_id}/commands/pause",
+        json={"requested_by": "founderos"},
+    )
+    second = client.post(
+        f"/api/execution-plane/projects/{project_id}/commands/pause",
+        json={"requested_by": "founderos"},
+    )
+    third = client.post(
+        f"/api/execution-plane/projects/{project_id}/commands/pause",
+        json={"requested_by": "founderos"},
+    )
+
+    assert first.status_code == 409
+    assert second.status_code == 409
+    assert third.status_code == 200
+    assert third.json()["status"] == "pending_approval"
+    assert "explicit approval" in " ".join(third.json()["policy_reasons"]).lower()
+
+
+@patch("autopilot.core.execution_plane.generate_prd_from_spec")
 def test_execution_plane_issue_routes_surface_runtime_failures(
     mock_generate_prd_from_spec,
     tmp_path: Path,

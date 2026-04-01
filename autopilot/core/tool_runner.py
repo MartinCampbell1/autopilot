@@ -20,7 +20,7 @@ from autopilot.core.tool_hooks import (
     execute_permission_request_hooks,
     run_pre_tool_use_hooks,
 )
-from autopilot.core.tool_permissions import PermissionDecision, has_permissions_to_use_tool
+from autopilot.core.tool_permissions import PermissionDecision, resolve_tool_permission_decision
 
 
 class ToolRunResult(BaseModel):
@@ -49,7 +49,14 @@ def run_tool_use(
     resolved_permission_context = permission_context or get_empty_tool_permission_context()
     hook_records: list[HookExecutionRecord] = []
 
-    permission_decision = has_permissions_to_use_tool(tool, normalized_input, resolved_permission_context)
+    permission_decision = resolve_tool_permission_decision(
+        tool,
+        normalized_input,
+        resolved_permission_context,
+        config=use_context.config,
+        project_id=use_context.project_id,
+        record_denial=True,
+    )
     if permission_decision.behavior == "ask":
         permission_hook_result = execute_permission_request_hooks(
             tool,

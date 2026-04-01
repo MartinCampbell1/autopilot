@@ -8,6 +8,7 @@ import time
 from collections.abc import Mapping
 from pathlib import Path
 
+from autopilot.core.command_semantics import classify_command_exit
 from autopilot.core.models import GateResult
 
 
@@ -55,14 +56,26 @@ def run_single_gate(
             timeout=timeout,
             env=_gate_env(workdir, base_env),
         )
-        passed = result.returncode == 0
+        semantics = classify_command_exit(cmd, int(result.returncode))
+        passed = not semantics.treat_as_error
         output = result.stdout + result.stderr
+        if result.returncode != 0 and semantics.summary:
+            output = f"{output.rstrip()}\nExit semantics: {semantics.summary}".strip()
+        exit_code = result.returncode
+        exit_semantics = semantics.status
+        exit_semantics_summary = semantics.summary
     except subprocess.TimeoutExpired:
         passed = False
         output = f"Timeout after {timeout}s"
+        exit_code = None
+        exit_semantics = "timeout"
+        exit_semantics_summary = f"Command timed out after {timeout}s."
     except Exception as exc:
         passed = False
         output = str(exc)
+        exit_code = None
+        exit_semantics = "error"
+        exit_semantics_summary = str(exc)
 
     return GateResult(
         name=name,
@@ -71,6 +84,9 @@ def run_single_gate(
         output=output.strip()[:2000],
         required=required,
         elapsed_sec=round(time.time() - started_at, 2),
+        exit_code=exit_code,
+        exit_semantics=exit_semantics,
+        exit_semantics_summary=exit_semantics_summary,
     )
 
 

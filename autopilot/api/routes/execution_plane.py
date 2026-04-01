@@ -1400,6 +1400,7 @@ async def execute_project_command(
             project_id=project_id,
             command=command_name,
             payload=command_payload,
+            record_denial=True,
         )
         if policy.get("denied"):
             raise RuntimeError(str(policy.get("message") or f"Execution command `{command_name}` is denied."))
