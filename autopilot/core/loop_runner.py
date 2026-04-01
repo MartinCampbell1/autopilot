@@ -33,7 +33,8 @@ This repository was bootstrapped by Autopilot from a PRD.
 - Do not claim a delegated, background, or long-running task has finished until you have the actual result in hand.
 - Do not peek or race ahead of unfinished background work; report launched/running state honestly instead of inventing an outcome.
 - Prefer the lightest verification that still proves the story works.
-- If `.ralph/team-context.json` or `.ralph/specialist-notes.md` exists, read them before coding.
+- If `.ralph/team-context.json` or `.ralph/team-messages.json` exists, read them before coding.
+- Treat `.ralph/team-messages.json` as the only guaranteed teammate-visible note channel; do not assume arbitrary sidecar notes are shared.
 - If you discover repeatable build/test commands, keep this file updated with concise operational notes.
 
 ## Verification Guidance
@@ -307,7 +308,8 @@ def build_retry_prompt(
         "Continue story #{story_id}: {story_title}\n\n"
         "Story details:\n{story_description}\n\n"
         "Read .ralph/critic-feedback.md, .ralph/progress.md, .ralph/guardrails.md, "
-        ".ralph/team-context.json, and .ralph/specialist-notes.md if they exist.\n"
+        ".ralph/team-context.json, and .ralph/team-messages.json if they exist.\n"
+        "Treat .ralph/team-messages.json as the explicit teammate channel; do not assume arbitrary notes files are shared.\n"
         "Fix only the outstanding issues from the previous attempt.\n"
     )
     return template.format(
@@ -335,7 +337,8 @@ def build_primary_prompt(
         "- Read AGENTS.md if present.\n"
         "- Read .ralph/guardrails.md and .ralph/errors.log.\n"
         "- Read .ralph/critic-feedback.md if it contains prior review feedback.\n"
-        "- Read .ralph/team-context.json and .ralph/specialist-notes.md if present.\n"
+        "- Read .ralph/team-context.json and .ralph/team-messages.json if present.\n"
+        "- Treat .ralph/team-messages.json as the explicit teammate-visible channel; do not assume arbitrary notes files are shared.\n"
         "- Read the PRD snapshot for global context and acceptance criteria.\n"
         "- Read each file from disk before editing it. Do not patch from memory or stale snippets.\n"
         "- Keep edits grounded in the exact text you just read, and prefer the smallest precise change that satisfies the story.\n\n"
