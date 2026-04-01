@@ -1171,8 +1171,17 @@ def test_command_policy_route_can_allow_parallel_launch_without_approval(
 
     task_detail = client.get(f"/api/execution-plane/agents/tasks/{tasks[0]['id']}")
     assert task_detail.status_code == 200
-    assert task_detail.json()["artifact_ref"].endswith(tasks[0]["id"])
-    assert task_detail.json()["status"] == "running"
+    task_payload = task_detail.json()
+    assert task_payload["artifact_ref"].endswith(tasks[0]["id"])
+    assert task_payload["status"] == "running"
+    assert task_payload["transcript_artifact_ref"].endswith(f"/{tasks[0]['id']}/transcript")
+    assert task_payload["resume_contract"]["task_id"] == tasks[0]["id"]
+    assert task_payload["resume_contract"]["command"] == "launch"
+    transcript_response = client.get(f"/api/execution-plane/agents/tasks/{tasks[0]['id']}/transcript")
+    assert transcript_response.status_code == 200
+    assert transcript_response.json()["task_id"] == tasks[0]["id"]
+    assert transcript_response.json()["artifact_ref"].endswith(f"/{tasks[0]['id']}/transcript")
+    assert f"Task ID: {tasks[0]['id']}" in transcript_response.json()["content"]
 
 
 @patch("autopilot.core.execution_plane.generate_prd_from_spec")
@@ -1240,6 +1249,9 @@ def test_execution_plane_orchestrator_session_tracks_async_tasks_honestly(
     assert refreshed_detail["async_tasks"][0]["status"] == "completed"
     assert refreshed_detail["async_tasks"][0]["result_summary"] == "Background run completed."
     assert refreshed_detail["async_tasks"][0]["output_artifact_ref"].endswith(f"/{task.id}/output")
+    assert refreshed_detail["async_tasks"][0]["transcript_artifact_ref"].endswith(f"/{task.id}/transcript")
+    assert refreshed_detail["async_tasks"][0]["resume_contract"]["task_id"] == task.id
+    assert refreshed_detail["async_tasks"][0]["resume_contract"]["project_id"] == project_id
     assert refreshed_detail["runtime_state"] == "requires_action"
     assert refreshed_detail["pending_action"]["kind"] == "complete_session"
     assert refreshed_detail["summary"]["active_async_task_count"] == 0
@@ -1251,6 +1263,14 @@ def test_execution_plane_orchestrator_session_tracks_async_tasks_honestly(
     assert output_payload["task_id"] == task.id
     assert output_payload["artifact_ref"].endswith(f"/{task.id}/output")
     assert "launch finished" in output_payload["content"]
+
+    transcript_response = client.get(f"/api/execution-plane/agents/tasks/{task.id}/transcript")
+    assert transcript_response.status_code == 200
+    transcript_payload = transcript_response.json()
+    assert transcript_payload["task_id"] == task.id
+    assert transcript_payload["artifact_ref"].endswith(f"/{task.id}/transcript")
+    assert f"Task ID: {task.id}" in transcript_payload["content"]
+    assert "Background run completed." in transcript_payload["content"]
 
 
 @patch("autopilot.core.execution_plane.generate_prd_from_spec")
