@@ -57,6 +57,7 @@ from autopilot.core.execution_plane import (
     resolve_execution_plane_tool_permission_runtime,
     update_execution_plane_orchestrator_session_status,
     update_project_command_policy,
+    wait_for_execution_plane_agent_action_run_async_settlement,
 )
 from autopilot.core.github_reactions import ingest_story_github_reaction, sync_story_github_pr
 
@@ -868,9 +869,24 @@ async def summarize_execution_agent_action_runs(
 
 
 @router.get("/agents/action-runs/{run_id}")
-async def get_execution_agent_action_run(run_id: str) -> dict[str, object]:
+async def get_execution_agent_action_run(
+    run_id: str,
+    wait_for_async_settlement: bool = Query(default=False),
+    runtime_agent_id: str | None = Query(default=None),
+    wait_timeout_ms: int = Query(default=500, ge=0, le=5000),
+) -> dict[str, object]:
     config = get_config()
     try:
+        if wait_for_async_settlement:
+            try:
+                return wait_for_execution_plane_agent_action_run_async_settlement(
+                    config,
+                    run_id,
+                    runtime_agent_id=str(runtime_agent_id or "").strip(),
+                    wait_timeout_sec=float(wait_timeout_ms) / 1000.0,
+                )
+            except TimeoutError:
+                pass
         return get_execution_plane_agent_action_run(config, run_id)
     except KeyError as exc:
         raise HTTPException(404, f"Runtime agent action run {run_id} not found") from exc

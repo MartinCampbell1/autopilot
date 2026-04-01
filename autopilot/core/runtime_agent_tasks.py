@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -10,10 +11,11 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from autopilot.core.agent_mailbox import poll_agent_mailbox_messages, publish_agent_mailbox_messages
 from autopilot.core.config import AutopilotConfig
 from autopilot.core.project_store import emit_project_event, ensure_project_state, get_project_entry
 from autopilot.core.task_output import load_text_from_source, persist_task_output
-from autopilot.core.task_transcript import persist_task_transcript
+from autopilot.core.task_transcript import persist_task_transcript, task_transcript_id
 
 SUPPORTED_RUNTIME_AGENT_TASK_STATUSES = {
     "queued",
@@ -218,6 +220,68 @@ def _persist_runtime_agent_task_transcript(
     )
 
 
+def runtime_agent_task_resume_contract(task: RuntimeAgentTaskRecord) -> dict[str, Any]:
+    """Build the stable resume contract for one runtime-agent task."""
+
+    transcript_id = task_transcript_id("runtime_agent_task", task.id)
+    output_ref = (
+        f"/api/execution-plane/agents/tasks/{task.id}/output"
+        if str(task.output_artifact_id or "").strip()
+        else ""
+    )
+    transcript_ref = f"/api/execution-plane/agents/tasks/{task.id}/transcript"
+    active = task.status in {"queued", "running"}
+    terminal = task.status in TERMINAL_RUNTIME_AGENT_TASK_STATUSES
+    return {
+        "task_id": task.id,
+        "project_id": task.project_id,
+        "command": task.command,
+        "status": task.status,
+        "orchestrator_session_id": task.orchestrator_session_id,
+        "agent_action_run_id": task.agent_action_run_id,
+        "approval_id": task.approval_id,
+        "issue_id": task.issue_id,
+        "runtime_agent_id": task.runtime_agent_id,
+        "runtime_agent_ids": list(task.runtime_agent_ids),
+        "output_artifact_id": str(task.output_artifact_id or "").strip(),
+        "output_artifact_ref": output_ref,
+        "transcript_artifact_id": transcript_id,
+        "transcript_artifact_ref": transcript_ref,
+        "active": active,
+        "terminal": terminal,
+    }
+
+
+def runtime_agent_task_mailbox_payload(task: RuntimeAgentTaskRecord) -> dict[str, Any]:
+    """Build the canonical mailbox payload for one runtime-agent task settlement."""
+
+    resume_contract = runtime_agent_task_resume_contract(task)
+    return {
+        "task_id": task.id,
+        "project_id": task.project_id,
+        "command": task.command,
+        "status": task.status,
+        "actor": task.actor,
+        "reason": task.reason,
+        "title": task.title,
+        "orchestrator_session_id": task.orchestrator_session_id,
+        "agent_action_run_id": task.agent_action_run_id,
+        "approval_id": task.approval_id,
+        "issue_id": task.issue_id,
+        "runtime_agent_id": task.runtime_agent_id,
+        "runtime_agent_ids": list(task.runtime_agent_ids),
+        "result_summary": task.result_summary or task.placeholder_result,
+        "output_artifact_id": str(task.output_artifact_id or "").strip(),
+        "output_artifact_ref": str(resume_contract.get("output_artifact_ref") or ""),
+        "transcript_artifact_id": str(resume_contract.get("transcript_artifact_id") or ""),
+        "transcript_artifact_ref": str(resume_contract.get("transcript_artifact_ref") or ""),
+        "artifact_ref": f"/api/execution-plane/agents/tasks/{task.id}",
+        "started_at": task.started_at,
+        "completed_at": task.completed_at,
+        "resume_contract": resume_contract,
+    }
+
+
 def list_runtime_agent_tasks(
     config: AutopilotConfig,
     *,
@@ -314,6 +378,49 @@ def _emit_runtime_agent_task_event(
         status=status,
         message=message,
         extra=extra,
+    )
+
+
+def _publish_runtime_agent_task_resolution_messages(
+    config: AutopilotConfig,
+    task: RuntimeAgentTaskRecord,
+    *,
+    specific_message_type: str | None = None,
+) -> None:
+    if not task.runtime_agent_ids:
+        return
+    canonical_message_type = "runtime_agent_task_resolved"
+    payload = runtime_agent_task_mailbox_payload(task)
+    metadata = {
+        "task_id": task.id,
+        "agent_action_run_id": task.agent_action_run_id,
+        "command": task.command,
+        "status": task.status,
+    }
+    publish_agent_mailbox_messages(
+        config,
+        project_id=task.project_id,
+        runtime_agent_ids=task.runtime_agent_ids,
+        message_type=canonical_message_type,
+        payload=payload,
+        dedupe_key=f"{task.id}:{canonical_message_type}",
+        approval_id=task.approval_id,
+        issue_id=task.issue_id,
+        metadata=metadata,
+    )
+    normalized_specific_type = str(specific_message_type or "").strip()
+    if not normalized_specific_type or normalized_specific_type == canonical_message_type:
+        return
+    publish_agent_mailbox_messages(
+        config,
+        project_id=task.project_id,
+        runtime_agent_ids=task.runtime_agent_ids,
+        message_type=normalized_specific_type,
+        payload=payload,
+        dedupe_key=f"{task.id}:{normalized_specific_type}",
+        approval_id=task.approval_id,
+        issue_id=task.issue_id,
+        metadata=metadata,
     )
 
 
@@ -615,4 +722,54 @@ def refresh_runtime_agent_task(
             status=event_status,
             message=summary,
         )
+        _publish_runtime_agent_task_resolution_messages(
+            config,
+            task,
+            specific_message_type=f"runtime_agent_task_{next_status}",
+        )
     return task
+
+
+def wait_for_runtime_agent_task_mailbox_resolution(
+    config: AutopilotConfig,
+    *,
+    runtime_agent_id: str,
+    task_id: str,
+    after_sequence: int = 0,
+    wait_timeout_sec: float = 0.5,
+) -> RuntimeAgentTaskRecord:
+    """Wait for a canonical mailbox settlement message for one runtime-agent task."""
+
+    task = get_runtime_agent_task(config, task_id)
+    if task is None:
+        raise KeyError(task_id)
+    if task.status in TERMINAL_RUNTIME_AGENT_TASK_STATUSES:
+        return task
+
+    normalized_runtime_agent_id = str(runtime_agent_id or "").strip()
+    if not normalized_runtime_agent_id:
+        raise ValueError("Mailbox wait requires `runtime_agent_id`.")
+
+    deadline = time.monotonic() + max(float(wait_timeout_sec), 0.0)
+    cursor = max(int(after_sequence or 0), 0)
+    while True:
+        messages = poll_agent_mailbox_messages(
+            config,
+            runtime_agent_id=normalized_runtime_agent_id,
+            message_type="runtime_agent_task_resolved",
+            status=None,
+            after_sequence=cursor,
+        )
+        for message in messages:
+            cursor = max(cursor, int(message.delivery_sequence or 0))
+            payload = dict(message.payload or {})
+            metadata = dict(message.metadata or {})
+            message_task_id = str(payload.get("task_id") or metadata.get("task_id") or "").strip()
+            if message_task_id != task.id:
+                continue
+            refreshed = get_runtime_agent_task(config, task.id)
+            if refreshed is not None and refreshed.status in TERMINAL_RUNTIME_AGENT_TASK_STATUSES:
+                return refreshed
+        if time.monotonic() >= deadline:
+            raise TimeoutError(f"Timed out waiting for mailbox settlement of runtime-agent task `{task.id}`.")
+        time.sleep(0.02)
