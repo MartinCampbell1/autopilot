@@ -13,6 +13,7 @@ from autopilot.core.headless_control import (
     attach_headless_control_handlers,
     create_headless_control_session,
 )
+from autopilot.core.runtime_agent_tasks import create_or_reuse_runtime_agent_task, refresh_runtime_agent_task
 from autopilot.core.structured_io import StructuredIO
 from autopilot.core.tool_permissions import PermissionRuleValue, PermissionUpdate, persist_permission_update
 from autopilot.core.project_store import ensure_project_state, register_project, save_project_state
@@ -799,3 +800,69 @@ def test_headless_control_can_list_get_and_resolve_tool_permission_runtimes(tmp_
     assert resolve_payload["resolved_by"] == "founderos"
     assert any(message.message_type == "tool_permission_user_allow" for message in mailbox)
     assert any(message.message_type == "approval_runtime_resolved" for message in mailbox)
+
+
+def test_headless_control_can_get_runtime_agent_task_and_artifacts(tmp_path: Path) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    project = _create_project(config, tmp_path / "project")
+    log_path = config.autopilot_home / "logs" / "headless-task.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path.write_text("launch started\nlaunch finished cleanly\n", encoding="utf-8")
+
+    task = create_or_reuse_runtime_agent_task(
+        config,
+        project_id=str(project["id"]),
+        command="launch",
+        actor="founderos",
+        reason="Launch background work.",
+        orchestrator_session_id="sess_headless",
+        runtime_agent_ids=["proj_headless_runtime:1:worker:a"],
+        output_path=str(log_path),
+    )
+    save_project_state(
+        config,
+        str(project["id"]),
+        {
+            "status": "completed",
+            "paused": False,
+            "finished_at": "2026-04-02T00:00:00+00:00",
+            "log_path": str(log_path),
+        },
+    )
+    refreshed = refresh_runtime_agent_task(config, task.id)
+    session = create_headless_control_session(config, project_entry=project, session_id="sess_headless")
+
+    task_response = session.handle_request(
+        {
+            "type": "control_request",
+            "request_id": "req_get_runtime_agent_task",
+            "request": {"subtype": "get_runtime_agent_task", "task_id": refreshed.id},
+            "session_id": "sess_headless",
+        }
+    )
+    output_response = session.handle_request(
+        {
+            "type": "control_request",
+            "request_id": "req_get_runtime_agent_task_output",
+            "request": {"subtype": "get_runtime_agent_task_output", "task_id": refreshed.id},
+            "session_id": "sess_headless",
+        }
+    )
+    transcript_response = session.handle_request(
+        {
+            "type": "control_request",
+            "request_id": "req_get_runtime_agent_task_transcript",
+            "request": {"subtype": "get_runtime_agent_task_transcript", "task_id": refreshed.id},
+            "session_id": "sess_headless",
+        }
+    )
+
+    assert task_response.response.subtype == "success"
+    assert task_response.response.response["task"]["id"] == refreshed.id
+    assert task_response.response.response["task"]["status"] == "completed"
+    assert output_response.response.subtype == "success"
+    assert output_response.response.response["output"]["task_id"] == refreshed.id
+    assert "launch finished cleanly" in output_response.response.response["output"]["content"]
+    assert transcript_response.response.subtype == "success"
+    assert transcript_response.response.response["transcript"]["task_id"] == refreshed.id
+    assert "Runtime Agent Task Transcript" in transcript_response.response.response["transcript"]["content"]

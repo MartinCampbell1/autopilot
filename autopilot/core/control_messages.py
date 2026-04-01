@@ -116,6 +116,21 @@ class ControlGetContextUsageRequest(BaseModel):
     subtype: Literal["get_context_usage"]
 
 
+class ControlGetRuntimeAgentTaskRequest(BaseModel):
+    subtype: Literal["get_runtime_agent_task"]
+    task_id: str
+
+
+class ControlGetRuntimeAgentTaskOutputRequest(BaseModel):
+    subtype: Literal["get_runtime_agent_task_output"]
+    task_id: str
+
+
+class ControlGetRuntimeAgentTaskTranscriptRequest(BaseModel):
+    subtype: Literal["get_runtime_agent_task_transcript"]
+    task_id: str
+
+
 class ControlListToolPermissionRuntimesRequest(BaseModel):
     subtype: Literal["list_tool_permission_runtimes"]
     runtime_agent_id: str | None = None
@@ -147,6 +162,9 @@ ControlRequestPayload = Annotated[
     | ControlMcpStatusRequest
     | ControlReloadPluginsRequest
     | ControlGetContextUsageRequest
+    | ControlGetRuntimeAgentTaskRequest
+    | ControlGetRuntimeAgentTaskOutputRequest
+    | ControlGetRuntimeAgentTaskTranscriptRequest
     | ControlListToolPermissionRuntimesRequest
     | ControlGetToolPermissionRuntimeRequest
     | ControlResolveToolPermissionRuntimeRequest,

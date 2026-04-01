@@ -24,6 +24,11 @@ from autopilot.core.control_messages import (
     make_control_error_response,
     make_control_success_response,
 )
+from autopilot.core.execution_plane import (
+    get_execution_plane_runtime_agent_task,
+    get_execution_plane_runtime_agent_task_output,
+    get_execution_plane_runtime_agent_task_transcript,
+)
 from autopilot.core.plugin_loader import clear_plugin_cache
 from autopilot.core.plugin_mcp import list_plugin_mcp_servers
 from autopilot.core.plugins import resolve_loaded_plugins
@@ -571,6 +576,33 @@ class HeadlessControlSession:
         )
         return {"runtime": serialize_tool_permission_runtime(resolved)}
 
+    def get_runtime_agent_task_payload(self, request: Any) -> dict[str, Any]:
+        """Return one runtime-agent task for the current headless project."""
+
+        task_id = str(request.task_id or "").strip()
+        payload = get_execution_plane_runtime_agent_task(self.config, task_id)
+        if str(payload.get("project_id") or "").strip() != self.project_id:
+            raise KeyError(task_id)
+        return {"task": payload}
+
+    def get_runtime_agent_task_output_payload(self, request: Any) -> dict[str, Any]:
+        """Return one runtime-agent task output artifact for the current headless project."""
+
+        task_id = str(request.task_id or "").strip()
+        task_payload = get_execution_plane_runtime_agent_task(self.config, task_id)
+        if str(task_payload.get("project_id") or "").strip() != self.project_id:
+            raise KeyError(task_id)
+        return {"output": get_execution_plane_runtime_agent_task_output(self.config, task_id)}
+
+    def get_runtime_agent_task_transcript_payload(self, request: Any) -> dict[str, Any]:
+        """Return one runtime-agent task transcript artifact for the current headless project."""
+
+        task_id = str(request.task_id or "").strip()
+        task_payload = get_execution_plane_runtime_agent_task(self.config, task_id)
+        if str(task_payload.get("project_id") or "").strip() != self.project_id:
+            raise KeyError(task_id)
+        return {"transcript": get_execution_plane_runtime_agent_task_transcript(self.config, task_id)}
+
     def handle_request(self, request: ControlRequestEnvelope | dict[str, Any]) -> ControlResponseEnvelope:
         """Resolve one inbound control request for the headless runtime."""
 
@@ -587,6 +619,60 @@ class HeadlessControlSession:
             return make_control_success_response(
                 request.request_id,
                 response=self.context_usage_payload(),
+                session_id=self.session_id,
+            )
+        if subtype == "get_runtime_agent_task":
+            try:
+                payload = self.get_runtime_agent_task_payload(request.request)
+            except KeyError:
+                return make_control_error_response(
+                    request.request_id,
+                    error=f"Runtime-agent task `{request.request.task_id}` was not found in this session.",
+                    session_id=self.session_id,
+                )
+            return make_control_success_response(
+                request.request_id,
+                response=payload,
+                session_id=self.session_id,
+            )
+        if subtype == "get_runtime_agent_task_output":
+            try:
+                payload = self.get_runtime_agent_task_output_payload(request.request)
+            except KeyError:
+                return make_control_error_response(
+                    request.request_id,
+                    error=f"Runtime-agent task `{request.request.task_id}` was not found in this session.",
+                    session_id=self.session_id,
+                )
+            except FileNotFoundError:
+                return make_control_error_response(
+                    request.request_id,
+                    error=f"Runtime-agent task `{request.request.task_id}` has no output artifact.",
+                    session_id=self.session_id,
+                )
+            return make_control_success_response(
+                request.request_id,
+                response=payload,
+                session_id=self.session_id,
+            )
+        if subtype == "get_runtime_agent_task_transcript":
+            try:
+                payload = self.get_runtime_agent_task_transcript_payload(request.request)
+            except KeyError:
+                return make_control_error_response(
+                    request.request_id,
+                    error=f"Runtime-agent task `{request.request.task_id}` was not found in this session.",
+                    session_id=self.session_id,
+                )
+            except FileNotFoundError:
+                return make_control_error_response(
+                    request.request_id,
+                    error=f"Runtime-agent task `{request.request.task_id}` has no transcript artifact.",
+                    session_id=self.session_id,
+                )
+            return make_control_success_response(
+                request.request_id,
+                response=payload,
                 session_id=self.session_id,
             )
         if subtype == "interrupt":
