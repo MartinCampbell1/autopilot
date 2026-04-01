@@ -1,10 +1,21 @@
 """Tests for git worktree management."""
 
+import os
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from autopilot.core.github_prs import stable_story_branch_name
-from autopilot.core.worktree import create_worktree, merge_worktree, remove_worktree, worktree_path
+from autopilot.core.worktree import (
+    DEFAULT_WORKTREE_STALE_AFTER_SEC,
+    create_worktree,
+    gc_stale_worktrees,
+    merge_worktree,
+    read_worktree_metadata,
+    remove_worktree,
+    worktree_metadata_path,
+    worktree_path,
+)
 
 
 class TestWorktree:
@@ -13,18 +24,25 @@ class TestWorktree:
         assert result == Path("/Users/martin/project-story-3")
 
     @patch("autopilot.core.worktree.subprocess.run")
-    def test_create_worktree(self, mock_run: MagicMock) -> None:
-        mock_run.return_value = MagicMock(returncode=0)
+    def test_create_worktree(self, mock_run: MagicMock, tmp_path: Path) -> None:
+        mock_run.side_effect = [
+            MagicMock(returncode=0, stdout="", stderr=""),
+            MagicMock(returncode=0, stdout="", stderr=""),
+            MagicMock(returncode=0, stdout="", stderr=""),
+            MagicMock(returncode=0, stdout="", stderr=""),
+        ]
+        project_path = tmp_path / "project"
+        project_path.mkdir()
         branch_name = stable_story_branch_name("Project", 3, "Bootstrap dashboard shell")
-        result = create_worktree(Path("/Users/martin/project"), story_id=3, branch_name=branch_name)
-        assert result == Path("/Users/martin/project-story-3")
-        assert mock_run.call_count == 3
+        result = create_worktree(project_path, story_id=3, branch_name=branch_name)
+        assert result == tmp_path / "project-story-3"
+        assert mock_run.call_count == 4
 
         prune_call = mock_run.call_args_list[0][0][0]
         assert prune_call == ["git", "worktree", "prune"]
 
-        cleanup_call = mock_run.call_args_list[1][0][0]
-        assert cleanup_call == ["git", "branch", "-D", branch_name]
+        branch_list_call = mock_run.call_args_list[1][0][0]
+        assert branch_list_call == ["git", "branch", "--list", branch_name]
 
         add_call = mock_run.call_args_list[2][0][0]
         assert "worktree" in add_call
@@ -32,6 +50,31 @@ class TestWorktree:
         assert branch_name in add_call
         assert "--force" in add_call
         assert add_call[-1] == "HEAD"
+
+        config_call = mock_run.call_args_list[3][0][0]
+        assert config_call == ["git", "config", "--local", "core.hooksPath", os.devnull]
+
+        metadata = read_worktree_metadata(result)
+        assert metadata is not None
+        assert metadata.story_id == 3
+        assert metadata.branch_name == branch_name
+        assert metadata.project_path == str(project_path)
+
+    @patch("autopilot.core.worktree.subprocess.run")
+    def test_create_worktree_deletes_existing_branch_when_present(self, mock_run: MagicMock, tmp_path: Path) -> None:
+        mock_run.side_effect = [
+            MagicMock(returncode=0, stdout="", stderr=""),
+            MagicMock(returncode=0, stdout="  story-3\n", stderr=""),
+            MagicMock(returncode=0, stdout="", stderr=""),
+            MagicMock(returncode=0, stdout="", stderr=""),
+            MagicMock(returncode=0, stdout="", stderr=""),
+        ]
+        project_path = tmp_path / "project"
+        project_path.mkdir()
+        create_worktree(project_path, story_id=3, branch_name="story-3")
+
+        calls = [call.args[0] for call in mock_run.call_args_list]
+        assert ["git", "branch", "-D", "story-3"] in calls
 
     @patch("autopilot.core.worktree.subprocess.run")
     def test_remove_worktree(self, mock_run: MagicMock) -> None:
@@ -106,3 +149,26 @@ class TestWorktree:
         calls = [call.args[0] for call in mock_run.call_args_list]
         assert ["git", "add", "-A"] in calls
         assert ["git", "commit", "-m", "Autopilot story merge: story-3"] in calls
+
+    @patch("autopilot.core.worktree.remove_worktree")
+    def test_gc_stale_worktrees_removes_dead_old_worktrees(self, mock_remove: MagicMock, tmp_path: Path) -> None:
+        project_path = tmp_path / "project"
+        project_path.mkdir()
+        stale_path = tmp_path / "project-story-7"
+        stale_path.mkdir()
+        worktree_metadata_path(stale_path).write_text(
+            (
+                '{"project_path": "%s", "story_id": 7, "branch_name": "story-7", '
+                '"created_at": "%s", "runtime_pid": 999999}'
+            )
+            % (
+                str(project_path),
+                (datetime.now(timezone.utc) - timedelta(seconds=DEFAULT_WORKTREE_STALE_AFTER_SEC + 30)).isoformat(),
+            ),
+            encoding="utf-8",
+        )
+
+        removed = gc_stale_worktrees(project_path, stale_after_sec=DEFAULT_WORKTREE_STALE_AFTER_SEC)
+
+        assert removed == [stale_path]
+        mock_remove.assert_called_once_with(project_path, stale_path)
