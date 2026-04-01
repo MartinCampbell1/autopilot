@@ -214,6 +214,12 @@ class HeadlessControlSession:
             tool,
             dict(request.input or {}),
             self._permission_context(),
+            classifier_context={
+                "enabled": bool(request.classifier_enabled),
+                "user_text": str(request.user_text or ""),
+                "decision_reason": str(request.decision_reason or ""),
+                "fail_open": bool(request.classifier_fail_open),
+            },
             config=self.config,
             project_id=self.project_id,
             record_denial=True,

@@ -20,12 +20,13 @@ from autopilot.core.command_permissions import (
     serialize_permission_rule,
 )
 from autopilot.core.config import AutopilotConfig
+from autopilot.core.action_classifier import build_action_classifier_context, classify_tool_permission
 from autopilot.core.permission_audit import append_permission_audit_entry
 from autopilot.core.tool_contracts import ToolDef, ToolPermissionContext, get_empty_tool_permission_context
 
 PermissionMode = Literal["default", "approved", "bypass_permissions", "dont_ask", "plan"]
 PermissionBehavior = Literal["allow", "deny", "ask"]
-PermissionRuleSource = Literal["command", "session", "project", "user", "managed", "env", "project_policy", "workspace_policy"]
+PermissionRuleSource = Literal["command", "session", "project", "user", "managed", "env", "project_policy", "workspace_policy", "classifier"]
 PermissionUpdateDestination = Literal["session", "user", "project"]
 
 RULE_SOURCE_ORDER: tuple[PermissionRuleSource, ...] = (
@@ -37,6 +38,7 @@ RULE_SOURCE_ORDER: tuple[PermissionRuleSource, ...] = (
     "env",
     "project_policy",
     "workspace_policy",
+    "classifier",
 )
 DENIAL_BREAKER_THRESHOLD = 3
 VALID_PERMISSION_RULE_SOURCES = set(RULE_SOURCE_ORDER)
@@ -776,6 +778,8 @@ def has_permissions_to_use_tool(
     tool: ToolDef,
     tool_input: dict[str, Any] | None,
     permission_context: ToolPermissionContext,
+    *,
+    classifier_context: dict[str, Any] | None = None,
 ) -> PermissionDecision:
     """Resolve the final permission decision for one tool use."""
     permission_context = sanitize_permission_context_for_mode(permission_context)
@@ -800,6 +804,43 @@ def has_permissions_to_use_tool(
                 matched_rule=rule_decision.matched_rule,
             )
         return rule_decision
+
+    classifier_decision = classify_tool_permission(
+        tool,
+        tool_input,
+        permission_mode=permission_context.mode,
+        context=build_action_classifier_context(classifier_context),
+    )
+    if classifier_decision is not None:
+        reasons = list(classifier_decision.reasons)
+        if classifier_decision.explanation and classifier_decision.explanation not in reasons:
+            reasons.append(classifier_decision.explanation)
+        normalized_classifier_decision = PermissionDecision(
+            behavior=classifier_decision.behavior,
+            message=classifier_decision.message,
+            reasons=reasons,
+            rule_source="classifier",
+            matched_rule=f"classifier:{classifier_decision.decision_id}",
+        )
+        if normalized_classifier_decision.behavior == "ask" and permission_context.mode == "approved":
+            return PermissionDecision(
+                behavior="allow",
+                reasons=normalized_classifier_decision.reasons,
+                rule_source="classifier",
+                matched_rule=normalized_classifier_decision.matched_rule,
+            )
+        if normalized_classifier_decision.behavior == "ask" and permission_context.mode == "dont_ask":
+            classifier_message = normalized_classifier_decision.message or (
+                f"Tool `{tool.name}` requires approval, but prompts are disabled."
+            )
+            return PermissionDecision(
+                behavior="deny",
+                message=classifier_message,
+                reasons=normalized_classifier_decision.reasons or [classifier_message],
+                rule_source="classifier",
+                matched_rule=normalized_classifier_decision.matched_rule,
+            )
+        return normalized_classifier_decision
 
     approval_policy = str(tool.approval_policy or "").strip().lower()
     default_reasons = list(permission_context.tool_reasons.get(tool.name) or [])
@@ -830,6 +871,7 @@ def resolve_tool_permission_decision(
     permission_context: ToolPermissionContext,
     *,
     precomputed_decision: PermissionDecision | None = None,
+    classifier_context: dict[str, Any] | None = None,
     config: AutopilotConfig | None = None,
     project_id: str = "",
     record_denial: bool,
@@ -838,7 +880,12 @@ def resolve_tool_permission_decision(
 ) -> PermissionDecision:
     """Resolve one permission decision, including repeated-denial escalation."""
 
-    decision = precomputed_decision or has_permissions_to_use_tool(tool, tool_input, permission_context)
+    decision = precomputed_decision or has_permissions_to_use_tool(
+        tool,
+        tool_input,
+        permission_context,
+        classifier_context=classifier_context,
+    )
     if config is None:
         return decision
 

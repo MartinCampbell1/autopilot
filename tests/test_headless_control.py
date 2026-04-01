@@ -484,3 +484,38 @@ def test_headless_control_dangerous_shell_command_denies_in_dont_ask_mode(tmp_pa
     assert payload["behavior"] == "deny"
     assert payload["rule_source"] == "workspace_policy"
     assert "dangerous_pattern:curl_pipe_shell" in str(payload["matched_rule"])
+
+
+def test_headless_control_classifier_fails_closed_in_dont_ask_mode(tmp_path: Path) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    project = _create_project(config, tmp_path / "project")
+    session = create_headless_control_session(config, project_entry=project, session_id="sess_headless")
+    session.handle_request(
+        {
+            "type": "control_request",
+            "request_id": "req_permission_mode",
+            "request": {"subtype": "set_permission_mode", "mode": "dont_ask"},
+            "session_id": "sess_headless",
+        }
+    )
+
+    response = session.handle_request(
+        {
+            "type": "control_request",
+            "request_id": "req_can_use_tool_classifier",
+            "request": {
+                "subtype": "can_use_tool",
+                "tool_name": "demo.read",
+                "input": {"path": "README.md"},
+                "tool_use_id": "toolu_classifier",
+                "classifier_enabled": True,
+                "user_text": "x" * 5000,
+            },
+            "session_id": "sess_headless",
+        }
+    )
+
+    payload = response.response.response
+    assert payload["behavior"] == "deny"
+    assert payload["rule_source"] == "classifier"
+    assert payload["matched_rule"] == "classifier:transcript_too_long"
