@@ -8,6 +8,19 @@ import { useSSE } from "@/lib/sse";
 import { useProjectRuntimeControlClient } from "@/lib/use-project-runtime-control-client";
 import type { AccountHealth, ProjectSummary, ToolPermissionRuntimeRecord } from "@/lib/types";
 
+const TOOL_PERMISSION_RUNTIME_EVENTS = new Set([
+  "tool_permission_runtime_pending",
+  "tool_permission_runtime_resolved",
+]);
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function stringValue(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
 export default function DashboardPage() {
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [health, setHealth] = useState<AccountHealth | null>(null);
@@ -55,8 +68,28 @@ export default function DashboardPage() {
   useSSE(
     useCallback((event, data) => {
       handleSSEEvent(event, data);
+      if (TOOL_PERMISSION_RUNTIME_EVENTS.has(event) && isRecord(data)) {
+        const projectId = stringValue(data.project_id);
+        if (
+          projectId
+          && expandedToolPermissionProjects[projectId]
+          && visibleProjects.some(
+            (project) => project.id === projectId && Boolean(project.runtime_control_available)
+          )
+        ) {
+          void requestListToolPermissionRuntimes(projectId, { status: "pending" }).catch(() => {
+            // Keep the dashboard responsive; loadData() will still refresh the summary count.
+          });
+        }
+      }
       void loadData();
-    }, [handleSSEEvent, loadData])
+    }, [
+      expandedToolPermissionProjects,
+      handleSSEEvent,
+      loadData,
+      requestListToolPermissionRuntimes,
+      visibleProjects,
+    ])
   );
 
   const runAction = async (projectId: string, action: () => Promise<{ message: string }>) => {

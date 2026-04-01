@@ -32,6 +32,8 @@ const STRUCTURED_REPLAYABLE_EVENT_TYPES = [
   "execution_plane_agent_action_pending_approval",
   "execution_plane_agent_action_executed",
   "execution_plane_agent_action_run_recorded",
+  "tool_permission_runtime_pending",
+  "tool_permission_runtime_resolved",
   "control_request",
   "control_response",
 ] as const;
