@@ -122,6 +122,12 @@ type SelectedSessionContextCardProps = {
   onResolveIssue: (issue: ExecutionIssueRecord) => void;
   onAllowToolPermissionRuntime: (runtime: ToolPermissionRuntimeRecord) => void;
   onDenyToolPermissionRuntime: (runtime: ToolPermissionRuntimeRecord) => void;
+  onLoadAsyncTaskOutputArtifact?: (
+    task: ExecutionRuntimeAgentTaskRecord
+  ) => Promise<ExecutionRuntimeAgentTaskOutputArtifact>;
+  onLoadAsyncTaskTranscriptArtifact?: (
+    task: ExecutionRuntimeAgentTaskRecord
+  ) => Promise<ExecutionRuntimeAgentTaskTranscriptArtifact>;
   onAdvanceCurrentQueue?: (() => void) | null;
 };
 
@@ -152,6 +158,8 @@ export function SelectedSessionContextCard({
   onResolveIssue,
   onAllowToolPermissionRuntime,
   onDenyToolPermissionRuntime,
+  onLoadAsyncTaskOutputArtifact,
+  onLoadAsyncTaskTranscriptArtifact,
   onAdvanceCurrentQueue,
 }: SelectedSessionContextCardProps) {
   const selectedAsyncTaskId =
@@ -178,7 +186,8 @@ export function SelectedSessionContextCard({
     setShowTaskTranscript(false);
   }, [selectedAsyncTaskId]);
 
-  async function handleTaskOutputToggle(taskId: string) {
+  async function handleTaskOutputToggle(task: ExecutionRuntimeAgentTaskRecord) {
+    const taskId = task.id;
     if (!taskId) return;
     if (showTaskOutput) {
       setShowTaskOutput(false);
@@ -189,7 +198,11 @@ export function SelectedSessionContextCard({
     setLoadingTaskOutput(true);
     setTaskOutputError("");
     try {
-      setTaskOutputArtifact(await fetchExecutionPlaneRuntimeAgentTaskOutput(taskId));
+      setTaskOutputArtifact(
+        await (onLoadAsyncTaskOutputArtifact
+          ? onLoadAsyncTaskOutputArtifact(task)
+          : fetchExecutionPlaneRuntimeAgentTaskOutput(taskId))
+      );
     } catch (error) {
       setTaskOutputError(error instanceof Error ? error.message : "Failed to load task output.");
     } finally {
@@ -197,7 +210,8 @@ export function SelectedSessionContextCard({
     }
   }
 
-  async function handleTaskTranscriptToggle(taskId: string) {
+  async function handleTaskTranscriptToggle(task: ExecutionRuntimeAgentTaskRecord) {
+    const taskId = task.id;
     if (!taskId) return;
     if (showTaskTranscript) {
       setShowTaskTranscript(false);
@@ -208,7 +222,11 @@ export function SelectedSessionContextCard({
     setLoadingTaskTranscript(true);
     setTaskTranscriptError("");
     try {
-      setTaskTranscriptArtifact(await fetchExecutionPlaneRuntimeAgentTaskTranscript(taskId));
+      setTaskTranscriptArtifact(
+        await (onLoadAsyncTaskTranscriptArtifact
+          ? onLoadAsyncTaskTranscriptArtifact(task)
+          : fetchExecutionPlaneRuntimeAgentTaskTranscript(taskId))
+      );
     } catch (error) {
       setTaskTranscriptError(error instanceof Error ? error.message : "Failed to load task transcript.");
     } finally {
@@ -815,7 +833,7 @@ export function SelectedSessionContextCard({
                             className="h-8 rounded-lg border-[#d6e9dc] bg-white text-[12px] text-[#2b6e3f] hover:bg-[#eef8f1]"
                             disabled={loadingTaskOutput}
                             onClick={() => {
-                              void handleTaskOutputToggle(asyncTaskContext.id);
+                              void handleTaskOutputToggle(asyncTaskContext);
                             }}
                           >
                             {loadingTaskOutput
@@ -888,7 +906,7 @@ export function SelectedSessionContextCard({
                             className="h-8 rounded-lg border-[#d3e5ef] bg-white text-[12px] text-[#2a6690] hover:bg-[#eef7fb]"
                             disabled={loadingTaskTranscript}
                             onClick={() => {
-                              void handleTaskTranscriptToggle(asyncTaskContext.id);
+                              void handleTaskTranscriptToggle(asyncTaskContext);
                             }}
                           >
                             {loadingTaskTranscript

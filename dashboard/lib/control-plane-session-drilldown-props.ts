@@ -5,6 +5,9 @@ import type {
   ExecutionApprovalRecord,
   ExecutionAgentActionRunRecord,
   ExecutionIssueRecord,
+  ExecutionRuntimeAgentTaskOutputArtifact,
+  ExecutionRuntimeAgentTaskRecord,
+  ExecutionRuntimeAgentTaskTranscriptArtifact,
   OrchestratorSessionControl,
   OrchestratorSessionControlProfile,
   OrchestratorSessionControlRecommendation,
@@ -108,6 +111,12 @@ type BuildSessionDrilldownSectionPropsArgs = {
   canCopyFocusedLink: boolean;
   onCopyFocusedLink: () => void;
   onCopySessionContextLink: () => void;
+  loadAsyncTaskOutputArtifact: (
+    task: ExecutionRuntimeAgentTaskRecord
+  ) => Promise<ExecutionRuntimeAgentTaskOutputArtifact>;
+  loadAsyncTaskTranscriptArtifact: (
+    task: ExecutionRuntimeAgentTaskRecord
+  ) => Promise<ExecutionRuntimeAgentTaskTranscriptArtifact>;
 };
 
 export function buildSessionDrilldownSectionProps({
@@ -181,6 +190,8 @@ export function buildSessionDrilldownSectionProps({
   canCopyFocusedLink,
   onCopyFocusedLink,
   onCopySessionContextLink,
+  loadAsyncTaskOutputArtifact,
+  loadAsyncTaskTranscriptArtifact,
 }: BuildSessionDrilldownSectionPropsArgs): SessionDrilldownSectionProps {
   return {
     selectedSessionId,
@@ -400,6 +411,8 @@ export function buildSessionDrilldownSectionProps({
       onDenyToolPermissionRuntime: (runtime) => {
         void resolveToolPermissionRuntime(runtime, "deny");
       },
+      onLoadAsyncTaskOutputArtifact: (task) => loadAsyncTaskOutputArtifact(task),
+      onLoadAsyncTaskTranscriptArtifact: (task) => loadAsyncTaskTranscriptArtifact(task),
       onAdvanceCurrentQueue:
         currentSessionLineageQueue && selectedSessionLineageEntry
           ? () => {
