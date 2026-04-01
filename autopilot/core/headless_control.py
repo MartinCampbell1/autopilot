@@ -209,6 +209,8 @@ class HeadlessControlSession:
             config=self.config,
             project_id=self.project_id,
             record_denial=True,
+            actor="headless_control",
+            source="headless_control.can_use_tool",
         )
         return {
             "behavior": decision.behavior,

@@ -57,6 +57,8 @@ def run_tool_use(
         config=use_context.config,
         project_id=use_context.project_id,
         record_denial=True,
+        actor=use_context.actor,
+        source="tool_runner",
     )
     if permission_decision.behavior == "ask":
         permission_hook_result = execute_permission_request_hooks(

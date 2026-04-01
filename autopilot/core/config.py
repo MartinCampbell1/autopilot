@@ -200,6 +200,10 @@ class AutopilotConfig:
         return self.control_plane_state_dir / "tool-permission-denials.json"
 
     @property
+    def permission_audit_dir(self) -> Path:
+        return self.control_plane_state_dir / "permission-audit"
+
+    @property
     def tool_results_dir(self) -> Path:
         return self.control_plane_state_dir / "tool-results"
 
