@@ -147,7 +147,6 @@ function isNotFoundError(error: unknown): boolean {
 type UseControlPlaneDataLoaderArgs = {
   projects: ProjectSummary[];
   sessions: OrchestratorSessionRecord[];
-  selectedSession: OrchestratorSessionDetail | null;
   selectedSessionId: string;
   selectedAgentId: string;
   setHealth: Dispatch<SetStateAction<AccountHealth | null>>;
@@ -167,7 +166,6 @@ type UseControlPlaneDataLoaderArgs = {
 export function useControlPlaneDataLoader({
   projects,
   sessions,
-  selectedSession,
   selectedSessionId,
   selectedAgentId,
   setHealth,
@@ -185,7 +183,6 @@ export function useControlPlaneDataLoader({
 }: UseControlPlaneDataLoaderArgs) {
   const projectIdsRef = useRef<string[]>(projects.map((project) => project.id).filter(Boolean));
   const sessionIdsRef = useRef<string[]>(sessions.map((session) => session.id).filter(Boolean));
-  const selectedSessionRef = useRef<OrchestratorSessionDetail | null>(selectedSession);
   const selectedSessionIdRef = useRef(selectedSessionId);
   const selectedAgentIdRef = useRef(selectedAgentId);
   const overviewRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -208,10 +205,6 @@ export function useControlPlaneDataLoader({
   useEffect(() => {
     sessionIdsRef.current = sessions.map((session) => session.id).filter(Boolean);
   }, [sessions]);
-
-  useEffect(() => {
-    selectedSessionRef.current = selectedSession;
-  }, [selectedSession]);
 
   useEffect(() => {
     selectedSessionIdRef.current = selectedSessionId;
@@ -427,27 +420,6 @@ export function useControlPlaneDataLoader({
         stringValue(payload?.orchestrator_session_id) || stringValue(payload?.session_id);
       const knownProjectIds = new Set(projectIdsRef.current);
       const knownSessionIds = new Set(sessionIdsRef.current);
-      const selectedSessionDetail = selectedSessionRef.current;
-      const matchesSelectedToolPermissionRuntime =
-        event === "tool_permission_runtime_pending" || event === "tool_permission_runtime_resolved"
-          ? Boolean(
-              selectedSessionDetail &&
-                (
-                  (stringValue(payload?.approval_runtime_id) &&
-                    (selectedSessionDetail.tool_permission_runtimes || []).some(
-                      (runtime) => runtime.id === stringValue(payload?.approval_runtime_id)
-                    )) ||
-                  (stringValue(payload?.approval_id) &&
-                    selectedSessionDetail.approvals.some(
-                      (approval) => approval.id === stringValue(payload?.approval_id)
-                    )) ||
-                  (stringValue(payload?.issue_id) &&
-                    selectedSessionDetail.issues.some(
-                      (issue) => issue.id === stringValue(payload?.issue_id)
-                    ))
-                )
-            )
-          : false;
       const shouldRefreshOverview =
         OVERVIEW_REFRESH_EVENTS.has(event) &&
         (
@@ -460,10 +432,7 @@ export function useControlPlaneDataLoader({
       if (shouldRefreshOverview) {
         scheduleOverviewRefresh();
       }
-      if (
-        shouldRefreshSelectedSession(event, data, selectedSessionIdRef.current) ||
-        matchesSelectedToolPermissionRuntime
-      ) {
+      if (shouldRefreshSelectedSession(event, data, selectedSessionIdRef.current)) {
         scheduleSessionRefresh();
       }
       if (shouldRefreshSelectedAgent(event, data, selectedAgentIdRef.current)) {

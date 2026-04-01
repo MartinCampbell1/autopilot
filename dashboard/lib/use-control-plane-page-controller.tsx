@@ -191,7 +191,6 @@ export function useControlPlanePageController(
   const { loadOverview, loadSessionDetail, loadAgentDetail } = useControlPlaneDataLoader({
     projects,
     sessions,
-    selectedSession,
     selectedSessionId,
     selectedAgentId,
     setHealth,
