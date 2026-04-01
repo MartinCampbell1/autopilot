@@ -188,6 +188,7 @@ export function useControlPlanePageController(
 
   const { loadOverview, loadSessionDetail, loadAgentDetail } = useControlPlaneDataLoader({
     selectedSessionId,
+    selectedAgentId,
     setHealth,
     setProjects,
     setControlPasses,
@@ -197,6 +198,7 @@ export function useControlPlanePageController(
     setControlProfiles,
     setErrorMessage,
     setSelectedSession,
+    setSelectedAgent,
     setSelectedRunId,
     setSelectedPassId,
   });
