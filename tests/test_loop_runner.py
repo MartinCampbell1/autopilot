@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 
 from autopilot.core.loop_runner import (
     apply_autopilot_ralph_overrides,
+    build_primary_prompt,
     build_retry_prompt,
     check_git_diff_empty,
     check_ralph_installed,
@@ -64,6 +65,8 @@ class TestLoopRunner:
         assert agents_doc.read_text() == "custom"
         prompt = (tmp_path / ".agents" / "ralph" / "PROMPT_build.md").read_text()
         assert ".ralph/critic-feedback.md" in prompt
+        assert "Read each file from disk before editing it." in prompt
+        assert "Do not peek at unfinished sub-work" in prompt
         assert 'str(v)' in loop_script.read_text()
         assert 'ACTIVITY_CMD=".agents/ralph/log-activity.sh"' in config_script.read_text()
 
@@ -183,6 +186,15 @@ class TestLoopRunner:
         assert "Fix login" in prompt
         assert "OAuth callback validation" in prompt
         assert ".ralph/critic-feedback.md" in prompt
+        assert "do not patch from memory or stale snippets" in prompt.lower()
+        assert "launch or delegate background work" in prompt
+
+    def test_build_primary_prompt_includes_read_before_edit_guardrails(self) -> None:
+        prompt = build_primary_prompt(3, "Fix callback", "Tighten OAuth callback validation")
+        assert "Read each file from disk before editing it." in prompt
+        assert "smallest precise change" in prompt
+        assert "report it as launched/running" in prompt
+        assert "invent fork results" in prompt
 
     @patch("autopilot.core.loop_runner.get_adapter")
     def test_run_retry_iteration_success(self, mock_get_adapter: MagicMock, tmp_path: Path) -> None:

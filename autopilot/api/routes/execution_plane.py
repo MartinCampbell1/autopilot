@@ -37,10 +37,12 @@ from autopilot.core.execution_plane import (
     list_execution_plane_agent_action_policy_profiles,
     list_execution_plane_agent_actions,
     list_execution_plane_agent_action_runs,
+    list_execution_plane_runtime_agent_tasks,
     list_execution_plane_agents,
     list_execution_plane_events,
     list_execution_plane_orchestrator_sessions,
     list_execution_plane_projects,
+    get_execution_plane_runtime_agent_task,
     summarize_execution_plane_orchestrator_session_actions,
     summarize_execution_plane_orchestrator_session_control_passes,
     summarize_execution_plane_orchestrator_sessions,
@@ -78,8 +80,14 @@ class ImportExecutionBriefRequest(BaseModel):
 class BudgetPolicyRequest(BaseModel):
     project_max_worker_iterations: int | None = Field(default=None, ge=1)
     project_max_critic_reviews: int | None = Field(default=None, ge=1)
+    run_max_worker_iterations: int | None = Field(default=None, ge=1)
+    run_max_critic_reviews: int | None = Field(default=None, ge=1)
+    story_max_worker_iterations: int | None = Field(default=None, ge=1)
+    story_max_critic_reviews: int | None = Field(default=None, ge=1)
     agent_max_worker_iterations: int | None = Field(default=None, ge=1)
     agent_max_critic_reviews: int | None = Field(default=None, ge=1)
+    run_max_runtime_seconds: int | None = Field(default=None, ge=60)
+    story_max_runtime_seconds: int | None = Field(default=None, ge=60)
     auto_pause_on_exhaustion: bool | None = None
 
 
@@ -855,6 +863,40 @@ async def get_execution_agent_action_run(run_id: str) -> dict[str, object]:
         raise HTTPException(404, f"Runtime agent action run {run_id} not found") from exc
 
 
+@router.get("/agents/tasks")
+async def list_execution_runtime_agent_tasks(
+    task_id: str | None = Query(default=None),
+    project_id: str | None = Query(default=None),
+    orchestrator_session_id: str | None = Query(default=None),
+    runtime_agent_id: str | None = Query(default=None),
+    status: str | None = Query(default=None),
+    command: str | None = Query(default=None),
+    agent_action_run_id: str | None = Query(default=None),
+) -> dict[str, list[dict]]:
+    config = get_config()
+    return {
+        "tasks": list_execution_plane_runtime_agent_tasks(
+            config,
+            task_id=task_id,
+            project_id=project_id,
+            orchestrator_session_id=orchestrator_session_id,
+            runtime_agent_id=runtime_agent_id,
+            status=status,
+            command=command,
+            agent_action_run_id=agent_action_run_id,
+        )
+    }
+
+
+@router.get("/agents/tasks/{task_id}")
+async def get_execution_runtime_agent_task(task_id: str) -> dict[str, object]:
+    config = get_config()
+    try:
+        return get_execution_plane_runtime_agent_task(config, task_id)
+    except KeyError as exc:
+        raise HTTPException(404, f"Runtime agent task {task_id} not found") from exc
+
+
 @router.get("/agents/actions/{action_key:path}")
 async def get_execution_agent_action(action_key: str) -> dict[str, object]:
     config = get_config()
@@ -1359,6 +1401,8 @@ async def execute_project_command(
             command=command_name,
             payload=command_payload,
         )
+        if policy.get("denied"):
+            raise RuntimeError(str(policy.get("message") or f"Execution command `{command_name}` is denied."))
         requires_approval = payload.require_approval or policy["requires_approval"]
         if requires_approval:
             issue = create_execution_command_issue(
@@ -1393,6 +1437,8 @@ async def execute_project_command(
             project_id=project_id,
             command=command_name,
             payload=command_payload,
+            actor=payload.requested_by,
+            reason=payload.reason,
         )
     except KeyError as exc:
         raise HTTPException(404, f"Project {project_id} not found") from exc

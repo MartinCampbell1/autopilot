@@ -165,6 +165,38 @@ class AutopilotConfig:
     def routing_policies_json_path(self) -> Path:
         return self.autopilot_home / "routing-policies.json"
 
+    @property
+    def plugins_dir(self) -> Path:
+        return self.autopilot_home / "plugins"
+
+    @property
+    def plugin_state_dir(self) -> Path:
+        return self.control_plane_state_dir / "plugins"
+
+    @property
+    def plugin_enablement_json_path(self) -> Path:
+        return self.plugin_state_dir / "enablement.json"
+
+    @property
+    def plugin_data_root_dir(self) -> Path:
+        return self.plugin_state_dir / "data"
+
+    @property
+    def plugin_options_json_path(self) -> Path:
+        return self.plugin_state_dir / "options.json"
+
+    @property
+    def plugin_secrets_json_path(self) -> Path:
+        return self.plugin_state_dir / "secrets.json"
+
+    @property
+    def tool_permissions_json_path(self) -> Path:
+        return self.control_plane_state_dir / "tool-permissions.json"
+
+    def plugin_data_dir(self, plugin_id: str) -> Path:
+        normalized = str(plugin_id or "").strip().lower() or "unknown-plugin"
+        return self.plugin_data_root_dir / normalized
+
     def default_provider_config(self, provider: str) -> ProviderConfig:
         from autopilot.core.adapters import get_adapter
 

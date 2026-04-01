@@ -11,7 +11,15 @@ from fastapi.testclient import TestClient
 
 from autopilot.api.routes import execution_plane as execution_plane_routes
 from autopilot.core.config import AutopilotConfig
-from autopilot.core.project_store import emit_project_event, update_project_runtime, update_story_runtime
+from autopilot.core.project_store import (
+    emit_project_event,
+    load_project_state,
+    save_project_state,
+    update_project_runtime,
+    update_story_runtime,
+)
+from autopilot.core.runtime_agent_tasks import create_or_reuse_runtime_agent_task
+from autopilot.core.tool_permissions import PermissionRuleValue, PermissionUpdate, persist_permission_update
 
 
 class _FakeManager:
@@ -741,6 +749,8 @@ def test_execution_plane_command_route_updates_budget_without_approval(
         json={
             "budget_policy": {
                 "project_max_worker_iterations": 14,
+                "run_max_runtime_seconds": 3600,
+                "story_max_runtime_seconds": 900,
                 "agent_max_critic_reviews": 3,
                 "auto_pause_on_exhaustion": False,
             }
@@ -751,6 +761,8 @@ def test_execution_plane_command_route_updates_budget_without_approval(
     payload = response.json()
     assert payload["status"] == "ok"
     assert payload["budget_policy"]["project_max_worker_iterations"] == 14
+    assert payload["budget_policy"]["run_max_runtime_seconds"] == 3600
+    assert payload["budget_policy"]["story_max_runtime_seconds"] == 900
     assert payload["budget_policy"]["agent_max_critic_reviews"] == 3
     assert payload["project"]["budget"]["policy"]["auto_pause_on_exhaustion"] is False
 
@@ -1143,7 +1155,126 @@ def test_command_policy_route_can_allow_parallel_launch_without_approval(
     command_payload = command_response.json()
     assert command_payload["status"] == "ok"
     assert command_payload["command"] == "launch"
-    assert mock_launch_project_run.call_args.kwargs["launch_profile"]["max_parallel_stories"] == 2
+    assert command_payload["async_task"]["status"] == "running"
+    assert command_payload["async_task"]["command"] == "launch"
+    assert "final completion is not available yet" in command_payload["message"]
+
+    tasks_response = client.get(
+        "/api/execution-plane/agents/tasks",
+        params={"project_id": project_id, "command": "launch"},
+    )
+    assert tasks_response.status_code == 200
+    tasks = tasks_response.json()["tasks"]
+    assert len(tasks) == 1
+    assert tasks[0]["id"] == command_payload["async_task"]["id"]
+
+    task_detail = client.get(f"/api/execution-plane/agents/tasks/{tasks[0]['id']}")
+    assert task_detail.status_code == 200
+    assert task_detail.json()["artifact_ref"].endswith(tasks[0]["id"])
+    assert task_detail.json()["status"] == "running"
+
+
+@patch("autopilot.core.execution_plane.generate_prd_from_spec")
+def test_execution_plane_orchestrator_session_tracks_async_tasks_honestly(
+    mock_generate_prd_from_spec,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    client = _build_client(config, monkeypatch)
+    mock_generate_prd_from_spec.return_value = {
+        "title": "FounderOS Copilot",
+        "description": "Execution-ready FounderOS project.",
+        "stories": [{"id": 1, "title": "Bootstrap", "description": "Create the app shell"}],
+    }
+
+    created = _create_execution_project(client, tmp_path / "async-session-project")
+    project_id = created["project"]["project_id"]
+    session = _create_orchestrator_session(
+        client,
+        project_ids=[project_id],
+        actor="founderos",
+        title="Async follow-through loop",
+    )
+
+    task = create_or_reuse_runtime_agent_task(
+        config,
+        project_id=project_id,
+        command="launch",
+        actor="founderos",
+        reason="Launch background execution.",
+        orchestrator_session_id=session["id"],
+        runtime_agent_ids=["runtime-agent-1"],
+        output_path=str(config.autopilot_home / "logs" / f"{project_id}.log"),
+    )
+
+    session_detail = client.get(f"/api/execution-plane/orchestrator-sessions/{session['id']}")
+    assert session_detail.status_code == 200
+    detail = session_detail.json()
+    assert detail["runtime_state"] == "running"
+    assert detail["pending_action"] is None
+    assert detail["control"]["state"] == "in_progress"
+    assert detail["control"]["session_state"] == "running"
+    assert detail["control"]["pending_action"] is None
+    assert detail["summary"]["async_task_count"] == 1
+    assert detail["summary"]["active_async_task_count"] == 1
+    assert detail["async_tasks"][0]["id"] == task.id
+    assert detail["async_tasks"][0]["status"] == "running"
+    assert detail["summary"]["by_event"]["execution_plane_runtime_agent_task_started"] >= 1
+
+    state = load_project_state(config, project_id)
+    state["status"] = "completed"
+    state["paused"] = False
+    state["finished_at"] = "2026-04-01T12:34:56+00:00"
+    state["log_path"] = str(config.autopilot_home / "logs" / f"{project_id}.log")
+    save_project_state(config, project_id, state)
+
+    refreshed_detail_response = client.get(f"/api/execution-plane/orchestrator-sessions/{session['id']}")
+    assert refreshed_detail_response.status_code == 200
+    refreshed_detail = refreshed_detail_response.json()
+    assert refreshed_detail["async_tasks"][0]["id"] == task.id
+    assert refreshed_detail["async_tasks"][0]["status"] == "completed"
+    assert refreshed_detail["async_tasks"][0]["result_summary"] == "Background run completed."
+    assert refreshed_detail["runtime_state"] == "requires_action"
+    assert refreshed_detail["pending_action"]["kind"] == "complete_session"
+    assert refreshed_detail["summary"]["active_async_task_count"] == 0
+    assert refreshed_detail["summary"]["by_event"]["execution_plane_runtime_agent_task_completed"] >= 1
+
+
+@patch("autopilot.core.execution_plane.generate_prd_from_spec")
+def test_execution_plane_command_route_respects_project_deny_rule(
+    mock_generate_prd_from_spec,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    client = _build_client(config, monkeypatch)
+    mock_generate_prd_from_spec.return_value = {
+        "title": "FounderOS Copilot",
+        "description": "Execution-ready FounderOS project.",
+        "stories": [{"id": 1, "title": "Bootstrap", "description": "Create the app shell"}],
+    }
+
+    created = _create_execution_project(client, tmp_path / "deny-rule-project")
+    project_id = created["project"]["project_id"]
+    persist_permission_update(
+        config,
+        PermissionUpdate(
+            type="add_rules",
+            destination="project",
+            behavior="deny",
+            project_id=project_id,
+            rules=[PermissionRuleValue(tool_name="execution.pause")],
+        ),
+    )
+
+    response = client.post(
+        f"/api/execution-plane/projects/{project_id}/commands/pause",
+        json={"requested_by": "founderos"},
+    )
+
+    assert response.status_code == 409
+    assert "execution.pause" in response.json()["detail"]
 
 
 @patch("autopilot.core.execution_plane.generate_prd_from_spec")
@@ -1821,7 +1952,11 @@ def test_execution_plane_agent_action_execute_escalates_to_approval_when_needed(
     assert linked["summary"]["approval_count"] == 1
     assert linked["summary"]["pending_approval_count"] == 1
     assert linked["summary"]["issue_count"] == 1
+    assert linked["runtime_state"] == "requires_action"
+    assert linked["pending_action"]["kind"] == "review_pending_approvals"
     assert linked["control"]["state"] == "needs_approval"
+    assert linked["control"]["session_state"] == "requires_action"
+    assert linked["control"]["pending_action"]["kind"] == "review_pending_approvals"
     assert any(item["kind"] == "review_pending_approvals" for item in linked["control"]["recommendations"])
     apply_recommendation = client.post(
         f"/api/execution-plane/orchestrator-sessions/{session['id']}/control/apply",
@@ -1892,7 +2027,9 @@ def test_execution_plane_agent_action_execute_escalates_to_approval_when_needed(
     assert linked_after_plan.status_code == 200
     detail_after_plan = linked_after_plan.json()
     assert detail_after_plan["status"] == "open"
+    assert detail_after_plan["runtime_state"] == "requires_action"
     assert detail_after_plan["control"]["state"] == "needs_approval"
+    assert detail_after_plan["control"]["session_state"] == "requires_action"
     assert detail_after_plan["summary"]["control_pass_count"] == 1
 
     global_passes = client.get(
@@ -1954,7 +2091,11 @@ def test_execution_plane_orchestrator_session_control_apply_completes_healthy_se
     assert session_detail.status_code == 200
     detail = session_detail.json()
     assert detail["status"] == "completed"
+    assert detail["runtime_state"] == "idle"
+    assert detail["pending_action"] is None
     assert detail["control"]["state"] == "closed"
+    assert detail["control"]["session_state"] == "idle"
+    assert detail["control"]["pending_action"] is None
 
 
 @patch("autopilot.core.execution_plane.generate_prd_from_spec")

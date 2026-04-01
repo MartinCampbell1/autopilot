@@ -269,8 +269,14 @@ function extensionItemSummary(item: ExtensionRegistryItem) {
       ? metadata.event_kinds.join(", ")
       : "";
   const parts = [
+    typeof metadata.version === "string" && metadata.version.trim() ? `v${metadata.version.trim()}` : "",
     item.transport || "",
     typeof metadata.source === "string" ? metadata.source : "",
+    typeof metadata.validation_status === "string" &&
+    metadata.validation_status.trim() &&
+    metadata.validation_status !== "valid"
+      ? `validation: ${metadata.validation_status}`
+      : "",
     target,
     events ? `events: ${events}` : "",
   ].filter(Boolean);
@@ -278,6 +284,7 @@ function extensionItemSummary(item: ExtensionRegistryItem) {
 }
 
 const EXTENSION_GROUPS = [
+  { label: "Plugins", itemsKey: "plugins" as const },
   { label: "Providers", itemsKey: "agent_providers" as const },
   { label: "Runtimes", itemsKey: "runtimes" as const },
   { label: "Trackers", itemsKey: "trackers" as const },
@@ -405,6 +412,7 @@ export function SettingsCapabilitiesManager() {
     runtime_profiles: [],
     extensions: {
       lifecycle: [],
+      plugins: [],
       agent_providers: [],
       runtimes: [],
       trackers: [],
@@ -749,6 +757,7 @@ export function SettingsCapabilitiesManager() {
   const skillPackCount = catalog.skill_packs.length;
   const enabledSkillPackCount = catalog.skill_packs.filter((item) => item.enabled).length;
   const extensionSlotCount =
+    catalog.extensions.plugins.length +
     catalog.extensions.agent_providers.length +
     catalog.extensions.runtimes.length +
     catalog.extensions.trackers.length +
@@ -1785,7 +1794,7 @@ export function SettingsCapabilitiesManager() {
                             Lifecycle: {catalog.extensions.lifecycle.join(" -> ") || "register -> validate -> expose -> audit"}
                           </p>
                           <p className="mt-1 text-[12px] leading-relaxed text-[#787774]">
-                            Configured tracker and notifier registrations are loaded from <code>config.yaml</code>; built-in slots stay visible alongside them.
+                            On-disk plugins are discovered from the local plugins directory, while configured tracker and notifier registrations are loaded from <code>config.yaml</code>.
                           </p>
                           <div className="mt-3 space-y-3">
                             {EXTENSION_GROUPS.map(({ label, itemsKey }) => {

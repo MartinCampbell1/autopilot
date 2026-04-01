@@ -86,16 +86,30 @@ class GateResult:
 
 
 @dataclass
+class VerificationCheck:
+    """One command-backed verification check emitted by the critic."""
+
+    name: str
+    command: str = ""
+    output: str = ""
+    status: str = ""
+    details: str = ""
+    expected_vs_actual: str = ""
+
+
+@dataclass
 class CriticResult:
     """Result of critic evaluation."""
 
     approved: bool
     feedback: str
     raw_output: str
+    verdict: str = ""
     profile_used: str = ""
     elapsed_sec: float = 0.0
     usage: dict[str, Any] = field(default_factory=dict)
     review_phases: list[str] = field(default_factory=list)
+    verification_checks: list[VerificationCheck] = field(default_factory=list)
     review_results: list["ReviewPhaseResult"] = field(default_factory=list)
 
 
@@ -107,9 +121,11 @@ class ReviewPhaseResult:
     approved: bool
     feedback: str
     raw_output: str
+    verdict: str = ""
     profile_used: str = ""
     elapsed_sec: float = 0.0
     usage: dict[str, Any] = field(default_factory=dict)
+    verification_checks: list[VerificationCheck] = field(default_factory=list)
 
 
 @dataclass

@@ -27,6 +27,7 @@ import type {
   PRD,
   ProjectDetail,
   ProjectRuntimeControl,
+  ProjectRuntimeControlRequestResult,
   ProjectSummary,
   MCPConnector,
   RoutingPolicy,
@@ -89,6 +90,27 @@ export async function fetchProjectRuntimeControl(
     `${API_BASE}/projects/${encodeURIComponent(projectId)}/runtime-control?stale_after_sec=${staleAfterSec}`
   );
   return jsonOrThrow<ProjectRuntimeControl>(res, `Failed to fetch runtime control state: ${res.status}`);
+}
+
+export async function requestProjectRuntimeControl(
+  projectId: string,
+  payload: {
+    requestId?: string;
+    request: Record<string, unknown>;
+  }
+): Promise<ProjectRuntimeControlRequestResult> {
+  const res = await fetch(`${API_BASE}/projects/${encodeURIComponent(projectId)}/runtime-control/request`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      request_id: payload.requestId ?? "",
+      request: payload.request ?? {},
+    }),
+  });
+  return jsonOrThrow<ProjectRuntimeControlRequestResult>(
+    res,
+    `Failed to queue project runtime control request: ${res.status}`
+  );
 }
 
 export async function fetchExecutionPlaneOrchestratorSessions(

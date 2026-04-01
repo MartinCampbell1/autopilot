@@ -23,8 +23,11 @@ const STATUS_STYLES: Record<ProjectSummary["status"], string> = {
 interface PortfolioProjectCardProps {
   project: ProjectSummary;
   busy?: boolean;
+  interruptBusy?: boolean;
+  interruptStateLabel?: string;
   onLaunch?: () => void;
   onPause?: () => void;
+  onInterrupt?: () => void;
   onArchive?: () => void;
 }
 
@@ -54,8 +57,11 @@ function formatPhrase(value?: string | null) {
 export function PortfolioProjectCard({
   project,
   busy = false,
+  interruptBusy = false,
+  interruptStateLabel = "",
   onLaunch,
   onPause,
+  onInterrupt,
   onArchive,
 }: PortfolioProjectCardProps) {
   const progress = project.stories_total > 0
@@ -186,6 +192,17 @@ export function PortfolioProjectCard({
               {project.status === "paused" ? "Resume" : "Launch"}
             </Button>
           )}
+          {project.status === "running" && project.runtime_control_available && onInterrupt ? (
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-9 rounded-lg text-[13px]"
+              disabled={busy || interruptBusy}
+              onClick={onInterrupt}
+            >
+              {interruptBusy ? "Interrupting..." : "Interrupt"}
+            </Button>
+          ) : null}
           <Button
             size="sm"
             variant="ghost"
@@ -195,6 +212,11 @@ export function PortfolioProjectCard({
           >
             Archive
           </Button>
+          {interruptStateLabel ? (
+            <p className="w-full text-right text-[11px] text-[#787774]">
+              {interruptStateLabel}
+            </p>
+          ) : null}
         </div>
       </div>
     </article>

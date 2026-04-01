@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 
 from autopilot.core.critic import (
     NON_ACTIONABLE_FEEDBACK,
+    NON_ACTIONABLE_VERIFICATION_FEEDBACK,
     build_critic_prompt,
     feedback_is_actionable,
     parse_critic_output,
@@ -79,9 +80,49 @@ Then list one or more bullet points with concrete blocking issues.
         assert result.approved is False
         assert result.feedback == NON_ACTIONABLE_FEEDBACK
 
+    def test_verdict_pass_with_command_backed_evidence(self) -> None:
+        output = """### Check: unit tests
+**Command run:**
+  pytest -q
+**Output observed:**
+  3 passed in 0.12s
+**Result: PASS**
+
+VERDICT: PASS
+"""
+        result = parse_critic_output(output)
+        assert result.approved is True
+        assert result.verdict == "PASS"
+        assert len(result.verification_checks) == 1
+        assert result.verification_checks[0].command == "pytest -q"
+
+    def test_verdict_pass_without_command_backed_evidence_is_rejected(self) -> None:
+        result = parse_critic_output("VERDICT: PASS")
+        assert result.approved is False
+        assert result.feedback == NON_ACTIONABLE_VERIFICATION_FEEDBACK
+
+    def test_verdict_partial_extracts_actionable_feedback(self) -> None:
+        output = """### Check: CLI import
+**Command run:**
+  python3 -m pytest tests/test_execution_approval_cli.py
+**Output observed:**
+  ModuleNotFoundError: No module named 'typer'
+**Result: PARTIAL**
+**Expected vs Actual:**
+  Expected the CLI test module to import successfully. Actual import failed because `typer` is unavailable.
+
+VERDICT: PARTIAL
+"""
+        result = parse_critic_output(output)
+        assert result.approved is False
+        assert result.verdict == "PARTIAL"
+        assert "typer" in result.feedback
+        assert feedback_is_actionable(result.feedback)
+
     def test_feedback_is_actionable(self) -> None:
         assert feedback_is_actionable("- Issue 1: missing test")
         assert not feedback_is_actionable(NON_ACTIONABLE_FEEDBACK)
+        assert not feedback_is_actionable(NON_ACTIONABLE_VERIFICATION_FEEDBACK)
         assert not feedback_is_actionable("- Issue 1: specific description")
         assert not feedback_is_actionable("- <concrete issue tied to code, tests, files, or behavior>")
         assert not feedback_is_actionable("Then list one or more bullet points with concrete blocking issues.")
@@ -98,6 +139,9 @@ class TestBuildCriticPrompt:
         assert "OAuth login" in prompt
         assert "oauth_callback" in prompt
         assert "latest relevant code changes in the workspace" in prompt
+        assert "**Command run:**" in prompt
+        assert "VERDICT: PASS" in prompt
+        assert "Do not modify project files" in prompt
 
     def test_builds_strict_prompt_without_placeholder_language(self) -> None:
         prompt = build_critic_prompt(
@@ -108,6 +152,7 @@ class TestBuildCriticPrompt:
         )
         assert "If you cannot identify at least one concrete blocking issue, respond with APPROVED." in prompt
         assert "<concrete issue" not in prompt
+        assert "Do not return PASS unless at least one check block includes both a concrete command and observed output." in prompt
 
     def test_builds_phase_focused_prompt(self) -> None:
         prompt = build_critic_prompt(

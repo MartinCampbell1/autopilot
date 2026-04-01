@@ -1,15 +1,22 @@
 """Tests for machine-friendly headless runtime helpers."""
 
+import io
+import json
+
 from autopilot.core.headless import (
     RUN_EXIT_FAILED,
     RUN_EXIT_PAUSED,
     RUN_EXIT_PRECHECK_FAILED,
     RUN_EXIT_SUCCESS,
+    activate_structured_io,
     build_preflight_summary,
     build_run_all_summary,
+    emit_headless_event,
+    emit_headless_summary,
     build_run_summary,
     exit_code_for_state,
 )
+from autopilot.core.structured_io import StructuredIO
 
 
 def test_exit_code_for_state_only_marks_completed_runs_as_success() -> None:
@@ -73,3 +80,21 @@ def test_build_run_all_summary_prioritizes_failures_over_pauses() -> None:
     assert summary["exit_code"] == RUN_EXIT_FAILED
     assert summary["failed_projects"] == ["failed"]
     assert summary["paused_projects"] == ["paused"]
+
+
+def test_headless_emitters_use_structured_io_when_active() -> None:
+    output = io.StringIO()
+    runtime = StructuredIO(session_id="sess_headless", input_stream=io.StringIO(""), output_stream=output)
+    activate_structured_io(runtime)
+    try:
+        emit_headless_event("run_started", message="Started", project_id="proj_1")
+        emit_headless_summary({"kind": "run_summary", "project_id": "proj_1", "exit_code": 0})
+    finally:
+        activate_structured_io(None)
+        runtime.close()
+
+    payloads = [json.loads(line) for line in output.getvalue().splitlines()]
+    assert payloads[0]["type"] == "event"
+    assert payloads[0]["event"] == "run_started"
+    assert payloads[1]["type"] == "result"
+    assert payloads[1]["summary"]["kind"] == "run_summary"

@@ -10,10 +10,12 @@ from pathlib import Path
 from autopilot.core.adapters import AdapterExecutionRequest, AdapterMode, get_adapter
 from autopilot.core.capability_store import normalize_review_phases
 from autopilot.core.cost_accounting import merge_usage_records, summarize_invocation_usage
-from autopilot.core.models import CriticResult, Profile, ReviewPhaseResult
+from autopilot.core.models import CriticResult, Profile, ReviewPhaseResult, VerificationCheck
 
 TEMPLATE_DIR = Path(__file__).parent.parent / "templates"
 ISSUE_PATTERN = re.compile(r"^\s*-\s*Issue\b.*", re.IGNORECASE)
+VERDICT_PATTERN = re.compile(r"^\s*VERDICT:\s*(PASS|FAIL|PARTIAL)\s*$", re.IGNORECASE | re.MULTILINE)
+CHECK_HEADER_PATTERN = re.compile(r"^###\s*Check:\s*(.+?)\s*$", re.IGNORECASE)
 PLACEHOLDER_ISSUE_PATTERN = re.compile(
     r"^\s*(?:-\s*)?(?:"
     r"Issue\s+\d+:\s*specific description|"
@@ -26,6 +28,7 @@ PLACEHOLDER_ISSUE_PATTERN = re.compile(
     re.IGNORECASE,
 )
 NON_ACTIONABLE_FEEDBACK = "Critic returned NEEDS_WORK without actionable issues."
+NON_ACTIONABLE_VERIFICATION_FEEDBACK = "Critic returned VERDICT PASS without command-backed evidence."
 STOP_MARKERS = (
     "openai codex",
     "claude code",
@@ -103,11 +106,194 @@ or
 NEEDS_WORK
 Followed by one or more bullet points that each name a real blocking issue.
 """
+VERIFICATION_CRITIC_APPENDIX = """
+
+## Verification Contract
+You are acting as a verification specialist, not a trust-the-code reviewer.
+Your job is to try to break the change and approve it only when command-backed evidence supports that decision.
+
+Required rules:
+1. Do not modify project files, install packages, or run git write operations.
+2. Treat passing tests as context, not proof.
+3. Use concrete commands against the changed behavior whenever the environment allows it.
+4. Include at least one adversarial probe relevant to the change: boundary input, invalid input, idempotency, regression, or similar.
+5. If you cannot verify a claim because the environment blocks it, return `VERDICT: PARTIAL`, not PASS.
+6. A PASS without command-backed evidence is invalid.
+
+## Required Output Format
+For each concrete check, use:
+
+### Check: [what you verified]
+**Command run:**
+  [exact command you executed]
+**Output observed:**
+  [actual observed output or relevant excerpt]
+**Result: PASS**
+
+If a check fails, use `**Result: FAIL**` and include expected vs actual when relevant.
+
+End with exactly one line:
+VERDICT: PASS
+or
+VERDICT: FAIL
+or
+VERDICT: PARTIAL
+"""
+STRICT_VERIFICATION_APPENDIX = """
+
+## Additional Strictness
+- Do not return PASS unless at least one check block includes both a concrete command and observed output.
+- If you cannot produce command-backed evidence, return `VERDICT: PARTIAL`.
+- Reject vague concerns without reproduction. Use FAIL for reproduced issues and PARTIAL for environmental limits.
+"""
+
+
+def _extract_verdict(raw_output: str) -> str:
+    matches = VERDICT_PATTERN.findall(raw_output)
+    if not matches:
+        return ""
+    return matches[-1].upper()
+
+
+def _starts_section(line: str) -> bool:
+    stripped = line.strip()
+    lowered = stripped.lower()
+    return bool(
+        CHECK_HEADER_PATTERN.match(stripped)
+        or VERDICT_PATTERN.match(stripped)
+        or lowered.startswith("**command run:**")
+        or lowered.startswith("**output observed:**")
+        or lowered.startswith("**expected vs actual:**")
+        or lowered.startswith("**result:")
+    )
+
+
+def _parse_result_line(line: str) -> tuple[str, str]:
+    stripped = line.strip()
+    match = re.match(r"^\*{0,2}Result:\s*(PASS|FAIL|PARTIAL)\*{0,2}\s*(.*)$", stripped, re.IGNORECASE)
+    if not match:
+        return "", ""
+    status = match.group(1).upper()
+    details = match.group(2).strip().strip("*").strip()
+    return status, details
+
+
+def _parse_verification_checks(raw_output: str) -> list[VerificationCheck]:
+    checks: list[VerificationCheck] = []
+    current: VerificationCheck | None = None
+    current_section: str | None = None
+    section_lines: list[str] = []
+
+    def flush_section() -> None:
+        nonlocal section_lines
+        if current is None or current_section is None:
+            section_lines = []
+            return
+        content = "\n".join(section_lines).strip()
+        if current_section == "command":
+            current.command = content
+        elif current_section == "output":
+            current.output = content
+        elif current_section == "expected_vs_actual":
+            current.expected_vs_actual = content
+        section_lines = []
+
+    def flush_check() -> None:
+        nonlocal current, current_section, section_lines
+        flush_section()
+        if current is not None:
+            checks.append(current)
+        current = None
+        current_section = None
+        section_lines = []
+
+    for raw_line in raw_output.splitlines():
+        line = raw_line.rstrip()
+        stripped = line.strip()
+        check_match = CHECK_HEADER_PATTERN.match(stripped)
+        if check_match:
+            flush_check()
+            current = VerificationCheck(name=check_match.group(1).strip())
+            continue
+        if current is None:
+            continue
+        if VERDICT_PATTERN.match(stripped):
+            flush_check()
+            break
+        lowered = stripped.lower()
+        if lowered.startswith("**command run:**"):
+            flush_section()
+            current_section = "command"
+            inline = stripped.split(":", 1)[1].strip().strip("*").strip()
+            section_lines = [inline] if inline else []
+            continue
+        if lowered.startswith("**output observed:**"):
+            flush_section()
+            current_section = "output"
+            inline = stripped.split(":", 1)[1].strip().strip("*").strip()
+            section_lines = [inline] if inline else []
+            continue
+        if lowered.startswith("**expected vs actual:**"):
+            flush_section()
+            current_section = "expected_vs_actual"
+            inline = stripped.split(":", 1)[1].strip().strip("*").strip()
+            section_lines = [inline] if inline else []
+            continue
+        if lowered.startswith("**result:"):
+            flush_section()
+            current_section = None
+            status, details = _parse_result_line(stripped)
+            current.status = status
+            current.details = details
+            continue
+        if _starts_section(stripped):
+            flush_section()
+            current_section = None
+            continue
+        if current_section is not None:
+            section_lines.append(line)
+
+    flush_check()
+    return checks
+
+
+def _verification_feedback(checks: list[VerificationCheck], raw_output: str, *, verdict: str) -> str:
+    failing_checks = [
+        check for check in checks if check.status in {"FAIL", "PARTIAL"} or (verdict != "PASS" and not check.status)
+    ]
+    candidates = failing_checks or checks
+    lines: list[str] = []
+    for check in candidates:
+        summary = (
+            check.expected_vs_actual.strip()
+            or check.details.strip()
+            or next((line.strip() for line in check.output.splitlines() if line.strip()), "")
+            or next((line.strip() for line in check.command.splitlines() if line.strip()), "")
+        )
+        if summary:
+            lines.append(f"- {check.name}: {summary}")
+        else:
+            lines.append(f"- {check.name}: verification reported {check.status or verdict}.")
+    if lines:
+        return "\n".join(lines[:8]).strip()
+
+    fallback_lines = [
+        line.strip()
+        for line in raw_output.splitlines()
+        if line.strip() and not VERDICT_PATTERN.match(line.strip()) and not CHECK_HEADER_PATTERN.match(line.strip())
+    ]
+    if fallback_lines:
+        return "\n".join(fallback_lines[-8:]).strip()
+    return NON_ACTIONABLE_FEEDBACK
+
+
+def _has_command_backed_evidence(checks: list[VerificationCheck]) -> bool:
+    return any(check.command.strip() and check.output.strip() for check in checks)
 
 
 def feedback_is_actionable(feedback: str) -> bool:
     stripped = feedback.strip()
-    if not stripped or stripped == NON_ACTIONABLE_FEEDBACK:
+    if not stripped or stripped in {NON_ACTIONABLE_FEEDBACK, NON_ACTIONABLE_VERIFICATION_FEEDBACK}:
         return False
 
     lines = [line.strip() for line in stripped.splitlines() if line.strip()]
@@ -170,6 +356,33 @@ def parse_critic_output(raw_output: str) -> CriticResult:
     if not raw_output.strip():
         return CriticResult(approved=False, feedback="Empty output from critic", raw_output=raw_output)
 
+    verdict = _extract_verdict(raw_output)
+    verification_checks = _parse_verification_checks(raw_output)
+    if verdict:
+        if verdict == "PASS":
+            if not _has_command_backed_evidence(verification_checks):
+                return CriticResult(
+                    approved=False,
+                    feedback=NON_ACTIONABLE_VERIFICATION_FEEDBACK,
+                    raw_output=raw_output,
+                    verdict=verdict,
+                    verification_checks=verification_checks,
+                )
+            return CriticResult(
+                approved=True,
+                feedback="",
+                raw_output=raw_output,
+                verdict=verdict,
+                verification_checks=verification_checks,
+            )
+        return CriticResult(
+            approved=False,
+            feedback=_verification_feedback(verification_checks, raw_output, verdict=verdict),
+            raw_output=raw_output,
+            verdict=verdict,
+            verification_checks=verification_checks,
+        )
+
     upper = raw_output.upper()
     has_needs_work = "NEEDS_WORK" in upper
     has_approved = "APPROVED" in upper
@@ -184,12 +397,13 @@ def parse_critic_output(raw_output: str) -> CriticResult:
             approved=False,
             feedback=feedback,
             raw_output=raw_output,
+            verification_checks=verification_checks,
         )
 
     if has_approved:
-        return CriticResult(approved=True, feedback="", raw_output=raw_output)
+        return CriticResult(approved=True, feedback="", raw_output=raw_output, verification_checks=verification_checks)
 
-    return CriticResult(approved=False, feedback=raw_output.strip(), raw_output=raw_output)
+    return CriticResult(approved=False, feedback=raw_output.strip(), raw_output=raw_output, verification_checks=verification_checks)
 
 
 def build_critic_prompt(
@@ -212,6 +426,9 @@ def build_critic_prompt(
         story_description=story_description,
         diff=diff[:8000],
     )
+    prompt += VERIFICATION_CRITIC_APPENDIX
+    if strict:
+        prompt += STRICT_VERIFICATION_APPENDIX
     focus = REVIEW_PHASE_FOCUS.get(str(phase or "").strip().lower())
     if focus:
         prompt += (
@@ -377,9 +594,11 @@ def _review_phase_result(phase: str, result: CriticResult) -> ReviewPhaseResult:
         approved=result.approved,
         feedback=result.feedback,
         raw_output=result.raw_output,
+        verdict=getattr(result, "verdict", ""),
         profile_used=result.profile_used,
         elapsed_sec=result.elapsed_sec,
         usage=dict(result.usage or {}),
+        verification_checks=list(getattr(result, "verification_checks", []) or []),
     )
 
 
@@ -445,10 +664,12 @@ def run_review_plan(
         raw_outputs.append(f"[{phase}]\n{result.raw_output}".strip())
 
     approved = all(result.approved for result in phase_results)
+    verdict = "PASS" if approved else ("PARTIAL" if any(result.verdict == "PARTIAL" for result in phase_results) else "FAIL")
     return CriticResult(
         approved=approved,
         feedback="" if approved else _aggregate_review_feedback(phase_results),
         raw_output="\n\n".join(raw_outputs).strip(),
+        verdict=verdict,
         profile_used=profile.name if profile is not None else "",
         elapsed_sec=round(sum(result.elapsed_sec for result in phase_results), 2),
         usage=merge_usage_records(*usage_records),

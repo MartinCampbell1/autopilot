@@ -7,12 +7,43 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from autopilot.cli.run import (
+    _apply_requested_headless_interrupt,
     _project_branch_policy,
     _ready_open_stories,
     _should_use_story_worktree,
     _write_ralph_story_snapshot,
     _write_team_context,
 )
+from autopilot.core.config import AutopilotConfig
+from autopilot.core.headless_control import create_headless_control_session
+from autopilot.core.project_store import load_project_state, register_project
+
+
+def _create_project(config: AutopilotConfig, root: Path) -> dict:
+    root.mkdir(parents=True, exist_ok=True)
+    prd_path = root / ".agents" / "tasks" / "prd.json"
+    prd_path.parent.mkdir(parents=True, exist_ok=True)
+    prd_path.write_text(
+        json.dumps(
+            {
+                "title": "Demo",
+                "stories": [
+                    {
+                        "id": 1,
+                        "title": "Bootstrap",
+                        "description": "Create the app shell",
+                        "status": "open",
+                    }
+                ],
+            }
+        )
+    )
+    return register_project(
+        config,
+        name="Demo",
+        project_path=root,
+        prd_relpath=".agents/tasks/prd.json",
+    )
 
 
 def test_write_ralph_story_snapshot_selects_only_requested_story(tmp_path: Path) -> None:
@@ -122,6 +153,27 @@ def test_run_headless_returns_exit_code_and_emits_summary(monkeypatch, capsys) -
     assert payload["exit_code"] == 2
 
 
+def test_run_headless_structured_emits_result_envelope(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(
+        "autopilot.cli.run._run_impl",
+        lambda *args, **kwargs: {
+            "kind": "run_summary",
+            "project_id": "demo",
+            "exit_code": 0,
+        },
+    )
+
+    from autopilot.cli.run import run
+
+    exit_code = run("/tmp/demo", ".agents/tasks/prd.json", "demo", headless=True, structured=True)
+    payload = json.loads(capsys.readouterr().out.strip())
+
+    assert exit_code == 0
+    assert payload["type"] == "result"
+    assert payload["summary"]["project_id"] == "demo"
+    assert payload["is_error"] is False
+
+
 def test_run_all_headless_returns_exit_code_and_emits_summary(monkeypatch, capsys) -> None:
     monkeypatch.setattr(
         "autopilot.cli.run._run_all_impl",
@@ -140,6 +192,27 @@ def test_run_all_headless_returns_exit_code_and_emits_summary(monkeypatch, capsy
     assert exit_code == 1
     assert payload["kind"] == "run_all_summary"
     assert payload["project_count"] == 1
+
+
+def test_run_all_headless_structured_emits_result_envelope(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(
+        "autopilot.cli.run._run_all_impl",
+        lambda **kwargs: {
+            "kind": "run_all_summary",
+            "exit_code": 1,
+            "project_count": 1,
+        },
+    )
+
+    from autopilot.cli.run import run_all
+
+    exit_code = run_all(headless=True, structured=True)
+    payload = json.loads(capsys.readouterr().out.strip())
+
+    assert exit_code == 1
+    assert payload["type"] == "result"
+    assert payload["summary"]["kind"] == "run_all_summary"
+    assert payload["is_error"] is True
 
 
 def test_run_all_scheduled_headless_emits_final_summary(monkeypatch, capsys) -> None:
@@ -165,6 +238,45 @@ def test_run_all_scheduled_headless_emits_final_summary(monkeypatch, capsys) -> 
     assert payloads[-1]["kind"] == "scheduled_run_summary"
     assert payloads[-1]["run_count"] == 2
     assert payloads[-1]["exit_code"] == 1
+
+
+def test_run_structured_requires_headless() -> None:
+    from autopilot.cli.run import run
+
+    try:
+        run("/tmp/demo", ".agents/tasks/prd.json", "demo", structured=True)
+    except Exception as exc:
+        assert "--structured requires --headless" in str(exc)
+    else:
+        raise AssertionError("Expected structured mode to require headless mode.")
+
+
+def test_apply_requested_headless_interrupt_pauses_project_in_process(tmp_path: Path, monkeypatch) -> None:
+    emitted: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        "autopilot.cli.run._emit_runtime_message",
+        lambda **payload: emitted.append(payload),
+    )
+
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    project = _create_project(config, tmp_path / "project")
+    session = create_headless_control_session(config, project_entry=project, session_id="sess_headless")
+    session.request_interrupt("req_interrupt")
+
+    applied = _apply_requested_headless_interrupt(
+        control_session=session,
+        config=config,
+        project_id=project["id"],
+        headless=True,
+        story_id=1,
+    )
+
+    state = load_project_state(config, project["id"])
+    assert applied is True
+    assert state["paused"] is True
+    assert state["status"] == "paused"
+    assert state["last_error"] == "Project paused by structured control interrupt."
+    assert emitted[0]["event"] == "run_interrupted"
 
 
 def test_write_team_context_includes_shared_discoveries(tmp_path: Path) -> None:

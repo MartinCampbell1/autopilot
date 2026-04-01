@@ -5,6 +5,7 @@ import { AppSidebar } from "@/components/app-sidebar";
 import { PortfolioProjectCard } from "@/components/portfolio-project-card";
 import { archiveProject, fetchAccountsHealth, fetchProjects, launchProject, pauseProject, resumeProject } from "@/lib/api";
 import { useSSE } from "@/lib/sse";
+import { useProjectRuntimeControlClient } from "@/lib/use-project-runtime-control-client";
 import type { AccountHealth, ProjectSummary } from "@/lib/types";
 
 export default function DashboardPage() {
@@ -34,15 +35,23 @@ export default function DashboardPage() {
     return () => clearInterval(interval);
   }, [loadData]);
 
-  useSSE(
-    useCallback(() => {
-      void loadData();
-    }, [loadData])
-  );
-
   const visibleProjects = useMemo(
     () => projects.filter((project) => !project.archived),
     [projects]
+  );
+  const runtimeControl = useProjectRuntimeControlClient({ projects: visibleProjects });
+  const {
+    getLatestRequest,
+    handleSSEEvent,
+    isPending,
+    requestInterrupt,
+  } = runtimeControl;
+
+  useSSE(
+    useCallback((event, data) => {
+      handleSSEEvent(event, data);
+      void loadData();
+    }, [handleSSEEvent, loadData])
   );
 
   const runAction = async (projectId: string, action: () => Promise<{ message: string }>) => {
@@ -58,6 +67,37 @@ export default function DashboardPage() {
       setBusyProjectId("");
     }
   };
+
+  const runInterruptAction = useCallback(
+    async (project: ProjectSummary) => {
+      setBusyProjectId(project.id);
+      setMessage("");
+      try {
+        await requestInterrupt(project.id);
+        setMessage(`Interrupt queued for ${project.name}. It will apply at the next safe checkpoint.`);
+        await loadData();
+      } catch (error) {
+        setMessage(error instanceof Error ? error.message : "Failed to queue interrupt.");
+      } finally {
+        setBusyProjectId("");
+      }
+    },
+    [loadData, requestInterrupt]
+  );
+
+  const interruptStateLabel = useCallback(
+    (projectId: string) => {
+      const latest = getLatestRequest(projectId, "interrupt");
+      if (!latest) return "";
+      if (latest.phase === "queued") return "Interrupt queued for runtime delivery.";
+      if (latest.phase === "acknowledged") return "Runtime acknowledged interrupt request.";
+      if (latest.phase === "success") return "Interrupt will apply at the next safe checkpoint.";
+      if (latest.phase === "error") return latest.errorMessage || "Interrupt request failed.";
+      if (latest.phase === "stale") return "Previous interrupt request expired with the old runtime session.";
+      return "";
+    },
+    [getLatestRequest]
+  );
 
   return (
     <div className="flex min-h-screen bg-[#fafaf9]">
@@ -102,6 +142,8 @@ export default function DashboardPage() {
                   key={project.id}
                   project={project}
                   busy={busyProjectId === project.id}
+                  interruptBusy={isPending(project.id, "interrupt")}
+                  interruptStateLabel={interruptStateLabel(project.id)}
                   onLaunch={() => {
                     const fn = project.status === "paused"
                       ? () => resumeProject(project.id)
@@ -110,6 +152,9 @@ export default function DashboardPage() {
                   }}
                   onPause={() => {
                     void runAction(project.id, () => pauseProject(project.id));
+                  }}
+                  onInterrupt={() => {
+                    void runInterruptAction(project);
                   }}
                   onArchive={() => {
                     void runAction(project.id, () => archiveProject(project.id));

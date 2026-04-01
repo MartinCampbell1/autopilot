@@ -36,13 +36,22 @@ def run(
     prd: str = typer.Option(".agents/tasks/prd.json", help="PRD JSON path relative to project"),
     project_id: str | None = typer.Option(None, "--project-id", help="Stable project id from the dashboard"),
     headless: bool = typer.Option(False, "--headless", help="Emit machine-readable logs and a JSON summary."),
+    structured: bool = typer.Option(False, "--structured", help="Wrap headless output in structured NDJSON envelopes."),
     schedule: str | None = typer.Option(None, "--schedule", help="Repeat the run on a cadence like 30m or 6h."),
     max_runs: int | None = typer.Option(None, "--max-runs", help="Stop a scheduled run after N iterations."),
 ) -> None:
     """Run autopilot loop on a project until all stories are done."""
     from autopilot.cli.run import run as _run
 
-    exit_code = _run(project_path, prd, project_id, headless=headless, schedule=schedule, max_runs=max_runs)
+    exit_code = _run(
+        project_path,
+        prd,
+        project_id,
+        headless=headless,
+        structured=structured,
+        schedule=schedule,
+        max_runs=max_runs,
+    )
     if exit_code != 0:
         raise typer.Exit(code=exit_code)
 
@@ -50,13 +59,14 @@ def run(
 @app.command(name="run-all")
 def run_all_projects(
     headless: bool = typer.Option(False, "--headless", help="Emit machine-readable logs and a JSON summary."),
+    structured: bool = typer.Option(False, "--structured", help="Wrap headless output in structured NDJSON envelopes."),
     schedule: str | None = typer.Option(None, "--schedule", help="Repeat the run-all loop on a cadence like 30m or 6h."),
     max_runs: int | None = typer.Option(None, "--max-runs", help="Stop a scheduled run after N iterations."),
 ) -> None:
     """Run autopilot on all configured projects in parallel."""
     from autopilot.cli.run import run_all
 
-    exit_code = run_all(headless=headless, schedule=schedule, max_runs=max_runs)
+    exit_code = run_all(headless=headless, structured=structured, schedule=schedule, max_runs=max_runs)
     if exit_code != 0:
         raise typer.Exit(code=exit_code)
 

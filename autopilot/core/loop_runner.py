@@ -27,6 +27,9 @@ This repository was bootstrapped by Autopilot from a PRD.
 - If the repository is greenfield, create the smallest real scaffold needed to satisfy the story.
 - If the story depends on an existing app, gateway, or file that is not present here, record the exact blocker in `.ralph/errors.log` and `.ralph/guardrails.md`, then stop without claiming success.
 - Treat transient verification artifacts such as `__pycache__/`, `.pytest_cache/`, and `*.egg-info/` as disposable. Prefer `.gitignore` over manual recursive cleanup.
+- Read each file from disk before editing it. Do not patch from memory or stale snippets.
+- Do not claim a delegated, background, or long-running task has finished until you have the actual result in hand.
+- Do not peek or race ahead of unfinished background work; report launched/running state honestly instead of inventing an outcome.
 - Prefer the lightest verification that still proves the story works.
 - If `.ralph/team-context.json` or `.ralph/specialist-notes.md` exists, read them before coding.
 - If you discover repeatable build/test commands, keep this file updated with concise operational notes.
@@ -305,13 +308,17 @@ def build_primary_prompt(
         "- Read .ralph/guardrails.md and .ralph/errors.log.\n"
         "- Read .ralph/critic-feedback.md if it contains prior review feedback.\n"
         "- Read .ralph/team-context.json and .ralph/specialist-notes.md if present.\n"
-        "- Read the PRD snapshot for global context and acceptance criteria.\n\n"
+        "- Read the PRD snapshot for global context and acceptance criteria.\n"
+        "- Read each file from disk before editing it. Do not patch from memory or stale snippets.\n"
+        "- Keep edits grounded in the exact text you just read, and prefer the smallest precise change that satisfies the story.\n\n"
         "Rules:\n"
         "- Implement only the selected story.\n"
         "- Do not edit the PRD.\n"
         "- No placeholders or stubs.\n"
         "- For non-documentation stories, docs-only changes are incomplete.\n"
         "- If required app files, APIs, or systems are missing, record the blocker in .ralph/errors.log and .ralph/guardrails.md.\n"
+        "- If you launch or delegate background work, report it as launched/running until you have the real result.\n"
+        "- Do not peek at unfinished sub-work or invent fork results to make the update sound complete.\n"
         "- Run the lightest meaningful verification plus any relevant build/test commands you discover.\n"
         "- Update .ralph/progress.md with what changed and what you verified.\n"
         "- If repo policy allows commits, commit the completed story work.\n\n"
