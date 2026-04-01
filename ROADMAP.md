@@ -20,15 +20,14 @@ This roadmap tracks the public product direction for Autopilot as the execution 
 ## In Progress
 
 - workflow closure from source item to final PR or handoff artifact
-- public docs, examples, and troubleshooting for external adopters
+- public workflow, comparison, and verification docs for external adopters
 - OSS release hygiene and contributor surface
 
 ## Planned Before First Public Release
 
 - product README and quickstart polish
 - documented extension examples for providers, tools, and trackers
-- repeatable smoke and verification baseline
-- clearer positioning versus swarm tools and coding copilots
+- public screenshots or GIFs for the dashboard and operator loop
 
 ## After First Public Release
 
