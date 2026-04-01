@@ -84,6 +84,7 @@ class ControlPermissionRequest(BaseModel):
     description: str | None = None
     user_text: str | None = None
     classifier_enabled: bool | None = None
+    classifier_mode: Literal["sync", "deferred"] | None = None
     classifier_fail_open: bool | None = None
 
 

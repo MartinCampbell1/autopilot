@@ -10,6 +10,8 @@ from pathlib import Path
 from typing import Any
 
 from autopilot.core.capability_store import load_connectors_registry
+from autopilot.core.action_classifier import render_projected_tool_use
+from autopilot.core.approval_runtime import annotate_approval_runtime, create_or_reuse_approval_runtime
 from autopilot.core.command_permissions import (
     headless_permission_mode_allowed,
     normalize_permission_mode,
@@ -218,6 +220,7 @@ class HeadlessControlSession:
                 "enabled": bool(request.classifier_enabled),
                 "user_text": str(request.user_text or ""),
                 "decision_reason": str(request.decision_reason or ""),
+                "mode": str(request.classifier_mode or "sync"),
                 "fail_open": bool(request.classifier_fail_open),
             },
             config=self.config,
@@ -226,6 +229,54 @@ class HeadlessControlSession:
             actor="headless_control",
             source="headless_control.can_use_tool",
         )
+        approval_runtime_id = ""
+        if (
+            decision.behavior == "pending_classifier"
+            and str(request.tool_use_id or "").strip()
+            and str(request.agent_id or "").strip()
+        ):
+            approval_runtime = create_or_reuse_approval_runtime(
+                self.config,
+                key=f"tool-permission:{self.project_id}:{tool.name}:{str(request.tool_use_id).strip()}",
+                project_id=self.project_id,
+                runtime_agent_ids=[str(request.agent_id).strip()],
+                metadata={
+                    "kind": "tool_permission_classifier",
+                    "tool_name": tool.name,
+                    "tool_use_id": str(request.tool_use_id).strip(),
+                    "source": "headless_control.classifier",
+                },
+            )
+            annotate_approval_runtime(
+                self.config,
+                approval_runtime_id=approval_runtime.id,
+                metadata_updates={
+                    "classifier": {
+                        "stage": "pending_classifier",
+                        "mode": str(request.classifier_mode or "deferred"),
+                        "tool_name": tool.name,
+                        "tool_use_id": str(request.tool_use_id).strip(),
+                    }
+                },
+                payload_updates={
+                    "classifier": {
+                        "message": decision.message,
+                        "matched_rule": decision.matched_rule,
+                        "projected_tool_use": render_projected_tool_use(tool, dict(request.input or {})),
+                        "user_text": str(request.user_text or ""),
+                        "decision_reason": str(request.decision_reason or ""),
+                    }
+                },
+                mailbox_message_type="tool_permission_classifier_pending",
+                mailbox_payload={
+                    "tool_name": tool.name,
+                    "tool_use_id": str(request.tool_use_id).strip(),
+                    "message": decision.message,
+                    "behavior": decision.behavior,
+                    "matched_rule": decision.matched_rule,
+                },
+            )
+            approval_runtime_id = approval_runtime.id
         return {
             "behavior": decision.behavior,
             "message": decision.message,
@@ -237,6 +288,7 @@ class HeadlessControlSession:
             "tool_use_id": str(request.tool_use_id),
             "tool_name": str(request.tool_name),
             "permission_mode": self.resolved_permission_mode(),
+            "approval_runtime_id": approval_runtime_id,
         }
 
     def interrupt_status_payload(self) -> dict[str, Any]:

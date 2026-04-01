@@ -7,9 +7,11 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from autopilot.core.action_classifier import render_projected_tool_use
 from autopilot.core.approval_runtime import (
     annotate_approval_runtime,
     create_or_reuse_approval_runtime,
+    get_approval_runtime,
     settle_approval_runtime,
     wait_for_approval_runtime_mailbox_resolution,
     wait_for_approval_runtime_resolution,
@@ -30,6 +32,7 @@ from autopilot.core.tool_hooks import (
     run_pre_tool_use_hooks,
 )
 from autopilot.core.tool_permissions import PermissionDecision, resolve_tool_permission_decision
+from autopilot.core.tool_permissions import has_permissions_to_use_tool
 from autopilot.core.tool_result_storage import store_large_tool_result
 
 
@@ -75,7 +78,66 @@ def _permission_classifier_context_from_use_context(use_context: ToolUseContext)
     }
     if max_user_text_chars is not None:
         payload["max_user_text_chars"] = max_user_text_chars
+    mode = raw.get("mode") or use_context.metadata.get("permission_classifier_mode")
+    if mode is not None:
+        payload["mode"] = str(mode).strip() or "sync"
     return payload
+
+
+def _materialize_pending_classifier_runtime(
+    tool: ToolDef,
+    tool_input: dict[str, Any],
+    use_context: ToolUseContext,
+    *,
+    tool_use_id: str,
+    permission_decision: PermissionDecision,
+    classifier_context: dict[str, Any],
+) -> str:
+    if use_context.config is None or not str(use_context.project_id or "").strip():
+        return ""
+    approval_runtime = create_or_reuse_approval_runtime(
+        use_context.config,
+        key=f"tool-permission:{use_context.project_id}:{tool.name}:{tool_use_id}",
+        project_id=use_context.project_id,
+        runtime_agent_ids=use_context.runtime_agent_ids,
+        metadata={
+            "kind": "tool_permission_classifier",
+            "tool_name": tool.name,
+            "tool_use_id": tool_use_id,
+            "actor": use_context.actor,
+            "source": "classifier",
+        },
+    )
+    annotate_approval_runtime(
+        use_context.config,
+        approval_runtime_id=approval_runtime.id,
+        metadata_updates={
+            "classifier": {
+                "stage": "pending_classifier",
+                "mode": str(classifier_context.get("mode") or "deferred"),
+                "tool_name": tool.name,
+                "tool_use_id": tool_use_id,
+            }
+        },
+        payload_updates={
+            "classifier": {
+                "message": permission_decision.message,
+                "matched_rule": permission_decision.matched_rule,
+                "projected_tool_use": render_projected_tool_use(tool, tool_input),
+                "user_text": str(classifier_context.get("user_text") or ""),
+                "decision_reason": str(classifier_context.get("decision_reason") or ""),
+            }
+        },
+        mailbox_message_type="tool_permission_classifier_pending",
+        mailbox_payload={
+            "tool_name": tool.name,
+            "tool_use_id": tool_use_id,
+            "message": permission_decision.message,
+            "behavior": permission_decision.behavior,
+            "matched_rule": permission_decision.matched_rule,
+        },
+    )
+    return approval_runtime.id
 
 
 def _tool_permission_runtime_key(
@@ -225,6 +287,7 @@ def _bridge_permission_decision(
                 "decision_reason": str(use_context.metadata.get("permission_decision_reason") or "").strip() or None,
                 "user_text": str(classifier_context.get("user_text") or "").strip() or None,
                 "classifier_enabled": bool(classifier_context.get("enabled")),
+                "classifier_mode": str(classifier_context.get("mode") or "").strip() or None,
                 "classifier_fail_open": bool(classifier_context.get("fail_open")),
                 "agent_id": use_context.runtime_agent_ids[0] if use_context.runtime_agent_ids else None,
             },
@@ -311,6 +374,90 @@ def _resolve_tool_use_id(
     return resolved
 
 
+def _coordinate_classifier_permission_decision(
+    tool: ToolDef,
+    decision: PermissionDecision,
+    use_context: ToolUseContext,
+    *,
+    tool_use_id: str,
+    classifier_context: dict[str, Any],
+) -> tuple[PermissionDecision, str]:
+    if decision.rule_source != "classifier" or not bool(classifier_context.get("enabled")):
+        return decision, "tool_runner"
+    if use_context.config is None or not str(use_context.project_id or "").strip():
+        return decision, "tool_runner.classifier"
+
+    runtime_key = _ensure_tool_permission_runtime(
+        tool,
+        use_context,
+        tool_use_id=tool_use_id,
+        permission_source="tool_runner.classifier",
+    )
+    if not runtime_key:
+        return decision, "tool_runner.classifier"
+
+    existing_runtime = get_approval_runtime(use_context.config, key=runtime_key)
+    if existing_runtime is not None and existing_runtime.status == "resolved":
+        runtime_decision = _permission_decision_from_runtime(runtime_record=existing_runtime)
+        if runtime_decision is not None:
+            return runtime_decision, "tool_runner.classifier_runtime"
+
+    payload = {
+        "reasons": list(decision.reasons),
+        "rule_source": decision.rule_source,
+        "matched_rule": decision.matched_rule,
+        "denial_count": decision.denial_count,
+        "escalation_required": decision.escalation_required,
+        "tool_name": tool.name,
+        "tool_use_id": tool_use_id,
+        "user_text_present": bool(str(classifier_context.get("user_text") or "").strip()),
+    }
+    metadata_updates = {
+        "classifier": {
+            "matched_rule": decision.matched_rule,
+            "message": decision.message,
+        }
+    }
+    if decision.behavior == "ask":
+        annotate_approval_runtime(
+            use_context.config,
+            key=runtime_key,
+            metadata_updates={
+                **metadata_updates,
+                "classifier": {
+                    **metadata_updates["classifier"],
+                    "stage": "pending_classifier",
+                },
+            },
+            payload_updates={"classifier_decision": payload},
+            mailbox_message_type="permission_classifier_pending",
+            mailbox_payload=payload,
+        )
+        return decision, "tool_runner.classifier_pending"
+
+    runtime_record = settle_approval_runtime(
+        use_context.config,
+        key=runtime_key,
+        source="classifier",
+        outcome=decision.behavior,
+        message=decision.message,
+        payload=payload,
+        metadata_updates={
+            **metadata_updates,
+            "classifier": {
+                **metadata_updates["classifier"],
+                "stage": "resolved",
+            },
+        },
+        mailbox_message_type=f"permission_classifier_{decision.behavior}",
+    )
+    runtime_decision = _permission_decision_from_runtime(runtime_record=runtime_record)
+    if runtime_decision is not None:
+        source = "tool_runner.classifier" if runtime_record.winner_source == "classifier" else "tool_runner.classifier_runtime"
+        return runtime_decision, source
+    return decision, "tool_runner.classifier"
+
+
 def run_tool_use(
     tool: ToolDef,
     tool_input: dict[str, Any] | None,
@@ -327,12 +474,28 @@ def run_tool_use(
     tool_use_id = _resolve_tool_use_id(use_context, normalized_input)
     bridge_decision, permission_source = _bridge_permission_decision(tool, normalized_input, use_context)
     classifier_context = _permission_classifier_context_from_use_context(use_context)
+    precomputed_decision = bridge_decision
+    if precomputed_decision is None:
+        precomputed_decision = has_permissions_to_use_tool(
+            tool,
+            normalized_input,
+            resolved_permission_context,
+            classifier_context=classifier_context,
+        )
+        if precomputed_decision.rule_source == "classifier":
+            precomputed_decision, permission_source = _coordinate_classifier_permission_decision(
+                tool,
+                precomputed_decision,
+                use_context,
+                tool_use_id=tool_use_id,
+                classifier_context=classifier_context,
+            )
 
     permission_decision = resolve_tool_permission_decision(
         tool,
         normalized_input,
         resolved_permission_context,
-        precomputed_decision=bridge_decision,
+        precomputed_decision=precomputed_decision,
         classifier_context=classifier_context,
         config=use_context.config,
         project_id=use_context.project_id,
@@ -340,7 +503,7 @@ def run_tool_use(
         actor=use_context.actor,
         source=permission_source,
     )
-    if permission_decision.behavior == "ask":
+    if permission_decision.behavior in {"ask", "pending_classifier"}:
         permission_hook_result = execute_permission_request_hooks(
             tool,
             normalized_input,
@@ -360,6 +523,25 @@ def run_tool_use(
                 hooks=hook_records,
             )
         permission_decision = permission_hook_result.permission_decision or permission_decision
+
+    if permission_decision.behavior == "pending_classifier":
+        approval_runtime_id = _materialize_pending_classifier_runtime(
+            tool,
+            normalized_input,
+            use_context,
+            tool_use_id=tool_use_id,
+            permission_decision=permission_decision,
+            classifier_context=classifier_context,
+        )
+        return ToolRunResult(
+            status="approval_required",
+            tool_name=tool.name,
+            message=permission_decision.message,
+            input=normalized_input,
+            permission=permission_decision,
+            approval_runtime_id=approval_runtime_id,
+            hooks=hook_records,
+        )
 
     if permission_decision.behavior == "ask":
         approval_runtime_id = ""

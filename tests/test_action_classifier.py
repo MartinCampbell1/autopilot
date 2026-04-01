@@ -83,3 +83,29 @@ def test_classifier_denies_dangerous_projection_without_explicit_user_intent() -
     assert decision is not None
     assert decision.behavior == "deny"
     assert decision.decision_id == "dangerous_implicit_intent"
+
+
+def test_classifier_can_return_pending_classifier_in_deferred_mode() -> None:
+    tool = build_tool(
+        name="demo.read",
+        description="Read demo payload.",
+        approval_policy="ask",
+        execute=lambda tool_input, _: ToolResult(status="ok", payload=tool_input),
+    )
+
+    decision = classify_tool_permission(
+        tool,
+        {"path": "README.md"},
+        permission_mode="default",
+        context=build_action_classifier_context(
+            {
+                "enabled": True,
+                "mode": "deferred",
+                "user_text": "Please inspect the README and show me the current contents.",
+            }
+        ),
+    )
+
+    assert decision is not None
+    assert decision.behavior == "pending_classifier"
+    assert decision.decision_id == "deferred_classifier"
