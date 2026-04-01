@@ -4,8 +4,33 @@ from pathlib import Path
 from unittest.mock import patch
 
 from autopilot.core.config import AutopilotConfig
-from autopilot.core.models import CriticResult, GateResult, Profile, ReviewPhaseResult
+from autopilot.core.models import CriticResult, GateResult, Profile, ReviewPhaseResult, VerificationCheck
 from autopilot.core.orchestrator import Orchestrator, StoryOutcome
+
+
+def _approved_critic_result() -> CriticResult:
+    return CriticResult(
+        approved=True,
+        feedback="",
+        raw_output=(
+            "### Check: adversarial probe - invalid token\n"
+            "**Command run:**\n"
+            "  pytest -q\n"
+            "**Output observed:**\n"
+            "  3 passed in 0.12s\n"
+            "**Result: PASS**\n\n"
+            "VERDICT: PASS\n"
+        ),
+        verdict="PASS",
+        verification_checks=[
+            VerificationCheck(
+                name="adversarial probe - invalid token",
+                command="pytest -q",
+                output="3 passed in 0.12s",
+                status="PASS",
+            )
+        ],
+    )
 
 
 class TestOrchestrator:
@@ -50,7 +75,7 @@ class TestOrchestrator:
         )
         mock_get_diff.return_value = "+new code"
         mock_diff_empty.return_value = False
-        mock_review_plan.return_value = CriticResult(approved=True, feedback="", raw_output="APPROVED")
+        mock_review_plan.return_value = _approved_critic_result()
 
         orchestrator = self._make_orchestrator(tmp_path)
         profile = Profile(
@@ -103,7 +128,7 @@ class TestOrchestrator:
         )
         mock_get_diff.return_value = "+new code"
         mock_diff_empty.return_value = False
-        mock_review_plan.return_value = CriticResult(approved=True, feedback="", raw_output="APPROVED")
+        mock_review_plan.return_value = _approved_critic_result()
 
         orchestrator = self._make_orchestrator(tmp_path)
         profile = Profile(name="acc1", provider="codex", path=str(tmp_path))
@@ -145,7 +170,7 @@ class TestOrchestrator:
         mock_gates.return_value = (True, [])
         mock_get_diff.return_value = "+notes.txt"
         mock_diff_empty.return_value = False
-        mock_review_plan.return_value = CriticResult(approved=True, feedback="", raw_output="APPROVED")
+        mock_review_plan.return_value = _approved_critic_result()
 
         orchestrator = self._make_orchestrator(tmp_path)
         profile = Profile(name="acc1", provider="codex", path=str(tmp_path))
@@ -191,24 +216,21 @@ class TestOrchestrator:
             (False, [GateResult(name="test", cmd="npm test", passed=False, output="1 failed")]),
             (True, []),
         ]
-        mock_review_plan.return_value = CriticResult(
-            approved=True,
-            feedback="",
-            raw_output="APPROVED",
-            usage={
-                "provider": "codex",
-                "role": "critic",
-                "invocations": 1,
-                "tracked_invocations": 0,
-                "priced_invocations": 0,
-                "input_tokens": 0,
-                "output_tokens": 0,
-                "cached_tokens": 0,
-                "total_tokens": 0,
-                "estimated_cost_usd": 0.0,
-                "pricing_source": "unconfigured",
-            },
-        )
+        approved = _approved_critic_result()
+        approved.usage = {
+            "provider": "codex",
+            "role": "critic",
+            "invocations": 1,
+            "tracked_invocations": 0,
+            "priced_invocations": 0,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cached_tokens": 0,
+            "total_tokens": 0,
+            "estimated_cost_usd": 0.0,
+            "pricing_source": "unconfigured",
+        }
+        mock_review_plan.return_value = approved
         mock_get_diff.return_value = "+new code"
         mock_diff_empty.side_effect = [False, False]
 
@@ -454,7 +476,27 @@ class TestOrchestrator:
         mock_gates.return_value = (True, [])
         mock_get_diff.return_value = "+new code"
         mock_diff_empty.return_value = False
-        mock_review_plan.return_value = CriticResult(approved=True, feedback="", raw_output="APPROVED")
+        approved = _approved_critic_result()
+        approved.review_phases = ["security", "tests"]
+        approved.review_results = [
+            ReviewPhaseResult(
+                phase="security",
+                approved=True,
+                feedback="",
+                raw_output=approved.raw_output,
+                verdict="PASS",
+                verification_checks=list(approved.verification_checks),
+            ),
+            ReviewPhaseResult(
+                phase="tests",
+                approved=True,
+                feedback="",
+                raw_output=approved.raw_output,
+                verdict="PASS",
+                verification_checks=list(approved.verification_checks),
+            ),
+        ]
+        mock_review_plan.return_value = approved
 
         orchestrator = self._make_orchestrator(tmp_path)
         profile = Profile(name="acc1", provider="codex", path=str(tmp_path))
@@ -474,6 +516,44 @@ class TestOrchestrator:
 
         assert outcome == StoryOutcome.APPROVED
         assert mock_review_plan.call_args.kwargs["review_phases"] == ["security", "tests"]
+
+    @patch("autopilot.core.orchestrator.check_git_diff_empty")
+    @patch("autopilot.core.orchestrator.get_last_commit_diff")
+    @patch("autopilot.core.orchestrator.run_review_plan")
+    @patch("autopilot.core.orchestrator.run_gates")
+    @patch("autopilot.core.orchestrator.run_ralph_iteration")
+    def test_iteration_nudges_when_critic_approves_without_verification_evidence(
+        self,
+        mock_ralph,
+        mock_gates,
+        mock_review_plan,
+        mock_get_diff,
+        mock_diff_empty,
+        tmp_path: Path,
+    ) -> None:
+        mock_ralph.return_value = (True, "Story 1 done", False)
+        mock_gates.return_value = (True, [])
+        mock_get_diff.return_value = "+new code"
+        mock_diff_empty.return_value = False
+        mock_review_plan.return_value = CriticResult(approved=True, feedback="", raw_output="APPROVED")
+
+        orchestrator = self._make_orchestrator(tmp_path)
+        profile = Profile(name="acc1", provider="codex", path=str(tmp_path))
+        env = {"PATH": "/usr/bin"}
+
+        outcome = orchestrator.run_single_iteration(
+            profile=profile,
+            env=env,
+            story_id=1,
+            story_title="Setup",
+            story_description="Project setup",
+            gates_config=[],
+            critic_profile=profile,
+            critic_env=env,
+        )
+
+        assert outcome == StoryOutcome.CRITIC_REJECTED
+        assert "Verification evidence is missing for task closure" in orchestrator.iteration_history[-1].critic_feedback
 
     @patch("autopilot.core.orchestrator.check_git_diff_empty")
     @patch("autopilot.core.orchestrator.get_last_commit_diff")

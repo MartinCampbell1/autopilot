@@ -30,6 +30,7 @@ from autopilot.core.loop_runner import (
     write_critic_feedback,
 )
 from autopilot.core.models import IterationRecord, Profile
+from autopilot.core.session_tasks import VERIFICATION_NUDGE_FEEDBACK, verification_nudge_needed
 from autopilot.core.stuck_detector import StuckDetector
 
 console = Console()
@@ -261,6 +262,16 @@ class Orchestrator:
             regression_summary=summarize_quality_regressions(gate_results),
         )
         if critic_result.approved:
+            if verification_nudge_needed(critic_result):
+                record.critic_approved = False
+                record.critic_feedback = VERIFICATION_NUDGE_FEEDBACK
+                write_critic_feedback(self.project_path, VERIFICATION_NUDGE_FEEDBACK)
+                append_guardrail(
+                    self.project_path,
+                    "Do not claim completion without command-backed verification evidence and an explicit adversarial probe.",
+                )
+                console.print(f"  [yellow]NEEDS_WORK[/yellow]: {VERIFICATION_NUDGE_FEEDBACK[:100]}...")
+                return StoryOutcome.CRITIC_REJECTED, record
             console.print("  [green]APPROVED[/green]")
             return StoryOutcome.APPROVED, record
 
