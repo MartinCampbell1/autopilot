@@ -9,13 +9,13 @@ It is not another swarm orchestrator. `Quorum` decides what to build and why, `E
 Current branch truth:
 
 - branch hardening on `codex/founderos-control-plane` is already closed
-- the active `P0`, `P1`, and `P2` backlog slices from the 2026-03-31 branch handoff are already landed
-- the next default mode is `review/merge baseline -> productization -> OSS release surface`
+- `Phase 0` through `Phase 5` of the pre-release productization plan are complete
+- the next default mode is `merge or cut the release candidate -> begin post-release expansion or newly promoted follow-up phases`
 - `P3` items remain deferred unless a concrete failure mode justifies promotion
 
 The canonical next-step handoff is:
 
-- [docs/2026-03-31-next-product-plan.md](docs/2026-03-31-next-product-plan.md)
+- [docs/2026-04-01-post-phase5-handoff.md](docs/2026-04-01-post-phase5-handoff.md)
 
 Release hygiene docs:
 

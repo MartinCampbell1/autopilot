@@ -2,9 +2,13 @@
 
 Date: `2026-03-31`
 
-Status: canonical handoff for the next chat after branch hardening
+Status: historical productization plan used to close `Phase 0` through `Phase 5`; those phases are complete as of `2026-04-01`
 
-Supersedes as the default starting point for future work:
+Superseded as the default starting point for future work by:
+
+- [2026-04-01-post-phase5-handoff.md](2026-04-01-post-phase5-handoff.md)
+
+Original superseded docs for this plan:
 
 - [2026-03-31-merged-handoff-and-plan.md](2026-03-31-merged-handoff-and-plan.md)
 - [2026-03-31-control-plane-handoff.md](2026-03-31-control-plane-handoff.md)
@@ -16,6 +20,20 @@ Grounding docs:
 - [execution-brief-bridge.md](execution-brief-bridge.md)
 - [phase3-founderos-execution-plane.md](phase3-founderos-execution-plane.md)
 - [phase4-approval-foundation.md](phase4-approval-foundation.md)
+
+## Status Update
+
+Implementation status as of `2026-04-01`:
+
+- `Phase 0`: done
+- `Phase 1`: done
+- `Phase 2`: done
+- `Phase 3`: done
+- `Phase 4`: done
+- `Phase 5`: done
+- `Phase 6`: not started; remains post-release scope
+
+For the next chat, do not restart this plan from the top unless a regression proves one of those completed phases false.
 
 ## North Star
 
@@ -38,7 +56,7 @@ Treat the following as already true on `codex/founderos-control-plane`:
 - dashboard stabilization, doctor, trace, cost, headless, schedule, live, status, and control-plane surfaces are already present
 - `P3` items are not active by default
 
-Current default operating mode for the next agent:
+Original default operating mode for this plan:
 
 1. review and merge the frozen baseline
 2. productize the existing execution plane
@@ -48,12 +66,7 @@ Do not reopen the already-landed branch tasks unless a regression proves the bra
 
 ## Immediate Actions
 
-Start here in the next chat:
-
-1. Read [2026-03-31-pr-summary.md](2026-03-31-pr-summary.md) and [2026-03-31-branch-completion-note.md](2026-03-31-branch-completion-note.md).
-2. Use this file as the single source of truth for what comes next.
-3. Default to `Phase 0` until the baseline is reviewed, green, and merged.
-4. Promote `P3` only if a concrete runtime or operator failure mode demands it.
+This section is historical. For the next chat use [2026-04-01-post-phase5-handoff.md](2026-04-01-post-phase5-handoff.md) as the starting point instead of defaulting back to `Phase 0`.
 
 ## Phase 0 - Freeze Baseline And Prepare Public Release
 
