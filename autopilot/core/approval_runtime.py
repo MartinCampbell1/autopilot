@@ -577,13 +577,38 @@ def annotate_approval_runtime(
     return updated
 
 
+def wait_for_approval_runtime_resolution(
+    config: AutopilotConfig,
+    *,
+    approval_runtime_id: str = "",
+    key: str = "",
+    wait_timeout_sec: float = 0.5,
+    stale_after_sec: float = 30.0,
+) -> ApprovalRuntimeRecord:
+    """Wait for one approval runtime to resolve without attempting settlement."""
+
+    record = get_approval_runtime(config, approval_runtime_id=approval_runtime_id, key=key)
+    if record is None:
+        raise KeyError(approval_runtime_id or key)
+    if record.status == "resolved":
+        return record
+    return _wait_for_runtime_resolution(
+        config,
+        approval_runtime_id=record.id,
+        wait_timeout_sec=wait_timeout_sec,
+        stale_after_sec=stale_after_sec,
+    )
+
+
 __all__ = [
     "ApprovalRuntimeClaim",
     "ApprovalRuntimeRecord",
     "annotate_approval_runtime",
+    "approval_runtime_lock_path",
     "create_or_reuse_approval_runtime",
     "get_approval_runtime",
     "list_approval_runtimes",
     "save_approval_runtime",
     "settle_approval_runtime",
+    "wait_for_approval_runtime_resolution",
 ]

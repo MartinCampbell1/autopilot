@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import io
 import json
+import threading
+import time
 from pathlib import Path
 
 from autopilot.core.agent_mailbox import list_agent_mailbox_messages
-from autopilot.core.approval_runtime import get_approval_runtime
+from autopilot.core.approval_runtime import create_or_reuse_approval_runtime, get_approval_runtime, settle_approval_runtime
 from autopilot.core.config import AutopilotConfig
 from autopilot.core.permission_audit import read_permission_audit_entries
 from autopilot.core.structured_io import StructuredIO
@@ -541,6 +543,197 @@ def test_tool_runner_uses_bridge_permission_decision_when_enabled(tmp_path: Path
     assert result.message == "Bridge denied this tool."
     assert entries[-1]["source"] == "tool_runner.bridge"
     assert entries[-1]["rule_source"] == "session"
+
+
+def test_tool_runner_bridge_deny_settles_permission_runtime(tmp_path: Path) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    runtime = StructuredIO(
+        session_id="sess_bridge",
+        input_stream=io.StringIO(""),
+        output_stream=io.StringIO(),
+        metadata={"permission_bridge_mode": "bridge_first"},
+    )
+    runtime.set_on_control_request_sent(
+        lambda envelope: runtime.inject_control_response(
+            {
+                "type": "control_response",
+                "response": {
+                    "subtype": "success",
+                    "request_id": envelope.request_id,
+                    "response": {
+                        "behavior": "deny",
+                        "message": "Bridge denied this tool.",
+                        "reasons": ["Bridge policy"],
+                        "rule_source": "session",
+                        "matched_rule": "demo.write",
+                    },
+                },
+            }
+        )
+    )
+    activate_structured_io(runtime)
+    try:
+        tool = build_tool(
+            name="demo.write",
+            description="Write demo payload.",
+            approval_policy="policy",
+            execute=lambda tool_input, _: ToolResult(status="ok", payload=tool_input),
+        )
+
+        result = run_tool_use(
+            tool,
+            {"value": "ignored"},
+            ToolUseContext(
+                config=config,
+                actor="tester",
+                project_id="proj_bridge_runtime",
+                runtime_agent_ids=("proj_bridge_runtime:1:worker:a",),
+                metadata={"tool_use_id": "toolu_bridge_runtime"},
+            ),
+            permission_context=get_empty_tool_permission_context(),
+        )
+    finally:
+        activate_structured_io(None)
+        runtime.close()
+
+    approval_runtime = get_approval_runtime(config, key="tool-permission:proj_bridge_runtime:demo.write:toolu_bridge_runtime")
+    mailbox = list_agent_mailbox_messages(config, project_id="proj_bridge_runtime", runtime_agent_id="proj_bridge_runtime:1:worker:a")
+
+    assert result.status == "denied"
+    assert approval_runtime is not None
+    assert approval_runtime.winner_source == "bridge"
+    assert approval_runtime.outcome == "deny"
+    assert any(message.message_type == "permission_bridge_deny" for message in mailbox)
+
+
+def test_tool_runner_bridge_timeout_uses_resolved_permission_runtime_before_local_fallback(tmp_path: Path) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    permission_runtime = create_or_reuse_approval_runtime(
+        config,
+        key="tool-permission:proj_bridge_mailbox:demo.write:toolu_bridge_mailbox",
+        project_id="proj_bridge_mailbox",
+        runtime_agent_ids=["proj_bridge_mailbox:1:worker:a"],
+    )
+    settle_barrier = threading.Barrier(2)
+
+    def settle_from_parallel_path() -> None:
+        settle_barrier.wait()
+        time.sleep(0.01)
+        settle_approval_runtime(
+            config,
+            approval_runtime_id=permission_runtime.id,
+            source="user",
+            outcome="deny",
+            message="User denied from another path.",
+            payload={"reasons": ["Operator denied this tool."]},
+        )
+
+    worker = threading.Thread(target=settle_from_parallel_path, daemon=True)
+    worker.start()
+    runtime = StructuredIO(
+        session_id="sess_bridge",
+        input_stream=io.StringIO(""),
+        output_stream=io.StringIO(),
+        metadata={"permission_bridge_mode": "bridge_first"},
+    )
+    activate_structured_io(runtime)
+    try:
+        tool = build_tool(
+            name="demo.write",
+            description="Write demo payload.",
+            approval_policy="policy",
+            execute=lambda tool_input, _: ToolResult(status="ok", payload=tool_input),
+        )
+        settle_barrier.wait()
+        result = run_tool_use(
+            tool,
+            {"value": "ignored"},
+            ToolUseContext(
+                config=config,
+                actor="tester",
+                project_id="proj_bridge_mailbox",
+                runtime_agent_ids=("proj_bridge_mailbox:1:worker:a",),
+                metadata={
+                    "tool_use_id": "toolu_bridge_mailbox",
+                    "permission_bridge_timeout_sec": 0.05,
+                },
+            ),
+            permission_context=get_empty_tool_permission_context(),
+        )
+    finally:
+        activate_structured_io(None)
+        runtime.close()
+        worker.join(timeout=1.0)
+
+    entries = read_permission_audit_entries(config, "proj_bridge_mailbox")
+
+    assert result.status == "denied"
+    assert result.message == "User denied from another path."
+    assert entries[-1]["source"] == "tool_runner.bridge_runtime_fallback"
+
+
+def test_tool_runner_bridge_ask_keeps_runtime_pending_for_hook_resolution(tmp_path: Path) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    runtime = StructuredIO(
+        session_id="sess_bridge",
+        input_stream=io.StringIO(""),
+        output_stream=io.StringIO(),
+        metadata={"permission_bridge_mode": "bridge_first"},
+    )
+    runtime.set_on_control_request_sent(
+        lambda envelope: runtime.inject_control_response(
+            {
+                "type": "control_response",
+                "response": {
+                    "subtype": "success",
+                    "request_id": envelope.request_id,
+                    "response": {
+                        "behavior": "ask",
+                        "message": "Bridge requests approval.",
+                        "reasons": ["Bridge wants confirmation."],
+                    },
+                },
+            }
+        )
+    )
+    activate_structured_io(runtime)
+    try:
+        tool = build_tool(
+            name="demo.write",
+            description="Write demo payload.",
+            approval_policy="policy",
+            execute=lambda tool_input, _: ToolResult(status="ok", payload=tool_input),
+        )
+        result = run_tool_use(
+            tool,
+            {"value": "original"},
+            ToolUseContext(
+                config=config,
+                actor="tester",
+                project_id="proj_bridge_hook",
+                runtime_agent_ids=("proj_bridge_hook:1:worker:a",),
+                metadata={"tool_use_id": "toolu_bridge_hook"},
+            ),
+            permission_context=get_empty_tool_permission_context(),
+            hooks=[
+                ToolHookDefinition(
+                    name="deny-after-bridge",
+                    event="permission_request",
+                    handler=lambda _: {"permission_behavior": "deny", "message": "Hook denied after bridge ask."},
+                )
+            ],
+        )
+    finally:
+        activate_structured_io(None)
+        runtime.close()
+
+    approval_runtime = get_approval_runtime(config, key="tool-permission:proj_bridge_hook:demo.write:toolu_bridge_hook")
+
+    assert result.status == "denied"
+    assert approval_runtime is not None
+    assert approval_runtime.winner_source == "hook:deny-after-bridge"
+    assert approval_runtime.outcome == "deny"
+    assert approval_runtime.metadata["bridge_decision"]["behavior"] == "ask"
 
 
 def test_tool_runner_falls_back_to_local_permission_decision_when_bridge_times_out(tmp_path: Path) -> None:
