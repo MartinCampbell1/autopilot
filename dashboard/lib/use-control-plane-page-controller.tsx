@@ -1,5 +1,6 @@
 "use client";
 import { useCallback, useMemo } from "react";
+import { useSSE } from "@/lib/sse";
 import {
   asRecord,
   describeRunResult,
@@ -57,6 +58,7 @@ import { useControlPlaneSessionLineageModel } from "@/lib/use-control-plane-sess
 import { useControlPlaneSessionOverviewModel } from "@/lib/use-control-plane-session-overview-model";
 import { useControlPlaneSessionLineageQueues } from "@/lib/use-control-plane-session-lineage-queues";
 import { useControlPlaneTriageInbox } from "@/lib/use-control-plane-triage-inbox";
+import { useProjectRuntimeControlClient } from "@/lib/use-project-runtime-control-client";
 import {
   type ControlPlaneViewSelection,
   useControlPlaneViewState,
@@ -207,6 +209,24 @@ export function useControlPlanePageController(
     setSelectedPassId,
   });
 
+  const runtimeControl = useProjectRuntimeControlClient({ projects });
+  const {
+    handleSSEEvent: handleRuntimeControlSSEEvent,
+    requestGetRuntimeAgentActionRun,
+  } = runtimeControl;
+
+  useSSE(
+    useCallback(
+      (event, data) => {
+        handleRuntimeControlSSEEvent(event, data);
+      },
+      [handleRuntimeControlSSEEvent]
+    ),
+    {
+      eventTypes: ["control_request", "control_response"],
+    }
+  );
+
   const {
     refresh,
     recordTriageInboxFeedback,
@@ -219,7 +239,9 @@ export function useControlPlanePageController(
     applyPreviewRun,
     runAgentSuggestedCommand,
     applyControlPlan,
+    waitForRunAsyncSettlement,
   } = useControlPlaneActions({
+    projects,
     selectedSessionId,
     selectedAgentId,
     selectedAgent,
@@ -241,6 +263,7 @@ export function useControlPlanePageController(
     loadOverview,
     loadSessionDetail,
     loadAgentDetail,
+    requestGetRuntimeAgentActionRun,
     toStringValue,
     triageInboxFeedbackLimit: TRIAGE_INBOX_FEEDBACK_LIMIT,
   });
@@ -990,6 +1013,9 @@ export function useControlPlanePageController(
     busyActionKey,
     onApplySelectedPreviewRun: (run) => {
       void applyPreviewRun(run);
+    },
+    onWaitSelectedRunAsyncSettlement: (run) => {
+      void waitForRunAsyncSettlement(run);
     },
     formatScopeList,
     describeRunResult,

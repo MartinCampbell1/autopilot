@@ -30,6 +30,7 @@ type SelectedActionRunCardProps = {
   onCopyLink: () => void;
   busyActionKey: string;
   onApplyPreviewRun: (run: ExecutionAgentActionRunRecord) => void;
+  onWaitForAsyncSettlement?: (run: ExecutionAgentActionRunRecord) => void;
   formatTimestamp: (value?: string | null) => string;
   formatScopeList: (items: string[], emptyText: string) => string;
   describeRunResult: (result: Record<string, unknown>) => RunResultDetails;
@@ -47,6 +48,7 @@ export function SelectedActionRunCard({
   onCopyLink,
   busyActionKey,
   onApplyPreviewRun,
+  onWaitForAsyncSettlement,
   formatTimestamp,
   formatScopeList,
   describeRunResult,
@@ -63,6 +65,7 @@ export function SelectedActionRunCard({
   const previewActionKey = selectedRun
     ? `preview-apply:${toStringValue(selectedRun.preview_id, selectedRun.id)}`
     : "";
+  const waitActionKey = selectedRun ? `run-wait:${selectedRun.id}` : "";
   const canApplyPreview = Boolean(
     selectedRun?.dry_run &&
       selectedRun?.run_kind === "batch" &&
@@ -167,7 +170,20 @@ export function SelectedActionRunCard({
                         : "Applying..."
                       : selectedRun.approval_required
                         ? "Request approvals"
-                        : "Apply preview"}
+                      : "Apply preview"}
+                  </Button>
+                )}
+                {selectedRun.completion_state === "pending_async" && onWaitForAsyncSettlement && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-8 rounded-lg border-[#d3e5ef] bg-[#eef7fb] text-[12px] text-[#2a6690] hover:bg-[#e3f1f8]"
+                    disabled={Boolean(busyActionKey)}
+                    onClick={() => {
+                      onWaitForAsyncSettlement(selectedRun);
+                    }}
+                  >
+                    {busyActionKey === waitActionKey ? "Waiting..." : "Wait for settle"}
                   </Button>
                 )}
                 <Button

@@ -30,6 +30,7 @@ import type {
   ExecutionRuntimeAgentDetail,
   OrchestratorSessionControlProfile,
   OrchestratorSessionControlRecommendation,
+  ProjectSummary,
   ToolPermissionRuntimeRecord,
 } from "@/lib/types";
 
@@ -49,6 +50,7 @@ export type PendingAgentPriorityAutoAdvance = {
 };
 
 type UseControlPlaneActionsArgs = {
+  projects: ProjectSummary[];
   selectedSessionId: string;
   selectedAgentId: string;
   selectedAgent: ExecutionRuntimeAgentDetail | null;
@@ -72,11 +74,21 @@ type UseControlPlaneActionsArgs = {
   loadOverview: () => Promise<void>;
   loadSessionDetail: (sessionId: string) => Promise<unknown>;
   loadAgentDetail: (runtimeAgentId: string) => Promise<ExecutionRuntimeAgentDetail>;
+  requestGetRuntimeAgentActionRun?: (
+    projectId: string,
+    runId: string,
+    options?: {
+      waitForAsyncSettlement?: boolean;
+      runtimeAgentId?: string | null;
+      waitTimeoutMs?: number;
+    }
+  ) => Promise<ExecutionAgentActionRunRecord>;
   toStringValue: (value: unknown, fallback?: string) => string;
   triageInboxFeedbackLimit?: number;
 };
 
 export function useControlPlaneActions({
+  projects,
   selectedSessionId,
   selectedAgentId,
   selectedAgent,
@@ -98,6 +110,7 @@ export function useControlPlaneActions({
   loadOverview,
   loadSessionDetail,
   loadAgentDetail,
+  requestGetRuntimeAgentActionRun,
   toStringValue,
   triageInboxFeedbackLimit = 5,
 }: UseControlPlaneActionsArgs) {
@@ -140,6 +153,67 @@ export function useControlPlaneActions({
       await loadAgentDetail(runtimeAgentId);
     },
     [loadAgentDetail, loadOverview, loadSessionDetail, selectedSessionId]
+  );
+
+  const waitForRunAsyncSettlement = useCallback(
+    async (run: ExecutionAgentActionRunRecord) => {
+      const runId = toStringValue(run.id);
+      if (!runId) return;
+      const runtimeProject = projects.find(
+        (project) =>
+          run.project_ids.includes(project.id)
+          && Boolean(project.runtime_control_available)
+          && Boolean(toStringValue(project.runtime_session_id))
+      );
+
+      setBusyActionKey(`run-wait:${runId}`);
+      setNotice("");
+      setErrorMessage("");
+      try {
+        if (!requestGetRuntimeAgentActionRun) {
+          throw new Error("Runtime control client is not available for this control-plane view.");
+        }
+        if (!runtimeProject) {
+          throw new Error("No active runtime control session is available for this run.");
+        }
+        const settledRun = await requestGetRuntimeAgentActionRun(runtimeProject.id, runId, {
+          waitForAsyncSettlement: true,
+          runtimeAgentId: toStringValue(run.runtime_agent_ids[0]),
+          waitTimeoutMs: 5000,
+        });
+        if (run.orchestrator_session_id) {
+          await refreshAfterMutation(run.orchestrator_session_id);
+        } else {
+          await loadOverview();
+        }
+        if (selectedAgentId && settledRun.runtime_agent_ids.includes(selectedAgentId)) {
+          await loadAgentDetail(selectedAgentId);
+        }
+        setNotice(
+          toStringValue(settledRun.completion_state) === "pending_async"
+            ? `Run ${runId} is still waiting on async follow-through.`
+            : `Run ${runId} async follow-through settled.`
+        );
+      } catch (error) {
+        setErrorMessage(
+          error instanceof Error ? error.message : "Failed to wait for async run settlement."
+        );
+      } finally {
+        setBusyActionKey("");
+      }
+    },
+    [
+      loadAgentDetail,
+      loadOverview,
+      projects,
+      refreshAfterMutation,
+      requestGetRuntimeAgentActionRun,
+      selectedAgentId,
+      setBusyActionKey,
+      setErrorMessage,
+      setNotice,
+      toStringValue,
+    ]
   );
 
   const followAsyncRunSettlement = useCallback(
@@ -648,5 +722,6 @@ export function useControlPlaneActions({
     applyPreviewRun,
     runAgentSuggestedCommand,
     applyControlPlan,
+    waitForRunAsyncSettlement,
   };
 }
