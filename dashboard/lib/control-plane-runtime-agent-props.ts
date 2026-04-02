@@ -59,6 +59,8 @@ type BuildRuntimeAgentSectionPropsArgs = {
     mode: "execute_now" | "request_approval"
   ) => Promise<void>;
   inspectAsyncFollowThrough: () => void;
+  waitForRunAsyncSettlement: (run: ExecutionAgentActionRunRecord) => Promise<void>;
+  cancelRunAsyncFollowThrough: (run: ExecutionAgentActionRunRecord) => Promise<void>;
   refreshAsyncTask: (task: ExecutionRuntimeAgentTaskRecord) => Promise<void>;
   waitForAsyncTaskSettlement: (task: ExecutionRuntimeAgentTaskRecord) => Promise<void>;
   cancelAsyncTask: (task: ExecutionRuntimeAgentTaskRecord) => Promise<void>;
@@ -154,6 +156,8 @@ export function buildRuntimeAgentSectionProps({
   focusRuntimeAgent,
   runAgentSuggestedCommand,
   inspectAsyncFollowThrough,
+  waitForRunAsyncSettlement,
+  cancelRunAsyncFollowThrough,
   refreshAsyncTask,
   waitForAsyncTaskSettlement,
   cancelAsyncTask,
@@ -230,6 +234,7 @@ export function buildRuntimeAgentSectionProps({
     ? {
         selectedAgent,
         agentScopedRuns,
+        busyActionKey,
         agentActivitySearch,
         onAgentActivitySearchChange: setAgentActivitySearch,
         agentActivityFilter,
@@ -240,6 +245,12 @@ export function buildRuntimeAgentSectionProps({
         onSelectRun: (runId, resultIndex) => {
           setSelectedRunId(runId);
           setSelectedRunResultIndex(resultIndex);
+        },
+        onWaitForAsyncSettlement: (run) => {
+          void waitForRunAsyncSettlement(run);
+        },
+        onCancelAsyncSettlement: (run) => {
+          void cancelRunAsyncFollowThrough(run);
         },
         formatTimestamp,
         toNumber,
@@ -377,6 +388,12 @@ export function buildRuntimeAgentSectionProps({
       void runAgentSuggestedCommand(command, mode);
     },
     onInspectAsyncFollowThrough: inspectAsyncFollowThrough,
+    onWaitForAsyncRunSettlement: (run) => {
+      void waitForRunAsyncSettlement(run);
+    },
+    onCancelAsyncRun: (run) => {
+      void cancelRunAsyncFollowThrough(run);
+    },
     onRefreshAsyncTask: (task) => {
       void refreshAsyncTask(task);
     },
