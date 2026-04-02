@@ -1432,6 +1432,56 @@ def test_execution_plane_orchestrator_session_tracks_async_tasks_honestly(
 
 
 @patch("autopilot.core.execution_plane.generate_prd_from_spec")
+def test_execution_plane_runtime_agent_task_surfaces_cancelled_settlement_provenance(
+    mock_generate_prd_from_spec,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    client = _build_client(config, monkeypatch)
+    mock_generate_prd_from_spec.return_value = {
+        "title": "FounderOS Copilot",
+        "description": "Execution-ready FounderOS project.",
+        "stories": [{"id": 1, "title": "Bootstrap", "description": "Create the app shell"}],
+    }
+
+    created = _create_execution_project(client, tmp_path / "async-task-cancelled-api-project")
+    project_id = created["project"]["project_id"]
+    session = _create_orchestrator_session(
+        client,
+        project_ids=[project_id],
+        actor="founderos",
+        title="Cancelled async task provenance",
+    )
+
+    task = create_or_reuse_runtime_agent_task(
+        config,
+        project_id=project_id,
+        command="launch",
+        actor="founderos",
+        reason="Launch background execution.",
+        orchestrator_session_id=session["id"],
+        runtime_agent_ids=["runtime-agent-1"],
+    )
+
+    state = load_project_state(config, project_id)
+    state["status"] = "paused"
+    state["paused"] = True
+    state["paused_at"] = "2026-04-01T12:44:00+00:00"
+    save_project_state(config, project_id, state)
+
+    task_detail = client.get(f"/api/execution-plane/agents/tasks/{task.id}")
+    assert task_detail.status_code == 200
+    payload = task_detail.json()
+    assert payload["status"] == "cancelled"
+    assert payload["settlement_source"] == "project_state"
+    assert payload["settlement_reason"] == "paused"
+    assert payload["settlement_state_status"] == "paused"
+    assert payload["settlement_state_timestamp"] == "2026-04-01T12:44:00+00:00"
+    assert payload["resume_contract"]["settlement_reason"] == "paused"
+
+
+@patch("autopilot.core.execution_plane.generate_prd_from_spec")
 def test_execution_plane_agent_detail_surfaces_waiting_async_task_only(
     mock_generate_prd_from_spec,
     tmp_path: Path,

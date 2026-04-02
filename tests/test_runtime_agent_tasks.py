@@ -147,20 +147,96 @@ def test_runtime_agent_task_marks_fallback_output_provenance_when_source_log_is_
     assert refreshed.output_artifact_id
     assert refreshed.output_origin == RUNTIME_AGENT_TASK_OUTPUT_ORIGIN_STATE_FALLBACK
     assert refreshed.output_source_available is False
+    assert refreshed.settlement_source == "project_state"
+    assert refreshed.settlement_reason == "completed"
+    assert refreshed.settlement_state_status == "completed"
+    assert refreshed.settlement_state_timestamp == "2026-04-01T12:40:00+00:00"
     assert refreshed.result_payload["output_origin"] == RUNTIME_AGENT_TASK_OUTPUT_ORIGIN_STATE_FALLBACK
     assert refreshed.result_payload["output_source_available"] is False
     assert refreshed.result_payload["output_generated_from_project_state"] is True
+    assert refreshed.result_payload["settlement_reason"] == "completed"
 
     output_record = get_task_output(config, refreshed.output_artifact_id)
     assert output_record is not None
     assert output_record.metadata["output_origin"] == RUNTIME_AGENT_TASK_OUTPUT_ORIGIN_STATE_FALLBACK
     assert output_record.metadata["output_source_available"] is False
+    assert output_record.metadata["settlement_reason"] == "completed"
     output_text = read_task_output_text(config, refreshed.output_artifact_id)
     assert "Output provenance: synthesized from project state" in output_text
+    assert "Settlement reason: completed" in output_text
 
     transcript_text = read_task_transcript_text(config, task_transcript_id("runtime_agent_task", task.id))
     assert "Output Origin: project_state_fallback" in transcript_text
     assert "Output Source Available: no" in transcript_text
+    assert "Settlement Reason: completed" in transcript_text
+
+
+def test_runtime_agent_task_marks_cancelled_settlement_provenance_when_project_is_paused(tmp_path: Path) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    project = _seed_project(config, tmp_path / "async-task-paused-project")
+
+    task = create_or_reuse_runtime_agent_task(
+        config,
+        project_id=str(project["id"]),
+        command="launch",
+        actor="founderos",
+        reason="Launch background work.",
+        runtime_agent_ids=["proj:1:worker:a"],
+    )
+
+    state = load_project_state(config, str(project["id"]))
+    state["status"] = "paused"
+    state["paused"] = True
+    state["paused_at"] = "2026-04-01T12:42:00+00:00"
+    save_project_state(config, str(project["id"]), state)
+
+    refreshed = refresh_runtime_agent_task(config, task.id)
+
+    assert refreshed.status == "cancelled"
+    assert refreshed.result_summary == "Background run was paused before completion."
+    assert refreshed.settlement_source == "project_state"
+    assert refreshed.settlement_reason == "paused"
+    assert refreshed.settlement_state_status == "paused"
+    assert refreshed.settlement_state_timestamp == "2026-04-01T12:42:00+00:00"
+    assert refreshed.result_payload["settlement_reason"] == "paused"
+    assert refreshed.result_payload["settlement_state_status"] == "paused"
+    assert refreshed.history[-1]["extra"]["settlement_reason"] == "paused"
+
+    transcript_text = read_task_transcript_text(config, task_transcript_id("runtime_agent_task", task.id))
+    assert "Settlement Reason: paused" in transcript_text
+
+
+def test_runtime_agent_task_marks_failed_settlement_provenance_when_project_fails(tmp_path: Path) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    project = _seed_project(config, tmp_path / "async-task-failed-project")
+
+    task = create_or_reuse_runtime_agent_task(
+        config,
+        project_id=str(project["id"]),
+        command="resume",
+        actor="founderos",
+        reason="Resume background work.",
+        runtime_agent_ids=["proj:1:worker:a"],
+    )
+
+    state = load_project_state(config, str(project["id"]))
+    state["status"] = "failed"
+    state["paused"] = False
+    state["finished_at"] = "2026-04-01T12:43:00+00:00"
+    state["last_error"] = "Verifier rejected the implementation."
+    save_project_state(config, str(project["id"]), state)
+
+    refreshed = refresh_runtime_agent_task(config, task.id)
+
+    assert refreshed.status == "failed"
+    assert refreshed.result_summary == "Verifier rejected the implementation."
+    assert refreshed.settlement_source == "project_state"
+    assert refreshed.settlement_reason == "failed"
+    assert refreshed.settlement_state_status == "failed"
+    assert refreshed.settlement_state_timestamp == "2026-04-01T12:43:00+00:00"
+    assert refreshed.result_payload["settlement_reason"] == "failed"
+    assert refreshed.result_payload["last_error"] == "Verifier rejected the implementation."
+    assert refreshed.history[-1]["extra"]["settlement_reason"] == "failed"
 
 
 def test_runtime_agent_task_persists_transcript_history_and_run_link(tmp_path: Path) -> None:

@@ -81,6 +81,10 @@ class RuntimeAgentTaskRecord(BaseModel):
     output_artifact_id: str = ""
     output_origin: str = ""
     output_source_available: bool = False
+    settlement_source: str = ""
+    settlement_reason: str = ""
+    settlement_state_status: str = ""
+    settlement_state_timestamp: str = ""
     output_preview: str = ""
     history: list[dict[str, Any]] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
@@ -171,6 +175,10 @@ def _render_runtime_agent_task_transcript(task: RuntimeAgentTaskRecord) -> str:
         f"Output Path: {task.output_path or '-'}",
         f"Output Origin: {task.output_origin or '-'}",
         f"Output Source Available: {'yes' if task.output_source_available else 'no'}",
+        f"Settlement Source: {task.settlement_source or '-'}",
+        f"Settlement Reason: {task.settlement_reason or '-'}",
+        f"Settlement State Status: {task.settlement_state_status or '-'}",
+        f"Settlement State Timestamp: {task.settlement_state_timestamp or '-'}",
         "",
         "## Result",
         f"Summary: {task.result_summary or task.placeholder_result or '-'}",
@@ -224,6 +232,10 @@ def _persist_runtime_agent_task_transcript(
             "output_artifact_id": task.output_artifact_id,
             "output_origin": task.output_origin,
             "output_source_available": task.output_source_available,
+            "settlement_source": task.settlement_source,
+            "settlement_reason": task.settlement_reason,
+            "settlement_state_status": task.settlement_state_status,
+            "settlement_state_timestamp": task.settlement_state_timestamp,
         },
     )
 
@@ -257,6 +269,10 @@ def runtime_agent_task_resume_contract(task: RuntimeAgentTaskRecord) -> dict[str
         "output_source_available": bool(task.output_source_available),
         "output_generated_from_project_state": str(task.output_origin or "").strip()
         == RUNTIME_AGENT_TASK_OUTPUT_ORIGIN_STATE_FALLBACK,
+        "settlement_source": str(task.settlement_source or "").strip(),
+        "settlement_reason": str(task.settlement_reason or "").strip(),
+        "settlement_state_status": str(task.settlement_state_status or "").strip(),
+        "settlement_state_timestamp": str(task.settlement_state_timestamp or "").strip(),
         "transcript_artifact_id": transcript_id,
         "transcript_artifact_ref": transcript_ref,
         "active": active,
@@ -289,6 +305,10 @@ def runtime_agent_task_mailbox_payload(task: RuntimeAgentTaskRecord) -> dict[str
         "output_source_available": bool(task.output_source_available),
         "output_generated_from_project_state": str(task.output_origin or "").strip()
         == RUNTIME_AGENT_TASK_OUTPUT_ORIGIN_STATE_FALLBACK,
+        "settlement_source": str(task.settlement_source or "").strip(),
+        "settlement_reason": str(task.settlement_reason or "").strip(),
+        "settlement_state_status": str(task.settlement_state_status or "").strip(),
+        "settlement_state_timestamp": str(task.settlement_state_timestamp or "").strip(),
         "transcript_artifact_id": str(resume_contract.get("transcript_artifact_id") or ""),
         "transcript_artifact_ref": str(resume_contract.get("transcript_artifact_ref") or ""),
         "artifact_ref": f"/api/execution-plane/agents/tasks/{task.id}",
@@ -593,6 +613,8 @@ def _terminal_task_update(
     status: str,
     summary: str,
     project_state: dict[str, Any],
+    settlement_source: str,
+    settlement_reason: str,
 ) -> RuntimeAgentTaskRecord:
     output_source_path = str(project_state.get("log_path") or task.output_path or "").strip()
     source_output = load_text_from_source(output_source_path)
@@ -602,6 +624,15 @@ def _terminal_task_update(
         else RUNTIME_AGENT_TASK_OUTPUT_ORIGIN_STATE_FALLBACK
     )
     output_source_available = bool(source_output)
+    settlement_state_status = str(project_state.get("status") or "").strip()
+    settlement_state_timestamp = str(
+        project_state.get("paused_at")
+        if settlement_reason == "paused"
+        else project_state.get("finished_at")
+        or project_state.get("updated_at")
+        or project_state.get("started_at")
+        or ""
+    ).strip()
     fallback_output = "\n".join(
         [
             f"Task: {task.id}",
@@ -609,6 +640,10 @@ def _terminal_task_update(
             f"Status: {status}",
             f"Summary: {summary}",
             "Output provenance: synthesized from project state because no terminal source log output was available.",
+            f"Settlement source: {settlement_source}",
+            f"Settlement reason: {settlement_reason}",
+            f"Settlement state status: {settlement_state_status}",
+            f"Settlement state timestamp: {settlement_state_timestamp}",
             f"Project status: {str(project_state.get('status') or '')}",
             f"Finished at: {str(project_state.get('finished_at') or '')}",
             f"Last error: {str(project_state.get('last_error') or '')}",
@@ -631,6 +666,10 @@ def _terminal_task_update(
             "output_source_available": output_source_available,
             "output_generated_from_project_state": output_origin
             == RUNTIME_AGENT_TASK_OUTPUT_ORIGIN_STATE_FALLBACK,
+            "settlement_source": settlement_source,
+            "settlement_reason": settlement_reason,
+            "settlement_state_status": settlement_state_status,
+            "settlement_state_timestamp": settlement_state_timestamp,
         },
     )
 
@@ -649,10 +688,18 @@ def _terminal_task_update(
         "output_source_available": output_source_available,
         "output_generated_from_project_state": output_origin
         == RUNTIME_AGENT_TASK_OUTPUT_ORIGIN_STATE_FALLBACK,
+        "settlement_source": settlement_source,
+        "settlement_reason": settlement_reason,
+        "settlement_state_status": settlement_state_status,
+        "settlement_state_timestamp": settlement_state_timestamp,
     }
     task.output_artifact_id = output_record.id
     task.output_origin = output_origin
     task.output_source_available = output_source_available
+    task.settlement_source = settlement_source
+    task.settlement_reason = settlement_reason
+    task.settlement_state_status = settlement_state_status
+    task.settlement_state_timestamp = settlement_state_timestamp
     task.output_preview = output_record.preview
     task.completed_at = str(project_state.get("finished_at") or "").strip() or _utcnow_iso()
     _append_task_history(
@@ -666,6 +713,10 @@ def _terminal_task_update(
             "output_origin": output_origin,
             "output_source_available": output_source_available,
             "project_status": str(project_state.get("status") or ""),
+            "settlement_source": settlement_source,
+            "settlement_reason": settlement_reason,
+            "settlement_state_status": settlement_state_status,
+            "settlement_state_timestamp": settlement_state_timestamp,
         },
     )
     return task
@@ -747,6 +798,10 @@ def refresh_runtime_agent_task(
         status=next_status,
         summary=summary,
         project_state=project_state,
+        settlement_source="project_state",
+        settlement_reason=(
+            "paused" if next_status == "cancelled" else "failed" if next_status == "failed" else "completed"
+        ),
     )
     save_runtime_agent_task(config, task)
     if prior_status != next_status:
