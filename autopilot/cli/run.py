@@ -2104,7 +2104,12 @@ def _run_impl(
             if execution_path != project and branch_name:
                 story_state = load_project_state(config, project_id).get("story_state", {}).get(str(story_id), {})
                 if story_state.get("status") != "merge_blocked":
-                    remove_worktree(project, execution_path)
+                    remove_worktree(
+                        project,
+                        execution_path,
+                        cleanup_branch=True,
+                        branch_name=branch_name,
+                    )
             if story_lease is not None:
                 release_work_item_lease(
                     config,

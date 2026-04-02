@@ -102,6 +102,19 @@ def _branch_exists(project_path: Path, branch_name: str) -> bool:
     return result.returncode == 0 and bool(str(result.stdout or "").strip())
 
 
+def _cleanup_story_branch(
+    project_path: Path,
+    branch_name: str | None,
+    *,
+    force: bool = True,
+) -> None:
+    normalized_branch = str(branch_name or "").strip()
+    if not normalized_branch or not _branch_exists(project_path, normalized_branch):
+        return
+    delete_flag = "-D" if force else "-d"
+    _run_git(project_path, ["branch", delete_flag, normalized_branch])
+
+
 def _neutralize_worktree_hooks(wt_path: Path) -> None:
     _run_git(wt_path, ["config", "--local", "core.hooksPath", os.devnull], check=True)
 
@@ -145,7 +158,7 @@ def gc_stale_worktrees(
         age_sec = max(0, int((datetime.now(timezone.utc) - created_at).total_seconds()))
         if age_sec < stale_after_sec or _pid_is_running(metadata.runtime_pid):
             continue
-        remove_worktree(project_path, safe_candidate)
+        remove_worktree(project_path, safe_candidate, cleanup_branch=True)
         removed.append(safe_candidate)
     return removed
 
@@ -159,7 +172,7 @@ def create_worktree(project_path: Path, story_id: int, *, branch_name: str | Non
     gc_stale_worktrees(project_path)
     _run_git(project_path, ["worktree", "prune"])
     if wt_path.exists():
-        remove_worktree(project_path, wt_path)
+        remove_worktree(project_path, wt_path, cleanup_branch=True)
     if _branch_exists(project_path, branch):
         _run_git(project_path, ["branch", "-D", branch])
 
@@ -170,13 +183,28 @@ def create_worktree(project_path: Path, story_id: int, *, branch_name: str | Non
     return wt_path
 
 
-def remove_worktree(project_path: Path, wt_path: Path) -> None:
+def remove_worktree(
+    project_path: Path,
+    wt_path: Path,
+    *,
+    cleanup_branch: bool = False,
+    branch_name: str | None = None,
+) -> None:
     """Remove a git worktree."""
     wt_path = assert_story_worktree_path(project_path, wt_path)
+    cleanup_branch_name = ""
+    if cleanup_branch:
+        cleanup_branch_name = str(branch_name or "").strip()
+        if not cleanup_branch_name:
+            metadata = read_worktree_metadata(wt_path)
+            if metadata is not None:
+                cleanup_branch_name = str(metadata.branch_name or "").strip()
     _run_git(project_path, ["worktree", "remove", str(wt_path), "--force"])
     _run_git(project_path, ["worktree", "prune"])
     if wt_path.exists():
         shutil.rmtree(wt_path, ignore_errors=True)
+    if cleanup_branch_name:
+        _cleanup_story_branch(project_path, cleanup_branch_name, force=True)
 
 
 def merge_worktree(main_path: Path, worktree_path: Path, branch_name: str) -> bool:
@@ -192,6 +220,6 @@ def merge_worktree(main_path: Path, worktree_path: Path, branch_name: str) -> bo
     if result.returncode != 0:
         return False
 
-    remove_worktree(main_path, worktree_path)
-    _run_git(main_path, ["branch", "-d", branch_name])
+    remove_worktree(main_path, worktree_path, cleanup_branch=False)
+    _cleanup_story_branch(main_path, branch_name, force=False)
     return True

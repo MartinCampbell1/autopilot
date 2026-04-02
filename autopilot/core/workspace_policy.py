@@ -249,7 +249,12 @@ def recover_story_checkout(
     if cleanup_worktree and checkout_path is not None and checkout_path != project_path and checkout_path.exists():
         validation = validate_story_worktree_path(project_path, checkout_path, expected_story_id=story_id)
         if validation.allowed:
-            remove_worktree(project_path, validation.normalized_path)
+            remove_worktree(
+                project_path,
+                validation.normalized_path,
+                cleanup_branch=True,
+                branch_name=str(checkout.get("branch_name") or story_state.get("branch_name") or "").strip() or None,
+            )
             cleanup_performed = True
         else:
             cleanup_skipped_reason = validation.reason

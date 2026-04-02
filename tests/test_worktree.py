@@ -1,5 +1,6 @@
 """Tests for git worktree management."""
 
+import json
 import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -84,6 +85,37 @@ class TestWorktree:
         assert mock_run.call_args_list[0][0][0] == ["git", "worktree", "remove", "/Users/example/project-story-3", "--force"]
         assert mock_run.call_args_list[1][0][0] == ["git", "worktree", "prune"]
 
+    @patch("autopilot.core.worktree.subprocess.run")
+    def test_remove_worktree_cleans_metadata_branch_when_requested(self, mock_run: MagicMock, tmp_path: Path) -> None:
+        mock_run.side_effect = [
+            MagicMock(returncode=0, stdout="", stderr=""),
+            MagicMock(returncode=0, stdout="", stderr=""),
+            MagicMock(returncode=0, stdout="  story-3\n", stderr=""),
+            MagicMock(returncode=0, stdout="", stderr=""),
+        ]
+        project_path = tmp_path / "project"
+        project_path.mkdir()
+        wt_path = tmp_path / "project-story-3"
+        wt_path.mkdir()
+        worktree_metadata_path(wt_path).write_text(
+            json.dumps(
+                {
+                    "project_path": str(project_path),
+                    "story_id": 3,
+                    "branch_name": "story-3",
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                    "runtime_pid": None,
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        remove_worktree(project_path, wt_path, cleanup_branch=True)
+
+        calls = [call.args[0] for call in mock_run.call_args_list]
+        assert ["git", "branch", "--list", "story-3"] in calls
+        assert ["git", "branch", "-D", "story-3"] in calls
+
     def test_remove_worktree_rejects_unsafe_path(self) -> None:
         try:
             remove_worktree(Path("/Users/example/project"), Path("/tmp/not-this-project"))
@@ -112,6 +144,7 @@ class TestWorktree:
             MagicMock(returncode=0, stdout="", stderr=""),
             MagicMock(returncode=0, stdout="", stderr=""),
             MagicMock(returncode=0, stdout="", stderr=""),
+            MagicMock(returncode=0, stdout="  story-3\n", stderr=""),
             MagicMock(returncode=0, stdout="", stderr=""),
         ]
         success = merge_worktree(
@@ -125,7 +158,8 @@ class TestWorktree:
         assert calls[1] == ["git", "merge", "story-3", "--no-edit"]
         assert calls[2] == ["git", "worktree", "remove", "/Users/example/project-story-3", "--force"]
         assert calls[3] == ["git", "worktree", "prune"]
-        assert calls[4] == ["git", "branch", "-d", "story-3"]
+        assert calls[4] == ["git", "branch", "--list", "story-3"]
+        assert calls[5] == ["git", "branch", "-d", "story-3"]
 
     @patch("autopilot.core.worktree.subprocess.run")
     def test_merge_worktree_commits_when_dirty(self, mock_run: MagicMock) -> None:
@@ -171,4 +205,4 @@ class TestWorktree:
         removed = gc_stale_worktrees(project_path, stale_after_sec=DEFAULT_WORKTREE_STALE_AFTER_SEC)
 
         assert removed == [stale_path]
-        mock_remove.assert_called_once_with(project_path, stale_path)
+        mock_remove.assert_called_once_with(project_path, stale_path, cleanup_branch=True)
