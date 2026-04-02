@@ -15,6 +15,7 @@ from autopilot.core.account_diagnostics import build_provider_setup_snapshot
 from autopilot.core.account_manager import AccountManager
 from autopilot.core.config import load_config
 from autopilot.core.onboarding import detect_project_tooling
+from autopilot.core.runtime_diagnostics import build_runtime_diagnostics
 
 console = Console()
 
@@ -31,6 +32,11 @@ def _doctor_report(
 
     provider_snapshot = build_provider_setup_snapshot(config, manager, refresh=refresh)
     project_report = detect_project_tooling(project_path)
+    runtime_diagnostics = build_runtime_diagnostics(
+        config=config,
+        config_path=config_path,
+        project_path=project_path,
+    )
 
     recommendations: list[str] = []
     for provider, payload in provider_snapshot["providers"].items():
@@ -48,6 +54,11 @@ def _doctor_report(
         recommendations.append("Run `autopilot init` to create a starter PRD and register the project.")
     if not project_report.gates:
         recommendations.append("Add at least one reproducible build, test, or lint command for quality gates.")
+    for diagnostic in runtime_diagnostics["diagnostics"]:
+        fix = str(diagnostic.get("fix") or "").strip()
+        if fix:
+            recommendations.append(fix)
+    recommendations = list(dict.fromkeys(recommendations))
 
     return {
         "config": {
@@ -61,6 +72,7 @@ def _doctor_report(
         },
         "providers": provider_snapshot,
         "project": project_report.to_dict(),
+        "runtime_diagnostics": runtime_diagnostics,
         "recommendations": recommendations,
     }
 
@@ -156,6 +168,23 @@ def doctor(
         for gate in gates:
             gates_table.add_row(str(gate["name"]), str(gate["cmd"]), str(gate.get("source", "")))
         console.print(gates_table)
+
+    diagnostics_payload = report.get("runtime_diagnostics") or {}
+    diagnostics = list(diagnostics_payload.get("diagnostics") or [])
+    if diagnostics:
+        diagnostics_table = Table(title="Diagnostics")
+        diagnostics_table.add_column("Severity")
+        diagnostics_table.add_column("Code")
+        diagnostics_table.add_column("Message")
+        diagnostics_table.add_column("Fix")
+        for diagnostic in diagnostics:
+            diagnostics_table.add_row(
+                str(diagnostic.get("severity") or ""),
+                str(diagnostic.get("code") or ""),
+                str(diagnostic.get("message") or ""),
+                str(diagnostic.get("fix") or ""),
+            )
+        console.print(diagnostics_table)
 
     notes = list(project_payload["notes"]) + list(report["recommendations"])
     if notes:
