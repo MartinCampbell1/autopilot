@@ -319,3 +319,16 @@ def init_project(
     from autopilot.cli.init_cmd import init as _init
 
     _init(project_path, idea=idea, bootstrap_only=bootstrap_only)
+
+
+@app.command(name="init-verifiers")
+def init_verifiers(
+    project_path: str = typer.Argument(".", help="Path to the project directory."),
+    project_id: str | None = typer.Option(None, "--project-id", help="Registered project id to use when multiple same-repo projects exist."),
+    write_artifact: bool = typer.Option(True, "--write/--no-write", help="Write the verifier bootstrap artifact into the project checkout."),
+    json_output: bool = typer.Option(False, "--json", help="Emit the verifier bootstrap payload as JSON."),
+) -> None:
+    """Bootstrap verifier checks for one checkout."""
+    from autopilot.cli.init_verifiers import init_verifiers as _init_verifiers
+
+    _init_verifiers(project_path, project_id=project_id, write_artifact=write_artifact, json_output=json_output)

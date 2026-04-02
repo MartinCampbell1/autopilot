@@ -206,6 +206,41 @@ def test_init_command_passes_bootstrap_options(monkeypatch) -> None:
     }
 
 
+def test_init_verifiers_command_passes_options(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_init_verifiers(
+        project_path: str = ".",
+        *,
+        project_id: str | None = None,
+        write_artifact: bool = True,
+        json_output: bool = False,
+    ) -> None:
+        captured.update(
+            {
+                "project_path": project_path,
+                "project_id": project_id,
+                "write_artifact": write_artifact,
+                "json_output": json_output,
+            }
+        )
+
+    monkeypatch.setattr("autopilot.cli.init_verifiers.init_verifiers", fake_init_verifiers)
+
+    result = runner.invoke(
+        app,
+        ["init-verifiers", "/tmp/project", "--project-id", "proj_123", "--no-write", "--json"],
+    )
+
+    assert result.exit_code == 0
+    assert captured == {
+        "project_path": "/tmp/project",
+        "project_id": "proj_123",
+        "write_artifact": False,
+        "json_output": True,
+    }
+
+
 def test_live_command_passes_options(monkeypatch) -> None:
     captured: dict[str, object] = {}
 
