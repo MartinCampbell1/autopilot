@@ -143,3 +143,28 @@ def test_build_runtime_diagnostics_surfaces_no_diff_against_base(tmp_path: Path,
 
     codes = {item["code"] for item in payload["diagnostics"]}
     assert "no_diff_against_base" in codes
+
+
+def test_build_runtime_diagnostics_flags_missing_managed_github_workflow(tmp_path: Path, monkeypatch) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    config_path = tmp_path / ".autopilot" / "config.yaml"
+    project_root = _init_git_repo(tmp_path / "project", remote_url="git@github.com:FounderOS/Autopilot.git")
+
+    monkeypatch.setattr("autopilot.core.runtime_diagnostics.shutil.which", lambda name: "/usr/bin/gh")
+    monkeypatch.setattr("autopilot.core.runtime_diagnostics.get_current_branch", lambda path: "feature/bootstrap")
+    monkeypatch.setattr("autopilot.core.runtime_diagnostics.get_default_branch", lambda path: "main")
+    monkeypatch.setattr("autopilot.core.runtime_diagnostics._working_tree_dirty", lambda path: False)
+    monkeypatch.setattr("autopilot.core.runtime_diagnostics._resolve_base_ref", lambda cwd, base_branch: "origin/main")
+    monkeypatch.setattr("autopilot.core.runtime_diagnostics._changed_file_count", lambda cwd, base_ref: 1)
+
+    payload = build_runtime_diagnostics(
+        config=config,
+        config_path=config_path,
+        project_path=project_root,
+    )
+
+    diagnostics_by_code = {item["code"]: item for item in payload["diagnostics"]}
+    assert "github_actions_workflow_missing" in diagnostics_by_code
+    assert diagnostics_by_code["github_actions_workflow_missing"]["metadata"]["workflow_relpath"].endswith(
+        "autopilot-bootstrap.yml"
+    )
