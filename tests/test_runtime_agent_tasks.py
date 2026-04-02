@@ -17,6 +17,8 @@ from autopilot.core.project_store import (
 from autopilot.core.runtime_agent_tasks import (
     RUNTIME_AGENT_TASK_OUTPUT_ORIGIN_SOURCE_LOG,
     RUNTIME_AGENT_TASK_OUTPUT_ORIGIN_STATE_FALLBACK,
+    RUNTIME_AGENT_TASK_SETTLEMENT_REASON_RUNTIME_EXITED,
+    RUNTIME_AGENT_TASK_SETTLEMENT_REASON_SUPERSEDED_RUNTIME_SESSION,
     create_or_reuse_runtime_agent_task,
     link_runtime_agent_task_run,
     list_runtime_agent_tasks,
@@ -71,6 +73,125 @@ def test_runtime_agent_task_stays_running_until_project_state_advances(tmp_path:
     )
     assert len(stored) == 1
     assert stored[0].id == task.id
+
+
+def test_runtime_agent_task_stays_running_for_foreground_runtime_without_owner_pid(tmp_path: Path) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    project = _seed_project(config, tmp_path / "async-task-foreground-project")
+
+    state = load_project_state(config, str(project["id"]))
+    state["status"] = "running"
+    state["paused"] = False
+    state["pid"] = None
+    state["runtime_session_id"] = ""
+    state["started_at"] = "2026-04-01T12:00:00+00:00"
+    save_project_state(config, str(project["id"]), state)
+
+    task = create_or_reuse_runtime_agent_task(
+        config,
+        project_id=str(project["id"]),
+        command="launch",
+        actor="founderos",
+        reason="Launch foreground background work.",
+        orchestrator_session_id="ors_async_foreground",
+        runtime_agent_ids=["proj:1:worker:a"],
+    )
+
+    refreshed = refresh_runtime_agent_task(config, task.id)
+
+    assert refreshed.status == "running"
+    assert refreshed.settlement_reason == ""
+    assert refreshed.metadata.get("project_runtime_pid") in {None, ""}
+
+
+def test_runtime_agent_task_marks_failed_when_owning_background_runtime_exits(tmp_path: Path) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    project = _seed_project(config, tmp_path / "async-task-runtime-exited-project")
+
+    state = load_project_state(config, str(project["id"]))
+    state["status"] = "running"
+    state["paused"] = False
+    state["pid"] = 999_999
+    state["runtime_session_id"] = "sess_background_owner"
+    state["started_at"] = "2026-04-01T12:00:00+00:00"
+    save_project_state(config, str(project["id"]), state)
+
+    task = create_or_reuse_runtime_agent_task(
+        config,
+        project_id=str(project["id"]),
+        command="launch",
+        actor="founderos",
+        reason="Launch background work.",
+        orchestrator_session_id="ors_async_runtime_exit",
+        runtime_agent_ids=["proj:1:worker:a"],
+    )
+
+    refreshed = refresh_runtime_agent_task(config, task.id)
+
+    assert refreshed.status == "failed"
+    assert refreshed.result_summary == "Background runtime exited before task settlement."
+    assert refreshed.settlement_source == "project_state"
+    assert refreshed.settlement_reason == RUNTIME_AGENT_TASK_SETTLEMENT_REASON_RUNTIME_EXITED
+    assert refreshed.settlement_state_status == "running"
+    assert refreshed.result_payload["settlement_reason"] == RUNTIME_AGENT_TASK_SETTLEMENT_REASON_RUNTIME_EXITED
+    assert refreshed.history[-1]["extra"]["settlement_reason"] == RUNTIME_AGENT_TASK_SETTLEMENT_REASON_RUNTIME_EXITED
+    assert refreshed.metadata["project_runtime_pid"] == 999_999
+
+    mailbox = list_agent_mailbox_messages(
+        config,
+        project_id=str(project["id"]),
+        runtime_agent_id="proj:1:worker:a",
+        message_type="runtime_agent_task_resolved",
+    )
+    assert any(message.payload["task_id"] == task.id for message in mailbox)
+
+
+def test_runtime_agent_task_marks_cancelled_when_background_runtime_session_is_superseded(
+    tmp_path: Path,
+) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    project = _seed_project(config, tmp_path / "async-task-runtime-superseded-project")
+
+    state = load_project_state(config, str(project["id"]))
+    state["status"] = "running"
+    state["paused"] = False
+    state["pid"] = 999_999
+    state["runtime_session_id"] = "sess_background_owner_a"
+    state["started_at"] = "2026-04-01T12:00:00+00:00"
+    save_project_state(config, str(project["id"]), state)
+
+    task = create_or_reuse_runtime_agent_task(
+        config,
+        project_id=str(project["id"]),
+        command="launch",
+        actor="founderos",
+        reason="Launch background work.",
+        orchestrator_session_id="ors_async_runtime_superseded",
+        runtime_agent_ids=["proj:1:worker:a"],
+    )
+
+    state = load_project_state(config, str(project["id"]))
+    state["status"] = "running"
+    state["paused"] = False
+    state["pid"] = 888_888
+    state["runtime_session_id"] = "sess_background_owner_b"
+    save_project_state(config, str(project["id"]), state)
+
+    refreshed = refresh_runtime_agent_task(config, task.id)
+
+    assert refreshed.status == "cancelled"
+    assert refreshed.result_summary == "Background run was superseded by another runtime session before completion."
+    assert refreshed.settlement_source == "project_state"
+    assert (
+        refreshed.settlement_reason
+        == RUNTIME_AGENT_TASK_SETTLEMENT_REASON_SUPERSEDED_RUNTIME_SESSION
+    )
+    assert refreshed.result_payload["settlement_reason"] == (
+        RUNTIME_AGENT_TASK_SETTLEMENT_REASON_SUPERSEDED_RUNTIME_SESSION
+    )
+    assert refreshed.history[-1]["extra"]["settlement_reason"] == (
+        RUNTIME_AGENT_TASK_SETTLEMENT_REASON_SUPERSEDED_RUNTIME_SESSION
+    )
 
 
 def test_runtime_agent_task_transitions_to_completed_with_terminal_summary(tmp_path: Path) -> None:

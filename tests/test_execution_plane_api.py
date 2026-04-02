@@ -1482,6 +1482,58 @@ def test_execution_plane_runtime_agent_task_surfaces_cancelled_settlement_proven
 
 
 @patch("autopilot.core.execution_plane.generate_prd_from_spec")
+def test_execution_plane_runtime_agent_task_surfaces_runtime_exited_settlement_provenance(
+    mock_generate_prd_from_spec,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    client = _build_client(config, monkeypatch)
+    mock_generate_prd_from_spec.return_value = {
+        "title": "FounderOS Copilot",
+        "description": "Execution-ready FounderOS project.",
+        "stories": [{"id": 1, "title": "Bootstrap", "description": "Create the app shell"}],
+    }
+
+    created = _create_execution_project(client, tmp_path / "async-task-runtime-exited-api-project")
+    project_id = created["project"]["project_id"]
+    session = _create_orchestrator_session(
+        client,
+        project_ids=[project_id],
+        actor="founderos",
+        title="Runtime exited async task provenance",
+    )
+
+    state = load_project_state(config, project_id)
+    state["status"] = "running"
+    state["paused"] = False
+    state["pid"] = 999_999
+    state["runtime_session_id"] = "sess_background_owner"
+    state["started_at"] = "2026-04-01T12:00:00+00:00"
+    save_project_state(config, project_id, state)
+
+    task = create_or_reuse_runtime_agent_task(
+        config,
+        project_id=project_id,
+        command="launch",
+        actor="founderos",
+        reason="Launch background execution.",
+        orchestrator_session_id=session["id"],
+        runtime_agent_ids=["runtime-agent-1"],
+    )
+
+    task_detail = client.get(f"/api/execution-plane/agents/tasks/{task.id}")
+    assert task_detail.status_code == 200
+    payload = task_detail.json()
+    assert payload["status"] == "failed"
+    assert payload["settlement_source"] == "project_state"
+    assert payload["settlement_reason"] == "runtime_exited"
+    assert payload["settlement_state_status"] == "running"
+    assert payload["resume_contract"]["settlement_reason"] == "runtime_exited"
+    assert payload["result_summary"] == "Background runtime exited before task settlement."
+
+
+@patch("autopilot.core.execution_plane.generate_prd_from_spec")
 def test_execution_plane_runtime_agent_task_cancel_route_pauses_project_and_cancels_task(
     mock_generate_prd_from_spec,
     tmp_path: Path,

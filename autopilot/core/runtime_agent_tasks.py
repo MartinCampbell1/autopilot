@@ -13,7 +13,12 @@ from pydantic import BaseModel, Field
 
 from autopilot.core.agent_mailbox import poll_agent_mailbox_messages, publish_agent_mailbox_messages
 from autopilot.core.config import AutopilotConfig
-from autopilot.core.project_store import emit_project_event, ensure_project_state, get_project_entry
+from autopilot.core.project_store import (
+    emit_project_event,
+    ensure_project_state,
+    get_project_entry,
+    load_project_state,
+)
 from autopilot.core.task_output import load_text_from_source, persist_task_output
 from autopilot.core.task_transcript import persist_task_transcript, task_transcript_id
 
@@ -28,6 +33,8 @@ TERMINAL_RUNTIME_AGENT_TASK_STATUSES = {"completed", "failed", "cancelled"}
 TASK_HISTORY_LIMIT = 100
 RUNTIME_AGENT_TASK_OUTPUT_ORIGIN_SOURCE_LOG = "source_log"
 RUNTIME_AGENT_TASK_OUTPUT_ORIGIN_STATE_FALLBACK = "project_state_fallback"
+RUNTIME_AGENT_TASK_SETTLEMENT_REASON_RUNTIME_EXITED = "runtime_exited"
+RUNTIME_AGENT_TASK_SETTLEMENT_REASON_SUPERSEDED_RUNTIME_SESSION = "superseded_runtime_session"
 
 
 def _utcnow_iso() -> str:
@@ -56,6 +63,22 @@ def _default_placeholder_result(command: str) -> str:
     if normalized in {"launch", "resume"}:
         return "Background run launched. Do not report completion until this task reaches a terminal status."
     return "Background work launched. Do not report completion until this task reaches a terminal status."
+
+
+def _task_owner_runtime_metadata(config: AutopilotConfig, project_id: str) -> dict[str, Any]:
+    """Capture the owning background runtime identity when one exists."""
+
+    state = load_project_state(config, str(project_id or "").strip())
+    if not state:
+        return {}
+    metadata: dict[str, Any] = {}
+    runtime_session_id = str(state.get("runtime_session_id") or "").strip()
+    if runtime_session_id:
+        metadata["project_runtime_session_id"] = runtime_session_id
+    pid = state.get("pid")
+    if isinstance(pid, int) and pid > 0:
+        metadata["project_runtime_pid"] = pid
+    return metadata
 
 
 class RuntimeAgentTaskRecord(BaseModel):
@@ -486,6 +509,7 @@ def create_or_reuse_runtime_agent_task(
             if str(item).strip()
         }
     )
+    owner_runtime_metadata = _task_owner_runtime_metadata(config, normalized_project_id)
     existing = _matching_active_task(
         config,
         project_id=normalized_project_id,
@@ -521,6 +545,14 @@ def create_or_reuse_runtime_agent_task(
                     next_metadata[key] = value
                     changed = True
             existing.metadata = next_metadata
+        if owner_runtime_metadata:
+            next_metadata = dict(existing.metadata or {})
+            for key, value in owner_runtime_metadata.items():
+                if key in next_metadata:
+                    continue
+                next_metadata[key] = value
+                changed = True
+            existing.metadata = next_metadata
         if changed:
             _append_task_history(
                 existing,
@@ -547,7 +579,7 @@ def create_or_reuse_runtime_agent_task(
         runtime_agent_ids=normalized_runtime_agent_ids,
         placeholder_result=_default_placeholder_result(normalized_command),
         output_path=str(output_path or "").strip(),
-        metadata=dict(metadata or {}),
+        metadata={**owner_runtime_metadata, **dict(metadata or {})},
         created_at=created_at,
         updated_at=created_at,
         started_at=created_at,
@@ -722,6 +754,37 @@ def _terminal_task_update(
     return task
 
 
+def _stale_runtime_task_transition(
+    project_state: dict[str, Any],
+    task: RuntimeAgentTaskRecord,
+) -> tuple[str, str, str] | None:
+    """Detect one stale active task whose owning background runtime disappeared or was replaced."""
+
+    if project_state.get("status") != "running" or bool(project_state.get("paused")):
+        return None
+    if not _state_is_newer_than_task(project_state, task):
+        return None
+    owner_session_id = str(task.metadata.get("project_runtime_session_id") or "").strip()
+    current_session_id = str(project_state.get("runtime_session_id") or "").strip()
+    if owner_session_id and current_session_id and current_session_id != owner_session_id:
+        return (
+            "cancelled",
+            RUNTIME_AGENT_TASK_SETTLEMENT_REASON_SUPERSEDED_RUNTIME_SESSION,
+            "Background run was superseded by another runtime session before completion.",
+        )
+    owner_pid = task.metadata.get("project_runtime_pid")
+    if not isinstance(owner_pid, int) or owner_pid <= 0:
+        return None
+    current_pid = project_state.get("pid")
+    if current_pid:
+        return None
+    return (
+        "failed",
+        RUNTIME_AGENT_TASK_SETTLEMENT_REASON_RUNTIME_EXITED,
+        str(project_state.get("last_error") or "Background runtime exited before task settlement."),
+    )
+
+
 def refresh_runtime_agent_task(
     config: AutopilotConfig,
     task_or_id: RuntimeAgentTaskRecord | str,
@@ -748,6 +811,35 @@ def refresh_runtime_agent_task(
     if output_path and output_path != task.output_path:
         task.output_path = output_path
         changed = True
+
+    stale_transition = _stale_runtime_task_transition(project_state, task)
+    if stale_transition is not None:
+        next_status, settlement_reason, summary = stale_transition
+        prior_status = task.status
+        task = _terminal_task_update(
+            config,
+            task,
+            status=next_status,
+            summary=summary,
+            project_state=project_state,
+            settlement_source="project_state",
+            settlement_reason=settlement_reason,
+        )
+        save_runtime_agent_task(config, task)
+        if prior_status != next_status:
+            _emit_runtime_agent_task_event(
+                config,
+                task,
+                event=f"execution_plane_runtime_agent_task_{next_status}",
+                status="error" if next_status == "failed" else "cancelled",
+                message=task.result_summary or summary,
+            )
+            _publish_runtime_agent_task_resolution_messages(
+                config,
+                task,
+                specific_message_type=f"runtime_agent_task_{next_status}",
+            )
+        return task
 
     if project_state.get("status") == "running" and not bool(project_state.get("paused")):
         if task.status != "running":
