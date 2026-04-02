@@ -20,6 +20,20 @@ def _completed(
     return subprocess.CompletedProcess(args=args, returncode=returncode, stdout=stdout, stderr=stderr)
 
 
+def _ready_bootstrap_status(repo_root: Path) -> dict[str, object]:
+    return {
+        "verification": {
+            "artifact_exists": True,
+            "artifact_path": str(repo_root / ".agents/tasks/verifiers.json"),
+        },
+        "github": {
+            "github_repo": "founderos/autopilot",
+            "workflow_exists": True,
+            "workflow_path": str(repo_root / ".github/workflows/autopilot-bootstrap.yml"),
+        },
+    }
+
+
 def test_ship_repo_rejects_protected_branch(monkeypatch, tmp_path: Path) -> None:
     repo_root = tmp_path / "repo"
     repo_root.mkdir()
@@ -41,6 +55,76 @@ def test_ship_repo_rejects_protected_branch(monkeypatch, tmp_path: Path) -> None
         ship_repo(repo_root)
 
 
+def test_ship_repo_requires_verifier_bootstrap(monkeypatch, tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+
+    monkeypatch.setattr("autopilot.core.shipping.find_canonical_git_root", lambda path: repo_root)
+    monkeypatch.setattr("autopilot.core.shipping.get_github_repo", lambda path: "founderos/autopilot")
+    monkeypatch.setattr("autopilot.core.shipping.shutil.which", lambda name: "/usr/bin/gh")
+    monkeypatch.setattr(
+        "autopilot.core.bootstrap_visibility.build_bootstrap_status",
+        lambda project_path: {
+            "verification": {
+                "artifact_exists": False,
+                "artifact_path": str(repo_root / ".agents/tasks/verifiers.json"),
+            },
+            "github": {
+                "github_repo": "founderos/autopilot",
+                "workflow_exists": True,
+                "workflow_path": str(repo_root / ".github/workflows/autopilot-bootstrap.yml"),
+            },
+        },
+    )
+
+    def fake_run_git(cwd: Path, args: list[str]) -> subprocess.CompletedProcess[str]:
+        if args == ["branch", "--show-current"]:
+            return _completed(args, stdout="feature/ship-loop\n")
+        if args == ["symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"]:
+            return _completed(args, stdout="refs/remotes/origin/main\n")
+        raise AssertionError(f"Unexpected git args: {args}")
+
+    monkeypatch.setattr("autopilot.core.shipping._run_git", fake_run_git)
+
+    with pytest.raises(ShippingError, match="autopilot init-verifiers"):
+        ship_repo(repo_root)
+
+
+def test_ship_repo_requires_managed_github_workflow(monkeypatch, tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+
+    monkeypatch.setattr("autopilot.core.shipping.find_canonical_git_root", lambda path: repo_root)
+    monkeypatch.setattr("autopilot.core.shipping.get_github_repo", lambda path: "founderos/autopilot")
+    monkeypatch.setattr("autopilot.core.shipping.shutil.which", lambda name: "/usr/bin/gh")
+    monkeypatch.setattr(
+        "autopilot.core.bootstrap_visibility.build_bootstrap_status",
+        lambda project_path: {
+            "verification": {
+                "artifact_exists": True,
+                "artifact_path": str(repo_root / ".agents/tasks/verifiers.json"),
+            },
+            "github": {
+                "github_repo": "founderos/autopilot",
+                "workflow_exists": False,
+                "workflow_path": str(repo_root / ".github/workflows/autopilot-bootstrap.yml"),
+            },
+        },
+    )
+
+    def fake_run_git(cwd: Path, args: list[str]) -> subprocess.CompletedProcess[str]:
+        if args == ["branch", "--show-current"]:
+            return _completed(args, stdout="feature/ship-loop\n")
+        if args == ["symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"]:
+            return _completed(args, stdout="refs/remotes/origin/main\n")
+        raise AssertionError(f"Unexpected git args: {args}")
+
+    monkeypatch.setattr("autopilot.core.shipping._run_git", fake_run_git)
+
+    with pytest.raises(ShippingError, match="autopilot github"):
+        ship_repo(repo_root)
+
+
 def test_ship_repo_requires_commit_message_for_dirty_tree(monkeypatch, tmp_path: Path) -> None:
     repo_root = tmp_path / "repo"
     repo_root.mkdir()
@@ -48,6 +132,10 @@ def test_ship_repo_requires_commit_message_for_dirty_tree(monkeypatch, tmp_path:
     monkeypatch.setattr("autopilot.core.shipping.find_canonical_git_root", lambda path: repo_root)
     monkeypatch.setattr("autopilot.core.shipping.get_github_repo", lambda path: "founderos/autopilot")
     monkeypatch.setattr("autopilot.core.shipping.shutil.which", lambda name: "/usr/bin/gh")
+    monkeypatch.setattr(
+        "autopilot.core.bootstrap_visibility.build_bootstrap_status",
+        lambda project_path: _ready_bootstrap_status(repo_root),
+    )
 
     def fake_run_git(cwd: Path, args: list[str]) -> subprocess.CompletedProcess[str]:
         if args == ["branch", "--show-current"]:
@@ -81,6 +169,10 @@ def test_ship_repo_commits_pushes_and_creates_pull_request(monkeypatch, tmp_path
     monkeypatch.setattr("autopilot.core.shipping.find_canonical_git_root", lambda path: repo_root)
     monkeypatch.setattr("autopilot.core.shipping.get_github_repo", lambda path: "founderos/autopilot")
     monkeypatch.setattr("autopilot.core.shipping.shutil.which", lambda name: "/usr/bin/gh")
+    monkeypatch.setattr(
+        "autopilot.core.bootstrap_visibility.build_bootstrap_status",
+        lambda project_path: _ready_bootstrap_status(repo_root),
+    )
 
     def fake_run_git(cwd: Path, args: list[str]) -> subprocess.CompletedProcess[str]:
         git_calls.append(list(args))
@@ -128,6 +220,7 @@ def test_ship_repo_commits_pushes_and_creates_pull_request(monkeypatch, tmp_path
     assert payload["pr_created"] is True
     assert payload["pull_request"]["number"] == 42
     assert payload["pull_request"]["draft"] is True
+    assert payload["bootstrap"]["verification"]["artifact_exists"] is True
     assert ["add", "-A"] in git_calls
     assert ["commit", "-m", "Ship latest changes"] in git_calls
     assert ["push", "--set-upstream", "origin", "feature/ship-loop"] in git_calls
@@ -142,6 +235,10 @@ def test_ship_repo_reuses_existing_pull_request(monkeypatch, tmp_path: Path) -> 
     monkeypatch.setattr("autopilot.core.shipping.find_canonical_git_root", lambda path: repo_root)
     monkeypatch.setattr("autopilot.core.shipping.get_github_repo", lambda path: "founderos/autopilot")
     monkeypatch.setattr("autopilot.core.shipping.shutil.which", lambda name: "/usr/bin/gh")
+    monkeypatch.setattr(
+        "autopilot.core.bootstrap_visibility.build_bootstrap_status",
+        lambda project_path: _ready_bootstrap_status(repo_root),
+    )
 
     def fake_run_git(cwd: Path, args: list[str]) -> subprocess.CompletedProcess[str]:
         if args == ["branch", "--show-current"]:

@@ -133,6 +133,32 @@ def _branch_has_changes_against_base(cwd: Path, base_branch: str) -> bool:
     raise _command_failure(f"git diff {base_ref}...HEAD", result)
 
 
+def _ensure_ship_readiness(repo_root: Path) -> dict[str, Any]:
+    from autopilot.core.bootstrap_visibility import build_bootstrap_status
+
+    status = build_bootstrap_status(project_path=repo_root)
+    verification = dict(status.get("verification") or {})
+    github = dict(status.get("github") or {})
+
+    verification_path = str(verification.get("artifact_path") or "").strip()
+    if not bool(verification.get("artifact_exists")):
+        raise ShippingError(
+            "Verifier bootstrap artifact is missing"
+            + (f" at {verification_path}." if verification_path else ".")
+            + f" Run `autopilot init-verifiers {repo_root}` before `autopilot ship`."
+        )
+
+    workflow_path = str(github.get("workflow_path") or "").strip()
+    if str(github.get("github_repo") or "").strip() and not bool(github.get("workflow_exists")):
+        raise ShippingError(
+            "Managed GitHub workflow is missing"
+            + (f" at {workflow_path}." if workflow_path else ".")
+            + f" Run `autopilot github {repo_root}` from a feature branch before `autopilot ship`."
+        )
+
+    return status
+
+
 def _normalize_pull_request(payload: dict[str, Any]) -> dict[str, Any]:
     return {
         "number": payload.get("number"),
@@ -204,6 +230,8 @@ def ship_repo(
             f"Refusing to ship from protected branch `{current_branch}`. Create or switch to a feature branch first."
         )
 
+    bootstrap = _ensure_ship_readiness(repo_root)
+
     dirty_before_ship = _working_tree_dirty(repo_root)
     normalized_commit_message = str(commit_message or "").strip()
     if dirty_before_ship and not normalized_commit_message:
@@ -267,4 +295,5 @@ def ship_repo(
         "push_performed": True,
         "pr_created": pr_created,
         "pull_request": pull_request,
+        "bootstrap": bootstrap,
     }
