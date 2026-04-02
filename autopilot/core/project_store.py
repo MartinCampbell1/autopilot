@@ -2132,7 +2132,13 @@ def launch_project_run(
     return True, log_path, event_message
 
 
-def pause_project_run(config: AutopilotConfig, project_id: str) -> str:
+def pause_project_run(
+    config: AutopilotConfig,
+    project_id: str,
+    *,
+    message: str = "Project paused by user.",
+    extra: dict[str, Any] | None = None,
+) -> str:
     state = load_project_state(config, project_id)
     if not state:
         raise KeyError(project_id)
@@ -2173,9 +2179,10 @@ def pause_project_run(config: AutopilotConfig, project_id: str) -> str:
     return _persist_paused_project_run(
         config,
         project_id,
-        message="Project paused by user.",
+        message=message,
         event="paused",
         story_id=state.get("current_story_id"),
+        extra=extra,
     )
 
 

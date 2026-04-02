@@ -19,6 +19,7 @@ from autopilot.core.execution_plane import (
     build_execution_plane_project_detail,
     create_execution_command_approval,
     create_execution_command_issue,
+    cancel_execution_plane_runtime_agent_task,
     execute_execution_plane_agent_action_with_run,
     execute_execution_plane_agent_actions,
     execute_execution_plane_orchestrator_session_actions,
@@ -116,6 +117,11 @@ class ToolPermissionRuntimeDecisionRequest(BaseModel):
     actor: str = "human"
     note: str = ""
     source: Literal["user", "channel"] = "user"
+
+
+class RuntimeAgentTaskCancelRequest(BaseModel):
+    actor: str = "human"
+    note: str = ""
 
 
 class AgentActionExecutionRequest(BaseModel):
@@ -922,6 +928,27 @@ async def get_execution_runtime_agent_task(task_id: str) -> dict[str, object]:
     config = get_config()
     try:
         return get_execution_plane_runtime_agent_task(config, task_id)
+    except KeyError as exc:
+        raise HTTPException(404, f"Runtime agent task {task_id} not found") from exc
+
+
+@router.post("/agents/tasks/{task_id}/cancel")
+async def cancel_execution_runtime_agent_task(
+    task_id: str,
+    request: RuntimeAgentTaskCancelRequest | None = None,
+) -> dict[str, object]:
+    config = get_config()
+    payload = request or RuntimeAgentTaskCancelRequest()
+    try:
+        return {
+            "status": "ok",
+            **cancel_execution_plane_runtime_agent_task(
+                config,
+                task_id,
+                actor=payload.actor,
+                note=payload.note,
+            ),
+        }
     except KeyError as exc:
         raise HTTPException(404, f"Runtime agent task {task_id} not found") from exc
 
