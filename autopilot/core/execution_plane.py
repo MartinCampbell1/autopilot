@@ -2901,6 +2901,127 @@ def wait_for_execution_plane_agent_action_run_async_settlement(
     return _materialize_execution_plane_agent_action_run_record(config, refreshed)
 
 
+def cancel_execution_plane_agent_action_run_async_tasks(
+    config: AutopilotConfig,
+    run_id: str,
+    *,
+    actor: str = "control-plane",
+    note: str = "",
+) -> dict[str, Any]:
+    """Cancel active async follow-through linked to one runtime-agent action run."""
+
+    record = get_agent_action_batch_run(config, run_id)
+    if record is None:
+        raise KeyError(run_id)
+
+    run_payload = _materialize_execution_plane_agent_action_run_record(config, record)
+    active_tasks = [
+        dict(item)
+        for item in run_payload.get("async_tasks") or []
+        if isinstance(item, dict) and bool(item.get("active"))
+    ]
+    if not active_tasks:
+        return {
+            "status": "ok",
+            "run": run_payload,
+            "cancel_applied": False,
+            "cancelled_task_ids": [],
+            "message": "Runtime-agent action run has no active async tasks.",
+        }
+
+    actor_label = str(actor or "control-plane").strip() or "control-plane"
+    note_value = str(note or "").strip()
+    project_task_map: dict[str, list[dict[str, Any]]] = {}
+    active_task_ids: list[str] = []
+    seen_task_ids: set[str] = set()
+
+    for task in active_tasks:
+        task_id = str(task.get("id") or "").strip()
+        project_id = str(task.get("project_id") or "").strip()
+        if not task_id or not project_id:
+            continue
+        if task_id not in seen_task_ids:
+            seen_task_ids.add(task_id)
+            active_task_ids.append(task_id)
+        project_task_map.setdefault(project_id, []).append(task)
+
+    if not active_task_ids or not project_task_map:
+        return {
+            "status": "ok",
+            "run": run_payload,
+            "cancel_applied": False,
+            "cancelled_task_ids": [],
+            "message": "Runtime-agent action run has no cancellable async tasks.",
+        }
+
+    for project_id, project_tasks in project_task_map.items():
+        task_ids = [
+            str(task.get("id") or "").strip()
+            for task in project_tasks
+            if str(task.get("id") or "").strip()
+        ]
+        runtime_agent_ids = sorted(
+            {
+                str(runtime_agent_id).strip()
+                for task in project_tasks
+                for runtime_agent_id in [
+                    str(task.get("runtime_agent_id") or "").strip(),
+                    *[
+                        str(item or "").strip()
+                        for item in list(task.get("runtime_agent_ids") or [])
+                    ],
+                ]
+                if str(runtime_agent_id).strip()
+            }
+        )
+        pause_message = (
+            f"Project paused while cancelling async follow-through for action run `{run_id}` by {actor_label}."
+        )
+        if note_value:
+            pause_message = f"{pause_message} {note_value}"
+        pause_project_run(
+            config,
+            project_id,
+            message=pause_message,
+            extra={
+                "agent_action_run_id": run_id,
+                "runtime_agent_task_ids": task_ids,
+                "runtime_agent_ids": runtime_agent_ids,
+                "actor": actor_label,
+                "note": note_value,
+                "source": "execution_plane_agent_action_run_cancel_async",
+            },
+        )
+
+    refreshed = get_agent_action_batch_run(config, run_id)
+    if refreshed is None:
+        raise KeyError(run_id)
+    refreshed_payload = _materialize_execution_plane_agent_action_run_record(config, refreshed)
+    refreshed_tasks = {
+        str(task.get("id") or "").strip(): dict(task)
+        for task in refreshed_payload.get("async_tasks") or []
+        if isinstance(task, dict)
+    }
+    cancelled_task_ids = [
+        task_id
+        for task_id in active_task_ids
+        if str(refreshed_tasks.get(task_id, {}).get("status") or "").strip() == "cancelled"
+    ]
+    cancelled_count = len(cancelled_task_ids)
+    message = (
+        f"Cancelled async follow-through for {cancelled_count} task(s) linked to action run `{run_id}`."
+        if cancelled_count
+        else "Runtime-agent action run has no cancellable async tasks."
+    )
+    return {
+        "status": "ok",
+        "run": refreshed_payload,
+        "cancel_applied": bool(cancelled_task_ids),
+        "cancelled_task_ids": cancelled_task_ids,
+        "message": message,
+    }
+
+
 def list_execution_plane_runtime_agent_tasks(
     config: AutopilotConfig,
     *,

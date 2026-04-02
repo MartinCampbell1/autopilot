@@ -17,6 +17,7 @@ from autopilot.core.execution_plane import (
     apply_execution_command_approval,
     build_execution_plane_orchestrator_session_control,
     build_execution_plane_project_detail,
+    cancel_execution_plane_agent_action_run_async_tasks,
     create_execution_command_approval,
     create_execution_command_issue,
     cancel_execution_plane_runtime_agent_task,
@@ -894,6 +895,27 @@ async def get_execution_agent_action_run(
             except TimeoutError:
                 pass
         return get_execution_plane_agent_action_run(config, run_id)
+    except KeyError as exc:
+        raise HTTPException(404, f"Runtime agent action run {run_id} not found") from exc
+
+
+@router.post("/agents/action-runs/{run_id}/cancel-async")
+async def cancel_execution_agent_action_run_async(
+    run_id: str,
+    request: RuntimeAgentTaskCancelRequest | None = None,
+) -> dict[str, object]:
+    config = get_config()
+    payload = request or RuntimeAgentTaskCancelRequest()
+    try:
+        return {
+            "status": "ok",
+            **cancel_execution_plane_agent_action_run_async_tasks(
+                config,
+                run_id,
+                actor=payload.actor,
+                note=payload.note,
+            ),
+        }
     except KeyError as exc:
         raise HTTPException(404, f"Runtime agent action run {run_id} not found") from exc
 
