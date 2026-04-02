@@ -1,0 +1,84 @@
+"""Tests for the doctor CLI/report helpers."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+from autopilot.cli.doctor import _doctor_report
+from autopilot.core.onboarding import ProjectToolingReport
+
+
+def test_doctor_report_includes_runtime_diagnostics_and_dedupes_recommendations(monkeypatch, tmp_path: Path) -> None:
+    fake_config = type(
+        "_Config",
+        (),
+        {
+            "autopilot_home": tmp_path / ".autopilot",
+            "profiles_dir": tmp_path / ".autopilot" / "profiles",
+            "projects_yaml_path": tmp_path / ".autopilot" / "projects.yaml",
+        },
+    )()
+
+    monkeypatch.setattr("autopilot.cli.doctor.load_config", lambda path: fake_config)
+    monkeypatch.setattr("autopilot.cli.doctor.AccountManager", lambda profiles_dir, config: type("_Mgr", (), {"discover": lambda self: None})())
+    monkeypatch.setattr(
+        "autopilot.cli.doctor.build_provider_setup_snapshot",
+        lambda config, manager, refresh=False: {
+            "provider_configs": [],
+            "runtime_profiles": [],
+            "providers": {
+                "codex": {
+                    "cli_probe": {"status": "missing"},
+                    "source_session_required": True,
+                    "source_session_available": False,
+                    "managed_profile_count": 0,
+                }
+            },
+        },
+    )
+    monkeypatch.setattr(
+        "autopilot.cli.doctor.detect_project_tooling",
+        lambda project_path: ProjectToolingReport(
+            path=str(project_path),
+            exists=True,
+            git_present=True,
+            prd_present=False,
+            ralph_initialized=False,
+            gates=[],
+            notes=["No build/test/lint commands were auto-detected."],
+        ),
+    )
+    monkeypatch.setattr(
+        "autopilot.cli.doctor.build_runtime_diagnostics",
+        lambda **kwargs: {
+            "diagnostics": [
+                {
+                    "code": "stale_runtime_pid",
+                    "severity": "warning",
+                    "scope": "runtime",
+                    "message": "Stale runtime detected.",
+                    "fix": "Resume or pause this project to reconcile state before relying on its runtime status.",
+                },
+                {
+                    "code": "same_repo_multiple_paths",
+                    "severity": "info",
+                    "scope": "resume",
+                    "message": "Same repo observed in multiple paths.",
+                    "fix": "Use `autopilot resume` or `autopilot run --project-id ...` to disambiguate the intended clone/worktree.",
+                },
+            ],
+            "summary": {"error_count": 0, "warning_count": 1, "info_count": 1},
+        },
+    )
+
+    report = _doctor_report(
+        config_path=tmp_path / "config.yaml",
+        project_path=tmp_path / "project",
+        refresh=False,
+    )
+
+    assert report["runtime_diagnostics"]["summary"]["warning_count"] == 1
+    assert "Install or repair the codex CLI." in report["recommendations"]
+    assert "Run `autopilot init` to create a starter PRD and register the project." in report["recommendations"]
+    assert "Resume or pause this project to reconcile state before relying on its runtime status." in report["recommendations"]
+    assert len(report["recommendations"]) == len(set(report["recommendations"]))
