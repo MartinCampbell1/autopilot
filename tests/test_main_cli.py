@@ -220,6 +220,30 @@ def test_live_command_passes_options(monkeypatch) -> None:
     assert captured == {"refresh_sec": 5.0, "once": True}
 
 
+def test_resume_command_passes_options(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_resume(project_path: str = ".", *, project_id: str | None = None, json_output: bool = False) -> None:
+        captured.update(
+            {
+                "project_path": project_path,
+                "project_id": project_id,
+                "json_output": json_output,
+            }
+        )
+
+    monkeypatch.setattr("autopilot.cli.resume.resume", fake_resume)
+
+    result = runner.invoke(app, ["resume", "/tmp/project", "--project-id", "proj_123", "--json"])
+
+    assert result.exit_code == 0
+    assert captured == {
+        "project_path": "/tmp/project",
+        "project_id": "proj_123",
+        "json_output": True,
+    }
+
+
 def test_preview_actions_command_passes_options(monkeypatch) -> None:
     captured: dict[str, object] = {}
 
