@@ -2,13 +2,20 @@
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 from pathlib import Path
 from typing import Any
 
 from autopilot.core.config import AutopilotConfig
 from autopilot.core.project_store import load_project_state, load_projects_registry
-from autopilot.core.repo_registry import build_repo_registry_key, get_git_remote_url, get_known_paths_for_repo
+from autopilot.core.repo_registry import (
+    build_repo_registry_key,
+    find_canonical_git_root,
+    get_git_remote_url,
+    get_known_paths_for_repo,
+)
+from autopilot.core.shipping import ShippingError, get_current_branch, get_default_branch
 from autopilot.core.worktree import resolve_story_worktree_owner
 
 EVENT_LOG_WARN_BYTES = 10 * 1024 * 1024
@@ -61,6 +68,49 @@ def _diagnostic(
     }
 
 
+def _git_output(cwd: Path, *args: str) -> str:
+    try:
+        result = subprocess.run(
+            ["git", *args],
+            cwd=str(cwd),
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (FileNotFoundError, PermissionError, subprocess.TimeoutExpired, NotADirectoryError):
+        return ""
+    if result.returncode != 0:
+        return ""
+    return str(result.stdout or "").strip()
+
+
+def _git_ref_exists(cwd: Path, ref_name: str) -> bool:
+    return bool(_git_output(cwd, "rev-parse", "--verify", ref_name))
+
+
+def _resolve_base_ref(cwd: Path, base_branch: str) -> str:
+    remote_ref = f"refs/remotes/origin/{base_branch}"
+    local_ref = f"refs/heads/{base_branch}"
+    if _git_ref_exists(cwd, remote_ref):
+        return f"origin/{base_branch}"
+    if _git_ref_exists(cwd, local_ref):
+        return base_branch
+    return ""
+
+
+def _working_tree_dirty(cwd: Path) -> bool:
+    return bool(_git_output(cwd, "status", "--porcelain"))
+
+
+def _changed_file_count(cwd: Path, base_ref: str) -> int | None:
+    if not base_ref:
+        return None
+    output = _git_output(cwd, "diff", "--name-only", f"{base_ref}...HEAD", "--")
+    if output == "":
+        return 0
+    return len([line for line in output.splitlines() if line.strip()])
+
+
 def build_runtime_diagnostics(
     *,
     config: AutopilotConfig,
@@ -83,6 +133,7 @@ def build_runtime_diagnostics(
         )
 
     worktree_owner = resolve_story_worktree_owner(normalized_project_path)
+    current_checkout_root = worktree_owner[1] if worktree_owner is not None else (find_canonical_git_root(normalized_project_path) or normalized_project_path)
     effective_project_root = worktree_owner[0] if worktree_owner is not None else normalized_project_path
     current_repo_key = build_repo_registry_key(effective_project_root)
     same_repo_paths = sorted(get_known_paths_for_repo(config, repo_key=current_repo_key)) if current_repo_key else []
@@ -119,6 +170,89 @@ def build_runtime_diagnostics(
                 metadata={"paths": same_repo_paths},
             )
         )
+
+    current_branch = ""
+    default_branch = ""
+    changed_file_count: int | None = None
+    github_cli_available = bool(shutil.which("gh"))
+    checkout_repo_root = find_canonical_git_root(current_checkout_root)
+    if checkout_repo_root is not None:
+        if not github_cli_available:
+            diagnostics.append(
+                _diagnostic(
+                    code="github_cli_missing",
+                    severity="warning",
+                    scope="ship",
+                    message="GitHub CLI `gh` is not installed, so local ship cannot create pull requests.",
+                    fix="Install GitHub CLI and run `gh auth login` before relying on `autopilot ship`.",
+                    metadata={"path": str(checkout_repo_root)},
+                )
+            )
+
+        try:
+            current_branch = get_current_branch(checkout_repo_root)
+        except ShippingError as exc:
+            diagnostics.append(
+                _diagnostic(
+                    code="checkout_detached",
+                    severity="warning",
+                    scope="ship",
+                    message=str(exc),
+                    fix="Check out a named branch before using review and ship flows.",
+                    metadata={"path": str(checkout_repo_root)},
+                )
+            )
+        try:
+            default_branch = get_default_branch(checkout_repo_root)
+        except ShippingError as exc:
+            diagnostics.append(
+                _diagnostic(
+                    code="default_branch_unknown",
+                    severity="warning",
+                    scope="ship",
+                    message=str(exc),
+                    fix="Fetch the repo's default branch or pass an explicit base branch to review/ship commands.",
+                    metadata={"path": str(checkout_repo_root)},
+                )
+            )
+
+        if current_branch and default_branch and current_branch == default_branch:
+            diagnostics.append(
+                _diagnostic(
+                    code="protected_branch_checked_out",
+                    severity="warning",
+                    scope="ship",
+                    message=f"Current checkout is on the default branch `{current_branch}`.",
+                    fix="Create or switch to a feature branch before using `autopilot ship`.",
+                    metadata={"branch": current_branch, "base_branch": default_branch},
+                )
+            )
+
+        if _working_tree_dirty(checkout_repo_root):
+            diagnostics.append(
+                _diagnostic(
+                    code="working_tree_dirty",
+                    severity="info",
+                    scope="review",
+                    message="Working tree has uncommitted changes.",
+                    fix="Commit or stash local edits before treating review or ship results as durable handoff state.",
+                    metadata={"path": str(checkout_repo_root)},
+                )
+            )
+
+        base_ref = _resolve_base_ref(checkout_repo_root, default_branch) if default_branch else ""
+        changed_file_count = _changed_file_count(checkout_repo_root, base_ref)
+        if changed_file_count == 0 and current_branch and default_branch and current_branch != default_branch:
+            diagnostics.append(
+                _diagnostic(
+                    code="no_diff_against_base",
+                    severity="info",
+                    scope="ship",
+                    message=f"Current branch `{current_branch}` has no changes against `{default_branch}`.",
+                    fix="Make or commit changes before expecting review or ship to produce a meaningful PR.",
+                    metadata={"branch": current_branch, "base_branch": default_branch},
+                )
+            )
 
     if worktree_owner is not None:
         diagnostics.append(
@@ -177,8 +311,13 @@ def build_runtime_diagnostics(
 
     return {
         "project_path": str(normalized_project_path),
+        "current_checkout_root": str(current_checkout_root),
         "effective_project_root": str(effective_project_root),
         "current_repo_key": current_repo_key,
+        "current_branch": current_branch,
+        "default_branch": default_branch,
+        "github_cli_available": github_cli_available,
+        "changed_file_count": changed_file_count,
         "same_repo_known_paths": same_repo_paths,
         "related_project_ids": [str(project["id"]) for project in related_projects],
         "diagnostics": diagnostics,
