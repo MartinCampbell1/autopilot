@@ -1482,6 +1482,98 @@ def test_execution_plane_runtime_agent_task_surfaces_cancelled_settlement_proven
 
 
 @patch("autopilot.core.execution_plane.generate_prd_from_spec")
+def test_execution_plane_runtime_agent_task_cancel_route_pauses_project_and_cancels_task(
+    mock_generate_prd_from_spec,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    client = _build_client(config, monkeypatch)
+    mock_generate_prd_from_spec.return_value = {
+        "title": "FounderOS Copilot",
+        "description": "Execution-ready FounderOS project.",
+        "stories": [{"id": 1, "title": "Bootstrap", "description": "Create the app shell"}],
+    }
+
+    created = _create_execution_project(client, tmp_path / "async-task-cancel-route-project")
+    project_id = created["project"]["project_id"]
+    session = _create_orchestrator_session(
+        client,
+        project_ids=[project_id],
+        actor="founderos",
+        title="Runtime task cancel route",
+    )
+
+    task = create_or_reuse_runtime_agent_task(
+        config,
+        project_id=project_id,
+        command="launch",
+        actor="founderos",
+        reason="Launch background execution.",
+        orchestrator_session_id=session["id"],
+        runtime_agent_ids=["runtime-agent-1"],
+    )
+
+    response = client.post(
+        f"/api/execution-plane/agents/tasks/{task.id}/cancel",
+        json={"actor": "martin", "note": "Stop background follow-through."},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "ok"
+    assert payload["cancel_applied"] is True
+    assert "by martin" in payload["message"]
+    assert payload["task"]["id"] == task.id
+    assert payload["task"]["status"] == "cancelled"
+    assert payload["task"]["settlement_reason"] == "paused"
+    assert payload["task"]["settlement_source"] == "project_state"
+
+    state = load_project_state(config, project_id)
+    assert state["status"] == "paused"
+    assert state["paused"] is True
+
+
+@patch("autopilot.core.execution_plane.generate_prd_from_spec")
+def test_execution_plane_runtime_agent_task_cancel_route_is_noop_for_terminal_task(
+    mock_generate_prd_from_spec,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    client = _build_client(config, monkeypatch)
+    mock_generate_prd_from_spec.return_value = {
+        "title": "FounderOS Copilot",
+        "description": "Execution-ready FounderOS project.",
+        "stories": [{"id": 1, "title": "Bootstrap", "description": "Create the app shell"}],
+    }
+
+    created = _create_execution_project(client, tmp_path / "async-task-cancel-terminal-project")
+    project_id = created["project"]["project_id"]
+
+    task = create_or_reuse_runtime_agent_task(
+        config,
+        project_id=project_id,
+        command="launch",
+        actor="founderos",
+        reason="Launch background execution.",
+        runtime_agent_ids=["runtime-agent-1"],
+    )
+
+    state = load_project_state(config, project_id)
+    state["status"] = "completed"
+    state["paused"] = False
+    state["finished_at"] = "2026-04-01T12:50:00+00:00"
+    save_project_state(config, project_id, state)
+
+    response = client.post(f"/api/execution-plane/agents/tasks/{task.id}/cancel")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "ok"
+    assert payload["cancel_applied"] is False
+    assert payload["task"]["status"] == "completed"
+
+
+@patch("autopilot.core.execution_plane.generate_prd_from_spec")
 def test_execution_plane_agent_detail_surfaces_waiting_async_task_only(
     mock_generate_prd_from_spec,
     tmp_path: Path,

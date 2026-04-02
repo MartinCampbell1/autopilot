@@ -2942,6 +2942,52 @@ def get_execution_plane_runtime_agent_task(
     return _materialize_execution_plane_runtime_agent_task_record(refresh_runtime_agent_task(config, task))
 
 
+def cancel_execution_plane_runtime_agent_task(
+    config: AutopilotConfig,
+    task_id: str,
+    *,
+    actor: str = "control-plane",
+    note: str = "",
+) -> dict[str, Any]:
+    """Cancel one active runtime-agent task by pausing the owning project run."""
+
+    task = get_runtime_agent_task(config, task_id)
+    if task is None:
+        raise KeyError(task_id)
+    refreshed = refresh_runtime_agent_task(config, task)
+    if refreshed.status in {"completed", "failed", "cancelled"}:
+        return {
+            "task": _materialize_execution_plane_runtime_agent_task_record(refreshed),
+            "cancel_applied": False,
+            "message": "Runtime-agent task is already terminal.",
+        }
+
+    actor_label = str(actor or "control-plane").strip() or "control-plane"
+    note_value = str(note or "").strip()
+    pause_message = f"Project paused while cancelling runtime-agent task `{refreshed.id}` by {actor_label}."
+    if note_value:
+        pause_message = f"{pause_message} {note_value}"
+    pause_project_run(
+        config,
+        refreshed.project_id,
+        message=pause_message,
+        extra={
+            "runtime_agent_task_id": refreshed.id,
+            "runtime_agent_ids": list(refreshed.runtime_agent_ids),
+            "command": refreshed.command,
+            "actor": actor_label,
+            "note": note_value,
+            "source": "execution_plane_runtime_agent_task_cancel",
+        },
+    )
+    cancelled = refresh_runtime_agent_task(config, refreshed.id)
+    return {
+        "task": _materialize_execution_plane_runtime_agent_task_record(cancelled),
+        "cancel_applied": True,
+        "message": pause_message,
+    }
+
+
 def get_execution_plane_runtime_agent_task_output(
     config: AutopilotConfig,
     task_id: str,
