@@ -25,6 +25,7 @@ from autopilot.core.control_messages import (
     make_control_success_response,
 )
 from autopilot.core.execution_plane import (
+    cancel_execution_plane_agent_action_run_async_tasks,
     cancel_execution_plane_runtime_agent_task,
     get_execution_plane_agent_action_run,
     list_execution_plane_agent_action_runs,
@@ -635,6 +636,25 @@ class HeadlessControlSession:
             raise KeyError(run_id)
         return {"run": payload}
 
+    def cancel_runtime_agent_action_run_payload(self, request: Any) -> dict[str, Any]:
+        """Cancel async follow-through for one runtime-agent action run."""
+
+        run_id = str(request.run_id or "").strip()
+        run_payload = get_execution_plane_agent_action_run(self.config, run_id)
+        project_ids = {
+            str(item).strip()
+            for item in (run_payload.get("project_ids") or [])
+            if str(item).strip()
+        }
+        if self.project_id not in project_ids:
+            raise KeyError(run_id)
+        return cancel_execution_plane_agent_action_run_async_tasks(
+            self.config,
+            run_id,
+            actor=str(request.actor or "human"),
+            note=str(request.note or ""),
+        )
+
     def list_runtime_agent_action_runs_payload(self, request: Any) -> dict[str, Any]:
         """Return project-scoped runtime-agent action runs for the current headless project."""
 
@@ -753,6 +773,20 @@ class HeadlessControlSession:
         if subtype == "get_runtime_agent_action_run":
             try:
                 payload = self.get_runtime_agent_action_run_payload(request.request)
+            except KeyError:
+                return make_control_error_response(
+                    request.request_id,
+                    error=f"Runtime-agent action run `{request.request.run_id}` was not found in this session.",
+                    session_id=self.session_id,
+                )
+            return make_control_success_response(
+                request.request_id,
+                response=payload,
+                session_id=self.session_id,
+            )
+        if subtype == "cancel_runtime_agent_action_run":
+            try:
+                payload = self.cancel_runtime_agent_action_run_payload(request.request)
             except KeyError:
                 return make_control_error_response(
                     request.request_id,

@@ -1103,6 +1103,115 @@ def test_headless_control_can_get_runtime_agent_action_run_and_wait_for_async_se
     assert settled_response.response.response["run"]["async_tasks"][0]["id"] == task.id
 
 
+def test_headless_control_can_cancel_runtime_agent_action_run_async_follow_through(tmp_path: Path) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    project = _create_project(config, tmp_path / "project")
+    task = create_or_reuse_runtime_agent_task(
+        config,
+        project_id=str(project["id"]),
+        command="launch",
+        actor="founderos",
+        reason="Launch background work.",
+        orchestrator_session_id="sess_headless",
+        runtime_agent_ids=["proj_headless_runtime:1:worker:a"],
+    )
+    run = create_agent_action_batch_run(
+        config,
+        run_kind="single_action",
+        orchestrator_session_id="sess_headless",
+        actor="founderos",
+        mode="auto",
+        selection={"mode": "single_action", "project_id": str(project["id"])},
+        summary={"selected_count": 1, "processed_count": 1, "status_counts": {"ok": 1}},
+        results=[{"status": "ok", "command_result": {"command": "launch"}, "async_task": {"id": task.id}}],
+        status="ok",
+        project_ids=[str(project["id"])],
+        runtime_agent_ids=["proj_headless_runtime:1:worker:a"],
+    )
+    link_runtime_agent_task_run(config, task.id, agent_action_run_id=run.id)
+    session = create_headless_control_session(config, project_entry=project, session_id="sess_headless")
+
+    response = session.handle_request(
+        {
+            "type": "control_request",
+            "request_id": "req_cancel_runtime_agent_action_run",
+            "request": {
+                "subtype": "cancel_runtime_agent_action_run",
+                "run_id": run.id,
+                "actor": "martin",
+                "note": "Stop async follow-through.",
+            },
+            "session_id": "sess_headless",
+        }
+    )
+
+    assert response.response.subtype == "success"
+    assert response.response.response["status"] == "ok"
+    assert response.response.response["cancel_applied"] is True
+    assert response.response.response["cancelled_task_ids"] == [task.id]
+    assert response.response.response["run"]["id"] == run.id
+    assert response.response.response["run"]["completion_state"] == "completed"
+    assert response.response.response["run"]["async_task_status_counts"]["cancelled"] == 1
+    assert response.response.response["run"]["async_tasks"][0]["status"] == "cancelled"
+    state = ensure_project_state(config, project, seed_mode="migrate")
+    assert state["status"] == "paused"
+    assert state["paused"] is True
+
+
+def test_headless_control_cancel_runtime_agent_action_run_is_noop_without_active_tasks(tmp_path: Path) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    project = _create_project(config, tmp_path / "project")
+    task = create_or_reuse_runtime_agent_task(
+        config,
+        project_id=str(project["id"]),
+        command="launch",
+        actor="founderos",
+        reason="Launch background work.",
+        orchestrator_session_id="sess_headless",
+        runtime_agent_ids=["proj_headless_runtime:1:worker:a"],
+    )
+    run = create_agent_action_batch_run(
+        config,
+        run_kind="single_action",
+        orchestrator_session_id="sess_headless",
+        actor="founderos",
+        mode="auto",
+        selection={"mode": "single_action", "project_id": str(project["id"])},
+        summary={"selected_count": 1, "processed_count": 1, "status_counts": {"ok": 1}},
+        results=[{"status": "ok", "command_result": {"command": "launch"}, "async_task": {"id": task.id}}],
+        status="ok",
+        project_ids=[str(project["id"])],
+        runtime_agent_ids=["proj_headless_runtime:1:worker:a"],
+    )
+    link_runtime_agent_task_run(config, task.id, agent_action_run_id=run.id)
+    state = ensure_project_state(config, project, seed_mode="migrate")
+    state["status"] = "completed"
+    state["paused"] = False
+    state["finished_at"] = "2026-04-02T00:05:00+00:00"
+    save_project_state(config, project["id"], state)
+
+    session = create_headless_control_session(config, project_entry=project, session_id="sess_headless")
+    response = session.handle_request(
+        {
+            "type": "control_request",
+            "request_id": "req_cancel_runtime_agent_action_run_noop",
+            "request": {
+                "subtype": "cancel_runtime_agent_action_run",
+                "run_id": run.id,
+            },
+            "session_id": "sess_headless",
+        }
+    )
+
+    assert response.response.subtype == "success"
+    assert response.response.response["status"] == "ok"
+    assert response.response.response["cancel_applied"] is False
+    assert response.response.response["cancelled_task_ids"] == []
+    assert response.response.response["run"]["id"] == run.id
+    assert response.response.response["run"]["completion_state"] == "completed"
+    assert response.response.response["run"]["async_task_status_counts"]["completed"] == 1
+
+
 def test_headless_control_can_list_runtime_agent_runs_and_tasks(tmp_path: Path) -> None:
     config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
     project = _create_project(config, tmp_path / "project")

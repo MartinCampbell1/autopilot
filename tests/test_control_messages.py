@@ -166,6 +166,30 @@ def test_parse_control_message_supports_runtime_agent_action_run_requests() -> N
     assert parsed.session_id == "sess_1"
 
 
+def test_parse_control_message_supports_runtime_agent_action_run_cancel_requests() -> None:
+    parsed = parse_control_message(
+        {
+            "type": "control_request",
+            "requestId": "req_cancel_run",
+            "request": {
+                "subtype": "cancel_runtime_agent_action_run",
+                "runId": "aar_123",
+                "actor": "martin",
+                "note": "Stop async follow-through.",
+            },
+            "sessionId": "sess_1",
+        }
+    )
+
+    assert parsed is not None
+    assert parsed.type == "control_request"
+    assert parsed.request.subtype == "cancel_runtime_agent_action_run"
+    assert parsed.request.run_id == "aar_123"
+    assert parsed.request.actor == "martin"
+    assert parsed.request.note == "Stop async follow-through."
+    assert parsed.session_id == "sess_1"
+
+
 def test_parse_control_message_supports_runtime_agent_listing_requests() -> None:
     parsed = parse_control_message(
         {
