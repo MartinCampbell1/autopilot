@@ -1431,6 +1431,10 @@ def _materialize_execution_plane_runtime_agent_task_record(
         "output_source_available": bool(record.output_source_available),
         "output_generated_from_project_state": str(record.output_origin or "").strip()
         == RUNTIME_AGENT_TASK_OUTPUT_ORIGIN_STATE_FALLBACK,
+        "settlement_source": str(record.settlement_source or "").strip(),
+        "settlement_reason": str(record.settlement_reason or "").strip(),
+        "settlement_state_status": str(record.settlement_state_status or "").strip(),
+        "settlement_state_timestamp": str(record.settlement_state_timestamp or "").strip(),
         "transcript_artifact_id": transcript_artifact_id,
         "transcript_artifact_ref": payload["transcript_artifact_ref"],
         "active": payload["active"],

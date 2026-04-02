@@ -765,6 +765,10 @@ export interface ExecutionRuntimeAgentTaskResumeContract {
   output_origin?: string;
   output_source_available?: boolean;
   output_generated_from_project_state?: boolean;
+  settlement_source?: string;
+  settlement_reason?: string;
+  settlement_state_status?: string;
+  settlement_state_timestamp?: string;
   transcript_artifact_id?: string;
   transcript_artifact_ref?: string;
   active: boolean;
@@ -792,6 +796,10 @@ export interface ExecutionRuntimeAgentTaskRecord {
   output_artifact_id: string;
   output_origin: string;
   output_source_available: boolean;
+  settlement_source: string;
+  settlement_reason: string;
+  settlement_state_status: string;
+  settlement_state_timestamp: string;
   output_preview: string;
   history: Array<Record<string, unknown>>;
   metadata: Record<string, unknown>;
