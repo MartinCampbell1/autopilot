@@ -8,6 +8,7 @@ import type {
   CreateProjectResult,
   ExecutionAgentActionBatchResult,
   ExecutionAgentActionExecuteResult,
+  ExecutionAgentActionRunCancelResponse,
   ExecutionAgentActionRunRecord,
   ExecutionRuntimeAgentTaskCancelResponse,
   ExecutionRuntimeAgentTaskOutputArtifact,
@@ -216,6 +217,27 @@ export async function fetchExecutionPlaneAgentActionRun(
   return jsonOrThrow<ExecutionAgentActionRunRecord>(
     res,
     `Failed to fetch runtime agent action run: ${res.status}`
+  );
+}
+
+export async function cancelExecutionPlaneAgentActionRunAsync(
+  runId: string,
+  options?: { actor?: string | null; note?: string | null }
+): Promise<ExecutionAgentActionRunCancelResponse> {
+  const res = await fetch(
+    `${API_BASE}/execution-plane/agents/action-runs/${encodeURIComponent(runId)}/cancel-async`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        actor: options?.actor ?? "dashboard-control-plane",
+        note: options?.note ?? "",
+      }),
+    }
+  );
+  return jsonOrThrow<ExecutionAgentActionRunCancelResponse>(
+    res,
+    `Failed to cancel async follow-through for runtime agent action run: ${res.status}`
   );
 }
 

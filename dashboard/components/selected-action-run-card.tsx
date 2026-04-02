@@ -31,6 +31,7 @@ type SelectedActionRunCardProps = {
   busyActionKey: string;
   onApplyPreviewRun: (run: ExecutionAgentActionRunRecord) => void;
   onWaitForAsyncSettlement?: (run: ExecutionAgentActionRunRecord) => void;
+  onCancelAsyncSettlement?: (run: ExecutionAgentActionRunRecord) => void;
   formatTimestamp: (value?: string | null) => string;
   formatScopeList: (items: string[], emptyText: string) => string;
   describeRunResult: (result: Record<string, unknown>) => RunResultDetails;
@@ -49,6 +50,7 @@ export function SelectedActionRunCard({
   busyActionKey,
   onApplyPreviewRun,
   onWaitForAsyncSettlement,
+  onCancelAsyncSettlement,
   formatTimestamp,
   formatScopeList,
   describeRunResult,
@@ -66,6 +68,7 @@ export function SelectedActionRunCard({
     ? `preview-apply:${toStringValue(selectedRun.preview_id, selectedRun.id)}`
     : "";
   const waitActionKey = selectedRun ? `run-wait:${selectedRun.id}` : "";
+  const cancelActionKey = selectedRun ? `run-cancel:${selectedRun.id}` : "";
   const canApplyPreview = Boolean(
     selectedRun?.dry_run &&
       selectedRun?.run_kind === "batch" &&
@@ -184,6 +187,19 @@ export function SelectedActionRunCard({
                     }}
                   >
                     {busyActionKey === waitActionKey ? "Waiting..." : "Wait for settle"}
+                  </Button>
+                )}
+                {selectedRun.completion_state === "pending_async" && onCancelAsyncSettlement && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-8 rounded-lg border-[#f4d7d4] bg-[#fff5f4] text-[12px] text-[#b42318] hover:bg-[#fdeae8]"
+                    disabled={Boolean(busyActionKey)}
+                    onClick={() => {
+                      onCancelAsyncSettlement(selectedRun);
+                    }}
+                  >
+                    {busyActionKey === cancelActionKey ? "Cancelling..." : "Cancel async"}
                   </Button>
                 )}
                 <Button

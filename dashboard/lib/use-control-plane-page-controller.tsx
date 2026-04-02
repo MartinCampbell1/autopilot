@@ -1,6 +1,7 @@
 "use client";
 import { useCallback, useMemo } from "react";
 import {
+  cancelExecutionPlaneAgentActionRunAsync,
   cancelExecutionPlaneRuntimeAgentTask,
   fetchExecutionPlaneRuntimeAgentTaskOutput,
   fetchExecutionPlaneRuntimeAgentTaskTranscript,
@@ -218,6 +219,7 @@ export function useControlPlanePageController(
   const {
     handleSSEEvent: handleRuntimeControlSSEEvent,
     requestGetRuntimeAgentActionRun,
+    requestCancelRuntimeAgentActionRun,
     requestGetRuntimeAgentTask,
     requestCancelRuntimeAgentTask,
     requestGetRuntimeAgentTaskOutput,
@@ -453,6 +455,65 @@ export function useControlPlanePageController(
       requestCancelRuntimeAgentTask,
       selectedAgentId,
       selectedSessionId,
+      setBusyActionKey,
+      setErrorMessage,
+      setNotice,
+    ]
+  );
+
+  const cancelRunAsyncFollowThrough = useCallback(
+    async (run: { id?: string | null; project_ids?: string[]; runtime_agent_ids?: string[]; orchestrator_session_id?: string | null }) => {
+      const runId = toStringValue(run.id);
+      if (!runId) return;
+      setBusyActionKey(`run-cancel:${runId}`);
+      setNotice("");
+      setErrorMessage("");
+      try {
+        const runtimeProject = projects.find(
+          (project) =>
+            (run.project_ids || []).includes(project.id)
+            && Boolean(project.runtime_control_available)
+            && Boolean(toStringValue(project.runtime_session_id))
+        );
+        const cancelled = runtimeProject
+          ? await requestCancelRuntimeAgentActionRun(runtimeProject.id, runId, {
+              actor: "dashboard-control-plane",
+              note: "Stop async follow-through from control plane.",
+              timeoutMs: 5000,
+            })
+          : await cancelExecutionPlaneAgentActionRunAsync(runId, {
+              actor: "dashboard-control-plane",
+              note: "Stop async follow-through from control plane.",
+            });
+        await loadOverview();
+        const sessionId = toStringValue(run.orchestrator_session_id);
+        if (sessionId) {
+          await loadSessionDetail(sessionId);
+        }
+        const selectedOrRunAgentId =
+          (selectedAgentId &&
+          (cancelled.run.runtime_agent_ids || run.runtime_agent_ids || []).includes(selectedAgentId))
+            ? selectedAgentId
+            : toStringValue((cancelled.run.runtime_agent_ids || run.runtime_agent_ids || [])[0]);
+        if (selectedOrRunAgentId) {
+          await loadAgentDetail(selectedOrRunAgentId);
+        }
+        setNotice(cancelled.message || `Run ${runId} cancel request processed.`);
+      } catch (error) {
+        setErrorMessage(
+          error instanceof Error ? error.message : "Failed to cancel async follow-through for run."
+        );
+      } finally {
+        setBusyActionKey("");
+      }
+    },
+    [
+      loadAgentDetail,
+      loadOverview,
+      loadSessionDetail,
+      projects,
+      requestCancelRuntimeAgentActionRun,
+      selectedAgentId,
       setBusyActionKey,
       setErrorMessage,
       setNotice,
@@ -1248,6 +1309,9 @@ export function useControlPlanePageController(
     },
     onWaitSelectedRunAsyncSettlement: (run) => {
       void waitForRunAsyncSettlement(run);
+    },
+    onCancelSelectedRunAsyncSettlement: (run) => {
+      void cancelRunAsyncFollowThrough(run);
     },
     formatScopeList,
     describeRunResult,

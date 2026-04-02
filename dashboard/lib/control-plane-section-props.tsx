@@ -38,6 +38,9 @@ type BuildWorkspaceSectionPropsArgs = {
   onWaitSelectedRunAsyncSettlement: (
     run: NonNullable<WorkspaceSectionProps["selectedActionRunCardProps"]["selectedRun"]>
   ) => void;
+  onCancelSelectedRunAsyncSettlement: (
+    run: NonNullable<WorkspaceSectionProps["selectedActionRunCardProps"]["selectedRun"]>
+  ) => void;
   formatScopeList: WorkspaceSectionProps["selectedActionRunCardProps"]["formatScopeList"];
   describeRunResult: WorkspaceSectionProps["selectedActionRunCardProps"]["describeRunResult"];
   toStringArray: WorkspaceSectionProps["selectedActionRunCardProps"]["toStringArray"];
@@ -180,6 +183,7 @@ export function buildWorkspaceSectionProps({
   busyActionKey,
   onApplySelectedPreviewRun,
   onWaitSelectedRunAsyncSettlement,
+  onCancelSelectedRunAsyncSettlement,
   formatScopeList,
   describeRunResult,
   toStringArray,
@@ -310,6 +314,10 @@ export function buildWorkspaceSectionProps({
       onWaitForAsyncSettlement: (run) => {
         if (!run) return;
         onWaitSelectedRunAsyncSettlement(run);
+      },
+      onCancelAsyncSettlement: (run) => {
+        if (!run) return;
+        onCancelSelectedRunAsyncSettlement(run);
       },
       formatTimestamp,
       formatScopeList,

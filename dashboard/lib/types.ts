@@ -824,6 +824,14 @@ export interface ExecutionRuntimeAgentTaskCancelResponse {
   message: string;
 }
 
+export interface ExecutionAgentActionRunCancelResponse {
+  status: string;
+  run: ExecutionAgentActionRunRecord;
+  cancel_applied: boolean;
+  cancelled_task_ids: string[];
+  message: string;
+}
+
 export interface ExecutionRuntimeAgentTaskOutputArtifact {
   id: string;
   owner_kind: string;

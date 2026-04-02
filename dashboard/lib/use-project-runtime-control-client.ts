@@ -5,6 +5,7 @@ import { requestProjectRuntimeControl } from "@/lib/api";
 import type {
   ControlRequestMessage,
   ControlResponseMessage,
+  ExecutionAgentActionRunCancelResponse,
   ExecutionAgentActionRunRecord,
   ExecutionRuntimeAgentTaskOutputArtifact,
   ExecutionRuntimeAgentTaskRecord,
@@ -730,6 +731,47 @@ export function useProjectRuntimeControlClient({
     [requestControlResponse]
   );
 
+  const requestCancelRuntimeAgentActionRun = useCallback(
+    async (
+      projectId: string,
+      runId: string,
+      options?: { actor?: string | null; note?: string | null; timeoutMs?: number }
+    ): Promise<ExecutionAgentActionRunCancelResponse> => {
+      const message = await requestControlResponse(
+        projectId,
+        {
+          subtype: "cancel_runtime_agent_action_run",
+          run_id: runId,
+          actor: options?.actor ?? "dashboard",
+          note: options?.note ?? "",
+        },
+        { timeoutMs: options?.timeoutMs }
+      );
+      if (message.response.subtype === "error") {
+        throw new Error(message.response.error);
+      }
+      if (!isRecord(message.response.response)) {
+        throw new Error("Runtime returned a malformed runtime-agent action run cancel payload.");
+      }
+      const run = parseExecutionAgentActionRunRecord(message.response.response.run);
+      if (!run) {
+        throw new Error("Runtime returned a malformed runtime-agent action run cancel payload.");
+      }
+      return {
+        status: String(message.response.response.status ?? "ok"),
+        run,
+        cancel_applied: Boolean(message.response.response.cancel_applied),
+        cancelled_task_ids: Array.isArray(message.response.response.cancelled_task_ids)
+          ? message.response.response.cancelled_task_ids
+              .map((item) => (typeof item === "string" ? item.trim() : ""))
+              .filter(Boolean)
+          : [],
+        message: String(message.response.response.message ?? ""),
+      };
+    },
+    [requestControlResponse]
+  );
+
   const requestGetRuntimeAgentTask = useCallback(
     async (
       projectId: string,
@@ -1036,6 +1078,7 @@ export function useProjectRuntimeControlClient({
       requestSetModel,
       requestSetPermissionMode,
       requestGetRuntimeAgentActionRun,
+      requestCancelRuntimeAgentActionRun,
       requestGetRuntimeAgentTask,
       requestGetRuntimeAgentTaskOutput,
       requestGetRuntimeAgentTaskTranscript,
@@ -1059,6 +1102,7 @@ export function useProjectRuntimeControlClient({
       requestContextUsage,
       requestControl,
       requestGetRuntimeAgentActionRun,
+      requestCancelRuntimeAgentActionRun,
       requestGetRuntimeAgentTask,
       requestGetRuntimeAgentTaskOutput,
       requestGetRuntimeAgentTaskTranscript,
