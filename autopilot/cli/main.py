@@ -116,6 +116,19 @@ def doctor(
 
 
 @app.command()
+def review(
+    project_path: str = typer.Argument(".", help="Project path to review locally."),
+    project_id: str | None = typer.Option(None, "--project-id", help="Optional registered project id for same-repo disambiguation."),
+    base_branch: str | None = typer.Option(None, "--base-branch", help="Override the detected review base branch."),
+    json_output: bool = typer.Option(False, "--json", help="Emit the review payload as JSON."),
+) -> None:
+    """Run a structured local review against the current checkout."""
+    from autopilot.cli.review import review as _review
+
+    _review(project_path, project_id=project_id, base_branch=base_branch, json_output=json_output)
+
+
+@app.command()
 def ship(
     project_path: str = typer.Argument(".", help="Project path to ship from the current branch."),
     message: str | None = typer.Option(None, "--message", help="Create one commit with this message before shipping."),

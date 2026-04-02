@@ -301,6 +301,49 @@ def test_ship_command_passes_options(monkeypatch) -> None:
     }
 
 
+def test_review_command_passes_options(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_review(
+        project_path: str = ".",
+        *,
+        project_id: str | None = None,
+        base_branch: str | None = None,
+        json_output: bool = False,
+    ) -> None:
+        captured.update(
+            {
+                "project_path": project_path,
+                "project_id": project_id,
+                "base_branch": base_branch,
+                "json_output": json_output,
+            }
+        )
+
+    monkeypatch.setattr("autopilot.cli.review.review", fake_review)
+
+    result = runner.invoke(
+        app,
+        [
+            "review",
+            "/tmp/project",
+            "--project-id",
+            "proj_123",
+            "--base-branch",
+            "release",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert captured == {
+        "project_path": "/tmp/project",
+        "project_id": "proj_123",
+        "base_branch": "release",
+        "json_output": True,
+    }
+
+
 def test_preview_actions_command_passes_options(monkeypatch) -> None:
     captured: dict[str, object] = {}
 
