@@ -92,6 +92,18 @@ def status() -> None:
 
 
 @app.command()
+def resume(
+    project_path: str = typer.Argument(".", help="Path used to locate related resume candidates."),
+    project_id: str | None = typer.Option(None, "--project-id", help="Resume one specific project id."),
+    json_output: bool = typer.Option(False, "--json", help="Emit the resume payload as JSON."),
+) -> None:
+    """Inspect resume candidates or resume one specific project."""
+    from autopilot.cli.resume import resume as _resume
+
+    _resume(project_path=project_path, project_id=project_id, json_output=json_output)
+
+
+@app.command()
 def doctor(
     project_path: str = typer.Argument(".", help="Path to inspect for onboarding and gates."),
     refresh: bool = typer.Option(False, "--refresh", help="Refresh provider diagnostics probes."),
