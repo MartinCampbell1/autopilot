@@ -13,6 +13,7 @@ from autopilot.core.project_store import (
     register_project,
     save_project_prd,
     save_project_state,
+    update_project_entry,
 )
 from autopilot.core.run_trace import append_trace_entry
 
@@ -60,6 +61,21 @@ def test_build_context_snapshot_surfaces_instruction_layers_and_recent_events(tm
         message="Iteration 1 started.",
     )
     append_trace_entry(config, project["id"], {"kind": "project_event", "event": "iteration_started", "story_id": 1})
+    project["verification_bootstrap"] = {
+        "artifact_relpath": ".agents/tasks/verifiers.json",
+        "updated_at": "2026-04-02T00:00:00+00:00",
+        "check_count": 2,
+    }
+    project["github_bootstrap"] = {
+        "workflow_relpath": ".github/workflows/autopilot-bootstrap.yml",
+        "updated_at": "2026-04-02T00:00:00+00:00",
+        "github_repo": "founderos/autopilot",
+    }
+    update_project_entry(config, project)
+    (project_dir / ".agents" / "tasks").mkdir(parents=True, exist_ok=True)
+    (project_dir / ".agents" / "tasks" / "verifiers.json").write_text("{}")
+    (project_dir / ".github" / "workflows").mkdir(parents=True, exist_ok=True)
+    (project_dir / ".github" / "workflows" / "autopilot-bootstrap.yml").write_text("name: Autopilot Checks\n")
 
     payload = build_context_snapshot(config, project_path=project_dir, event_limit=5)
 
@@ -67,6 +83,8 @@ def test_build_context_snapshot_surfaces_instruction_layers_and_recent_events(tm
     assert payload["status"]["runtime_session_id"] == "sess_ctx"
     assert payload["instruction_layers"]["guardrails"]["present"] is True
     assert payload["instruction_layers"]["discoveries"]["count"] == 1
+    assert payload["bootstrap"]["verification"]["artifact_exists"] is True
+    assert payload["bootstrap"]["github"]["workflow_exists"] is True
     assert payload["recent_events"][-1]["event"] == "iteration_started"
     assert payload["trace"]["summary"]["entry_count"] >= 1
     assert "status=running" in payload["microcompact"]

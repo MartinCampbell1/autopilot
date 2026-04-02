@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from autopilot.core.bootstrap_visibility import build_bootstrap_status
 from autopilot.core.config import AutopilotConfig
 from autopilot.core.project_store import build_project_detail, resolve_runtime_project_entry
 from autopilot.core.repo_registry import (
@@ -140,6 +141,10 @@ def build_context_snapshot(
             "latest_handoff": dict(detail.get("latest_handoff") or {}),
             "loop": dict(detail.get("delivery_loop") or {}),
         },
+        "bootstrap": build_bootstrap_status(
+            project_path=str(detail.get("path") or project["path"]),
+            project=project,
+        ),
         "instruction_layers": _instruction_layers(detail),
         "recent_events": recent_events_payload,
         "trace": {
