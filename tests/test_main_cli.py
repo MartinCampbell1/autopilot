@@ -244,6 +244,63 @@ def test_resume_command_passes_options(monkeypatch) -> None:
     }
 
 
+def test_ship_command_passes_options(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_ship(
+        project_path: str = ".",
+        *,
+        message: str | None = None,
+        title: str | None = None,
+        body: str | None = None,
+        draft: bool = False,
+        base_branch: str | None = None,
+        json_output: bool = False,
+    ) -> None:
+        captured.update(
+            {
+                "project_path": project_path,
+                "message": message,
+                "title": title,
+                "body": body,
+                "draft": draft,
+                "base_branch": base_branch,
+                "json_output": json_output,
+            }
+        )
+
+    monkeypatch.setattr("autopilot.cli.ship.ship", fake_ship)
+
+    result = runner.invoke(
+        app,
+        [
+            "ship",
+            "/tmp/project",
+            "--message",
+            "Ship it",
+            "--title",
+            "PR title",
+            "--body",
+            "PR body",
+            "--draft",
+            "--base-branch",
+            "release",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert captured == {
+        "project_path": "/tmp/project",
+        "message": "Ship it",
+        "title": "PR title",
+        "body": "PR body",
+        "draft": True,
+        "base_branch": "release",
+        "json_output": True,
+    }
+
+
 def test_preview_actions_command_passes_options(monkeypatch) -> None:
     captured: dict[str, object] = {}
 
