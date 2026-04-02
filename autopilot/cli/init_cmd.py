@@ -33,8 +33,26 @@ from autopilot.core.project_store import (
     save_project_prd,
     update_project_entry,
 )
+from autopilot.core.repo_registry import get_github_repo
 
 console = Console()
+
+
+def _next_steps(project_path: Path, *, prd_path: Path, tooling) -> list[str]:
+    steps = ["Run `autopilot doctor` to verify provider sessions and detected gates."]
+    if tooling.gates:
+        steps.append(
+            f"Run `autopilot init-verifiers {project_path}` to persist verifier checks for this checkout."
+        )
+    else:
+        steps.append("Add at least one reproducible build, test, or lint command, then re-run `autopilot init-verifiers`.")
+    if str(get_github_repo(project_path) or "").strip():
+        steps.append(
+            f"If you want managed CI bootstrap, switch to a feature branch and run `autopilot github {project_path}`."
+        )
+    steps.append(f"Edit {prd_path} and add your stories.")
+    steps.append(f"Run `autopilot run {project_path}` when the PRD is ready.")
+    return steps
 
 
 def init(
@@ -164,6 +182,5 @@ def init(
             console.print(f"  - {note}")
 
     console.print("\nNext steps:")
-    console.print("  1. Run `autopilot doctor` to verify provider sessions and detected gates.")
-    console.print(f"  2. Edit {prd_path} and add your stories.")
-    console.print(f"  3. Run `autopilot run {project}` when the PRD is ready.")
+    for index, step in enumerate(_next_steps(project, prd_path=prd_path, tooling=tooling), start=1):
+        console.print(f"  {index}. {step}")
