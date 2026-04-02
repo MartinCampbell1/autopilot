@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from autopilot.core.agent_mailbox import list_agent_mailbox_messages
@@ -104,6 +105,42 @@ def test_runtime_agent_task_stays_running_for_foreground_runtime_without_owner_p
     assert refreshed.metadata.get("project_runtime_pid") in {None, ""}
 
 
+def test_runtime_agent_task_reuses_active_task_for_same_runtime_owner(tmp_path: Path) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    project = _seed_project(config, tmp_path / "async-task-reuse-same-owner-project")
+
+    state = load_project_state(config, str(project["id"]))
+    state["status"] = "running"
+    state["paused"] = False
+    state["pid"] = os.getpid()
+    state["runtime_session_id"] = "sess_background_owner"
+    state["started_at"] = "2026-04-01T12:00:00+00:00"
+    save_project_state(config, str(project["id"]), state)
+
+    first = create_or_reuse_runtime_agent_task(
+        config,
+        project_id=str(project["id"]),
+        command="launch",
+        actor="founderos",
+        reason="Launch background work.",
+        orchestrator_session_id="ors_async_same_owner",
+        runtime_agent_ids=["proj:1:worker:a"],
+    )
+    second = create_or_reuse_runtime_agent_task(
+        config,
+        project_id=str(project["id"]),
+        command="launch",
+        actor="founderos",
+        reason="Launch background work.",
+        orchestrator_session_id="ors_async_same_owner",
+        runtime_agent_ids=["proj:1:worker:a"],
+    )
+
+    assert second.id == first.id
+    assert second.status == "running"
+    assert second.metadata["project_runtime_session_id"] == "sess_background_owner"
+
+
 def test_runtime_agent_task_marks_failed_when_owning_background_runtime_exits(tmp_path: Path) -> None:
     config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
     project = _seed_project(config, tmp_path / "async-task-runtime-exited-project")
@@ -144,6 +181,58 @@ def test_runtime_agent_task_marks_failed_when_owning_background_runtime_exits(tm
         message_type="runtime_agent_task_resolved",
     )
     assert any(message.payload["task_id"] == task.id for message in mailbox)
+
+
+def test_runtime_agent_task_create_or_reuse_creates_new_task_after_runtime_session_supersession(
+    tmp_path: Path,
+) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    project = _seed_project(config, tmp_path / "async-task-reuse-superseded-owner-project")
+
+    state = load_project_state(config, str(project["id"]))
+    state["status"] = "running"
+    state["paused"] = False
+    state["pid"] = 999_999
+    state["runtime_session_id"] = "sess_background_owner_a"
+    state["started_at"] = "2026-04-01T12:00:00+00:00"
+    save_project_state(config, str(project["id"]), state)
+
+    first = create_or_reuse_runtime_agent_task(
+        config,
+        project_id=str(project["id"]),
+        command="launch",
+        actor="founderos",
+        reason="Launch background work.",
+        orchestrator_session_id="ors_async_superseded_reuse",
+        runtime_agent_ids=["proj:1:worker:a"],
+    )
+
+    state = load_project_state(config, str(project["id"]))
+    state["status"] = "running"
+    state["paused"] = False
+    state["pid"] = 888_888
+    state["runtime_session_id"] = "sess_background_owner_b"
+    save_project_state(config, str(project["id"]), state)
+
+    second = create_or_reuse_runtime_agent_task(
+        config,
+        project_id=str(project["id"]),
+        command="launch",
+        actor="founderos",
+        reason="Launch background work.",
+        orchestrator_session_id="ors_async_superseded_reuse",
+        runtime_agent_ids=["proj:1:worker:a"],
+    )
+    first_refreshed = refresh_runtime_agent_task(config, first.id)
+
+    assert second.id != first.id
+    assert second.status == "running"
+    assert second.metadata["project_runtime_session_id"] == "sess_background_owner_b"
+    assert first_refreshed.status == "cancelled"
+    assert (
+        first_refreshed.settlement_reason
+        == RUNTIME_AGENT_TASK_SETTLEMENT_REASON_SUPERSEDED_RUNTIME_SESSION
+    )
 
 
 def test_runtime_agent_task_marks_cancelled_when_background_runtime_session_is_superseded(

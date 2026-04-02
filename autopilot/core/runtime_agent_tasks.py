@@ -403,11 +403,12 @@ def _matching_active_task(
         orchestrator_session_id=orchestrator_session_id or None,
         command=command,
     ):
-        if record.status not in {"queued", "running"}:
+        refreshed = refresh_runtime_agent_task(config, record)
+        if refreshed.status not in {"queued", "running"}:
             continue
-        if desired_runtime_agent_ids and not desired_runtime_agent_ids.intersection(set(record.runtime_agent_ids or [])):
+        if desired_runtime_agent_ids and not desired_runtime_agent_ids.intersection(set(refreshed.runtime_agent_ids or [])):
             continue
-        return record
+        return refreshed
     return None
 
 
