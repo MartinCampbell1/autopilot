@@ -817,6 +817,13 @@ export interface ExecutionRuntimeAgentTaskRecord {
   resume_contract?: ExecutionRuntimeAgentTaskResumeContract | null;
 }
 
+export interface ExecutionRuntimeAgentTaskCancelResponse {
+  status: string;
+  task: ExecutionRuntimeAgentTaskRecord;
+  cancel_applied: boolean;
+  message: string;
+}
+
 export interface ExecutionRuntimeAgentTaskOutputArtifact {
   id: string;
   owner_kind: string;

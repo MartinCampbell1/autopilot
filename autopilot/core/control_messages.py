@@ -160,6 +160,13 @@ class ControlGetRuntimeAgentTaskTranscriptRequest(BaseModel):
     task_id: str
 
 
+class ControlCancelRuntimeAgentTaskRequest(BaseModel):
+    subtype: Literal["cancel_runtime_agent_task"]
+    task_id: str
+    actor: str = "human"
+    note: str = ""
+
+
 class ControlListToolPermissionRuntimesRequest(BaseModel):
     subtype: Literal["list_tool_permission_runtimes"]
     runtime_agent_id: str | None = None
@@ -197,6 +204,7 @@ ControlRequestPayload = Annotated[
     | ControlListRuntimeAgentTasksRequest
     | ControlGetRuntimeAgentTaskOutputRequest
     | ControlGetRuntimeAgentTaskTranscriptRequest
+    | ControlCancelRuntimeAgentTaskRequest
     | ControlListToolPermissionRuntimesRequest
     | ControlGetToolPermissionRuntimeRequest
     | ControlResolveToolPermissionRuntimeRequest,

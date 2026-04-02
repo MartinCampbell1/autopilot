@@ -25,6 +25,7 @@ from autopilot.core.control_messages import (
     make_control_success_response,
 )
 from autopilot.core.execution_plane import (
+    cancel_execution_plane_runtime_agent_task,
     get_execution_plane_agent_action_run,
     list_execution_plane_agent_action_runs,
     list_execution_plane_runtime_agent_tasks,
@@ -675,6 +676,20 @@ class HeadlessControlSession:
             raise KeyError(task_id)
         return {"transcript": get_execution_plane_runtime_agent_task_transcript(self.config, task_id)}
 
+    def cancel_runtime_agent_task_payload(self, request: Any) -> dict[str, Any]:
+        """Cancel one runtime-agent task for the current headless project."""
+
+        task_id = str(request.task_id or "").strip()
+        task_payload = get_execution_plane_runtime_agent_task(self.config, task_id)
+        if str(task_payload.get("project_id") or "").strip() != self.project_id:
+            raise KeyError(task_id)
+        return cancel_execution_plane_runtime_agent_task(
+            self.config,
+            task_id,
+            actor=str(request.actor or "human"),
+            note=str(request.note or ""),
+        )
+
     def list_runtime_agent_tasks_payload(self, request: Any) -> dict[str, Any]:
         """Return project-scoped runtime-agent tasks for the current headless project."""
 
@@ -794,6 +809,20 @@ class HeadlessControlSession:
                 return make_control_error_response(
                     request.request_id,
                     error=f"Runtime-agent task `{request.request.task_id}` has no transcript artifact.",
+                    session_id=self.session_id,
+                )
+            return make_control_success_response(
+                request.request_id,
+                response=payload,
+                session_id=self.session_id,
+            )
+        if subtype == "cancel_runtime_agent_task":
+            try:
+                payload = self.cancel_runtime_agent_task_payload(request.request)
+            except KeyError:
+                return make_control_error_response(
+                    request.request_id,
+                    error=f"Runtime-agent task `{request.request.task_id}` was not found in this session.",
                     session_id=self.session_id,
                 )
             return make_control_success_response(
