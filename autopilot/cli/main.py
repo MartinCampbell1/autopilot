@@ -116,6 +116,30 @@ def doctor(
 
 
 @app.command()
+def ship(
+    project_path: str = typer.Argument(".", help="Project path to ship from the current branch."),
+    message: str | None = typer.Option(None, "--message", help="Create one commit with this message before shipping."),
+    title: str | None = typer.Option(None, "--title", help="Explicit pull request title."),
+    body: str | None = typer.Option(None, "--body", help="Explicit pull request body."),
+    draft: bool = typer.Option(False, "--draft", help="Create the pull request as a draft."),
+    base_branch: str | None = typer.Option(None, "--base-branch", help="Override the detected default branch."),
+    json_output: bool = typer.Option(False, "--json", help="Emit the ship payload as JSON."),
+) -> None:
+    """Commit, push, and open or reuse a pull request for the current branch."""
+    from autopilot.cli.ship import ship as _ship
+
+    _ship(
+        project_path,
+        message=message,
+        title=title,
+        body=body,
+        draft=draft,
+        base_branch=base_branch,
+        json_output=json_output,
+    )
+
+
+@app.command()
 def trace(
     project_path: str = typer.Argument(".", help="Path to the project directory."),
     project_id: str | None = typer.Option(None, "--project-id", help="Stable project id from the dashboard."),
