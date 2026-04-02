@@ -45,7 +45,6 @@ from autopilot.core.project_store import (
     emit_project_event,
     ensure_project_state,
     extract_structured_discoveries,
-    get_project_entry,
     interrupt_project_run,
     load_project_prd,
     load_projects_registry,
@@ -53,6 +52,7 @@ from autopilot.core.project_store import (
     requeue_recoverable_stuck_stories,
     record_discovery_markers,
     register_project,
+    resolve_runtime_project_entry,
     resolve_project_task_source,
     save_project_state,
     update_project_runtime,
@@ -149,10 +149,10 @@ def _run_on_schedule(
 
 
 def _load_or_register_project(config, project_path: Path, project_id: str | None, prd_path: str) -> dict:
-    project_entry = get_project_entry(
+    project_entry = resolve_runtime_project_entry(
         config,
-        project_id=project_id,
         project_path=project_path,
+        project_id=project_id,
         include_archived=True,
     )
     if project_entry is not None:
