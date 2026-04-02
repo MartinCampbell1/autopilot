@@ -344,6 +344,49 @@ def test_review_command_passes_options(monkeypatch) -> None:
     }
 
 
+def test_context_command_passes_options(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_context(
+        project_path: str = ".",
+        *,
+        project_id: str | None = None,
+        event_limit: int = 12,
+        json_output: bool = False,
+    ) -> None:
+        captured.update(
+            {
+                "project_path": project_path,
+                "project_id": project_id,
+                "event_limit": event_limit,
+                "json_output": json_output,
+            }
+        )
+
+    monkeypatch.setattr("autopilot.cli.context.context", fake_context)
+
+    result = runner.invoke(
+        app,
+        [
+            "context",
+            "/tmp/project",
+            "--project-id",
+            "proj_123",
+            "--event-limit",
+            "5",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert captured == {
+        "project_path": "/tmp/project",
+        "project_id": "proj_123",
+        "event_limit": 5,
+        "json_output": True,
+    }
+
+
 def test_preview_actions_command_passes_options(monkeypatch) -> None:
     captured: dict[str, object] = {}
 

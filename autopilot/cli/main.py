@@ -116,6 +116,19 @@ def doctor(
 
 
 @app.command()
+def context(
+    project_path: str = typer.Argument(".", help="Project path to inspect for operator context visibility."),
+    project_id: str | None = typer.Option(None, "--project-id", help="Optional registered project id for same-repo disambiguation."),
+    event_limit: int = typer.Option(12, "--event-limit", help="Maximum number of recent timeline events to include."),
+    json_output: bool = typer.Option(False, "--json", help="Emit the context payload as JSON."),
+) -> None:
+    """Inspect repo-aware operator context for one checkout."""
+    from autopilot.cli.context import context as _context
+
+    _context(project_path, project_id=project_id, event_limit=event_limit, json_output=json_output)
+
+
+@app.command()
 def review(
     project_path: str = typer.Argument(".", help="Project path to review locally."),
     project_id: str | None = typer.Option(None, "--project-id", help="Optional registered project id for same-repo disambiguation."),
