@@ -132,6 +132,13 @@ class ControlGetRuntimeAgentActionRunRequest(BaseModel):
     wait_timeout_ms: int | None = None
 
 
+class ControlCancelRuntimeAgentActionRunRequest(BaseModel):
+    subtype: Literal["cancel_runtime_agent_action_run"]
+    run_id: str
+    actor: str = "human"
+    note: str = ""
+
+
 class ControlListRuntimeAgentActionRunsRequest(BaseModel):
     subtype: Literal["list_runtime_agent_action_runs"]
     orchestrator_session_id: str | None = None
@@ -200,6 +207,7 @@ ControlRequestPayload = Annotated[
     | ControlGetContextUsageRequest
     | ControlGetRuntimeAgentTaskRequest
     | ControlGetRuntimeAgentActionRunRequest
+    | ControlCancelRuntimeAgentActionRunRequest
     | ControlListRuntimeAgentActionRunsRequest
     | ControlListRuntimeAgentTasksRequest
     | ControlGetRuntimeAgentTaskOutputRequest
