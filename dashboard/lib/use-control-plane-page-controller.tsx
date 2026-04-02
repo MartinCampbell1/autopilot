@@ -1468,6 +1468,8 @@ export function useControlPlanePageController(
           setSelectedRunResultIndex(0);
         }
       },
+      waitForRunAsyncSettlement,
+      cancelRunAsyncFollowThrough,
       refreshAsyncTask,
       waitForAsyncTaskSettlement,
       cancelAsyncTask,

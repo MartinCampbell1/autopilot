@@ -70,6 +70,8 @@ type RuntimeAgentSectionProps = {
     mode: "execute_now" | "request_approval"
   ) => void;
   onInspectAsyncFollowThrough: () => void;
+  onWaitForAsyncRunSettlement?: (run: ExecutionAgentActionRunRecord) => void;
+  onCancelAsyncRun?: (run: ExecutionAgentActionRunRecord) => void;
   onRefreshAsyncTask?: (task: ExecutionRuntimeAgentTaskRecord) => void;
   onWaitForAsyncTaskSettlement?: (task: ExecutionRuntimeAgentTaskRecord) => void;
   onCancelAsyncTask?: (task: ExecutionRuntimeAgentTaskRecord) => void;
@@ -92,6 +94,8 @@ export function RuntimeAgentSection({
   onFocusRuntimeAgent,
   onRunSuggestedCommand,
   onInspectAsyncFollowThrough,
+  onWaitForAsyncRunSettlement,
+  onCancelAsyncRun,
   onRefreshAsyncTask,
   onWaitForAsyncTaskSettlement,
   onCancelAsyncTask,
@@ -410,6 +414,34 @@ export function RuntimeAgentSection({
                       <p className="mt-2 text-[12px] text-[#6b6b6b]">
                         {run.completion_message || "Async follow-through is still running."}
                       </p>
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        {onWaitForAsyncRunSettlement && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-7 rounded-lg border-[#d6e9dc] bg-[#eef8f1] px-2 text-[11px] text-[#2b6e3f] hover:bg-[#e4f3e8]"
+                            disabled={Boolean(busyActionKey)}
+                            onClick={() => {
+                              onWaitForAsyncRunSettlement(run);
+                            }}
+                          >
+                            {busyActionKey === `run-wait:${run.id}` ? "Waiting..." : "Wait"}
+                          </Button>
+                        )}
+                        {onCancelAsyncRun && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-7 rounded-lg border-[#f0d0c9] bg-[#fff0ed] px-2 text-[11px] text-[#93370d] hover:bg-[#ffe7e1]"
+                            disabled={Boolean(busyActionKey)}
+                            onClick={() => {
+                              onCancelAsyncRun(run);
+                            }}
+                          >
+                            {busyActionKey === `run-cancel:${run.id}` ? "Cancelling..." : "Cancel"}
+                          </Button>
+                        )}
+                      </div>
                       <div className="mt-3 grid gap-2 sm:grid-cols-2">
                         <SessionMetric
                           label="Active Tasks"

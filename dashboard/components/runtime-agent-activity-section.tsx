@@ -20,6 +20,7 @@ type RunResultDetails = {
 type RuntimeAgentActivitySectionProps = {
   selectedAgent: ExecutionRuntimeAgentDetail;
   agentScopedRuns: ExecutionAgentActionRunRecord[];
+  busyActionKey: string;
   agentActivitySearch: string;
   onAgentActivitySearchChange: (value: string) => void;
   agentActivityFilter: string;
@@ -28,6 +29,8 @@ type RuntimeAgentActivitySectionProps = {
   selectedRunId: string;
   selectedRunResultIndex: number;
   onSelectRun: (runId: string, resultIndex: number) => void;
+  onWaitForAsyncSettlement?: (run: ExecutionAgentActionRunRecord) => void;
+  onCancelAsyncSettlement?: (run: ExecutionAgentActionRunRecord) => void;
   formatTimestamp: (value?: string | null) => string;
   toNumber: (value: unknown, fallback?: number) => number;
   describeRunResult: (result: Record<string, unknown>) => RunResultDetails;
@@ -43,6 +46,7 @@ type RuntimeAgentActivitySectionProps = {
 export function RuntimeAgentActivitySection({
   selectedAgent,
   agentScopedRuns,
+  busyActionKey,
   agentActivitySearch,
   onAgentActivitySearchChange,
   agentActivityFilter,
@@ -51,6 +55,8 @@ export function RuntimeAgentActivitySection({
   selectedRunId,
   selectedRunResultIndex,
   onSelectRun,
+  onWaitForAsyncSettlement,
+  onCancelAsyncSettlement,
   formatTimestamp,
   toNumber,
   describeRunResult,
@@ -121,6 +127,8 @@ export function RuntimeAgentActivitySection({
           <div className="mt-3 space-y-3">
             {filteredAgentScopedRuns.slice(0, 4).map((run) => {
               const selected = selectedRunId === run.id;
+              const waitActionKey = `run-wait:${run.id}`;
+              const cancelActionKey = `run-cancel:${run.id}`;
               return (
                 <div
                   key={`${selectedAgent.runtime_agent_id}-run-${run.id}`}
@@ -189,6 +197,32 @@ export function RuntimeAgentActivitySection({
                     >
                       {selected ? "Selected" : "Inspect run"}
                     </Button>
+                    {run.completion_state === "pending_async" && onWaitForAsyncSettlement && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-7 rounded-lg border-[#d6e9dc] bg-[#eef8f1] px-2 text-[11px] text-[#2b6e3f] hover:bg-[#e4f3e8]"
+                        disabled={Boolean(busyActionKey)}
+                        onClick={() => {
+                          onWaitForAsyncSettlement(run);
+                        }}
+                      >
+                        {busyActionKey === waitActionKey ? "Waiting..." : "Wait"}
+                      </Button>
+                    )}
+                    {run.completion_state === "pending_async" && onCancelAsyncSettlement && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-7 rounded-lg border-[#f0d0c9] bg-[#fff0ed] px-2 text-[11px] text-[#93370d] hover:bg-[#ffe7e1]"
+                        disabled={Boolean(busyActionKey)}
+                        onClick={() => {
+                          onCancelAsyncSettlement(run);
+                        }}
+                      >
+                        {busyActionKey === cancelActionKey ? "Cancelling..." : "Cancel"}
+                      </Button>
+                    )}
                   </div>
                 </div>
               );
