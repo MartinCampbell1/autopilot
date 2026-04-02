@@ -103,6 +103,7 @@ from autopilot.core.orchestrator_sessions import (
 )
 from autopilot.core.runtime_agents import build_runtime_agents, parse_runtime_agent_id
 from autopilot.core.runtime_agent_tasks import (
+    RUNTIME_AGENT_TASK_OUTPUT_ORIGIN_STATE_FALLBACK,
     RuntimeAgentTaskRecord,
     create_or_reuse_runtime_agent_task,
     get_runtime_agent_task,
@@ -1426,6 +1427,10 @@ def _materialize_execution_plane_runtime_agent_task_record(
         "runtime_agent_ids": list(record.runtime_agent_ids),
         "output_artifact_id": str(record.output_artifact_id or "").strip(),
         "output_artifact_ref": payload["output_artifact_ref"],
+        "output_origin": str(record.output_origin or "").strip(),
+        "output_source_available": bool(record.output_source_available),
+        "output_generated_from_project_state": str(record.output_origin or "").strip()
+        == RUNTIME_AGENT_TASK_OUTPUT_ORIGIN_STATE_FALLBACK,
         "transcript_artifact_id": transcript_artifact_id,
         "transcript_artifact_ref": payload["transcript_artifact_ref"],
         "active": payload["active"],

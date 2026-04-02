@@ -15,6 +15,8 @@ from autopilot.core.project_store import (
     save_project_state,
 )
 from autopilot.core.runtime_agent_tasks import (
+    RUNTIME_AGENT_TASK_OUTPUT_ORIGIN_SOURCE_LOG,
+    RUNTIME_AGENT_TASK_OUTPUT_ORIGIN_STATE_FALLBACK,
     create_or_reuse_runtime_agent_task,
     link_runtime_agent_task_run,
     list_runtime_agent_tasks,
@@ -102,7 +104,12 @@ def test_runtime_agent_task_transitions_to_completed_with_terminal_summary(tmp_p
     assert refreshed.result_summary == "Background run completed."
     assert refreshed.result_payload["project_status"] == "completed"
     assert refreshed.output_artifact_id
+    assert refreshed.output_origin == RUNTIME_AGENT_TASK_OUTPUT_ORIGIN_SOURCE_LOG
+    assert refreshed.output_source_available is True
     assert refreshed.result_payload["output_artifact_id"] == refreshed.output_artifact_id
+    assert refreshed.result_payload["output_origin"] == RUNTIME_AGENT_TASK_OUTPUT_ORIGIN_SOURCE_LOG
+    assert refreshed.result_payload["output_source_available"] is True
+    assert refreshed.result_payload["output_generated_from_project_state"] is False
     assert "worker finished cleanly" in refreshed.output_preview
     assert refreshed.completed_at == "2026-04-01T12:34:56+00:00"
 
@@ -110,7 +117,50 @@ def test_runtime_agent_task_transitions_to_completed_with_terminal_summary(tmp_p
     assert output_record is not None
     assert output_record.owner_kind == "runtime_agent_task"
     assert output_record.source_path == str(log_path)
+    assert output_record.metadata["output_origin"] == RUNTIME_AGENT_TASK_OUTPUT_ORIGIN_SOURCE_LOG
+    assert output_record.metadata["output_source_available"] is True
     assert "worker finished cleanly" in read_task_output_text(config, refreshed.output_artifact_id)
+
+
+def test_runtime_agent_task_marks_fallback_output_provenance_when_source_log_is_missing(tmp_path: Path) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    project = _seed_project(config, tmp_path / "async-task-fallback-project")
+
+    task = create_or_reuse_runtime_agent_task(
+        config,
+        project_id=str(project["id"]),
+        command="launch",
+        actor="founderos",
+        reason="Launch background work.",
+        runtime_agent_ids=["proj:1:worker:a"],
+    )
+
+    state = load_project_state(config, str(project["id"]))
+    state["status"] = "completed"
+    state["paused"] = False
+    state["finished_at"] = "2026-04-01T12:40:00+00:00"
+    save_project_state(config, str(project["id"]), state)
+
+    refreshed = refresh_runtime_agent_task(config, task.id)
+
+    assert refreshed.status == "completed"
+    assert refreshed.output_artifact_id
+    assert refreshed.output_origin == RUNTIME_AGENT_TASK_OUTPUT_ORIGIN_STATE_FALLBACK
+    assert refreshed.output_source_available is False
+    assert refreshed.result_payload["output_origin"] == RUNTIME_AGENT_TASK_OUTPUT_ORIGIN_STATE_FALLBACK
+    assert refreshed.result_payload["output_source_available"] is False
+    assert refreshed.result_payload["output_generated_from_project_state"] is True
+
+    output_record = get_task_output(config, refreshed.output_artifact_id)
+    assert output_record is not None
+    assert output_record.metadata["output_origin"] == RUNTIME_AGENT_TASK_OUTPUT_ORIGIN_STATE_FALLBACK
+    assert output_record.metadata["output_source_available"] is False
+    output_text = read_task_output_text(config, refreshed.output_artifact_id)
+    assert "Output provenance: synthesized from project state" in output_text
+
+    transcript_text = read_task_transcript_text(config, task_transcript_id("runtime_agent_task", task.id))
+    assert "Output Origin: project_state_fallback" in transcript_text
+    assert "Output Source Available: no" in transcript_text
 
 
 def test_runtime_agent_task_persists_transcript_history_and_run_link(tmp_path: Path) -> None:

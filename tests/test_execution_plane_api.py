@@ -1401,9 +1401,13 @@ def test_execution_plane_orchestrator_session_tracks_async_tasks_honestly(
     assert refreshed_detail["async_tasks"][0]["status"] == "completed"
     assert refreshed_detail["async_tasks"][0]["result_summary"] == "Background run completed."
     assert refreshed_detail["async_tasks"][0]["output_artifact_ref"].endswith(f"/{task.id}/output")
+    assert refreshed_detail["async_tasks"][0]["output_origin"] == "source_log"
+    assert refreshed_detail["async_tasks"][0]["output_source_available"] is True
     assert refreshed_detail["async_tasks"][0]["transcript_artifact_ref"].endswith(f"/{task.id}/transcript")
     assert refreshed_detail["async_tasks"][0]["resume_contract"]["task_id"] == task.id
     assert refreshed_detail["async_tasks"][0]["resume_contract"]["project_id"] == project_id
+    assert refreshed_detail["async_tasks"][0]["resume_contract"]["output_origin"] == "source_log"
+    assert refreshed_detail["async_tasks"][0]["resume_contract"]["output_generated_from_project_state"] is False
     assert refreshed_detail["runtime_state"] == "requires_action"
     assert refreshed_detail["pending_action"]["kind"] == "complete_session"
     assert refreshed_detail["summary"]["active_async_task_count"] == 0
@@ -1414,6 +1418,8 @@ def test_execution_plane_orchestrator_session_tracks_async_tasks_honestly(
     output_payload = output_response.json()
     assert output_payload["task_id"] == task.id
     assert output_payload["artifact_ref"].endswith(f"/{task.id}/output")
+    assert output_payload["metadata"]["output_origin"] == "source_log"
+    assert output_payload["metadata"]["output_source_available"] is True
     assert "launch finished" in output_payload["content"]
 
     transcript_response = client.get(f"/api/execution-plane/agents/tasks/{task.id}/transcript")
