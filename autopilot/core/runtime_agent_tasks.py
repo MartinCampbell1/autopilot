@@ -26,6 +26,8 @@ SUPPORTED_RUNTIME_AGENT_TASK_STATUSES = {
 }
 TERMINAL_RUNTIME_AGENT_TASK_STATUSES = {"completed", "failed", "cancelled"}
 TASK_HISTORY_LIMIT = 100
+RUNTIME_AGENT_TASK_OUTPUT_ORIGIN_SOURCE_LOG = "source_log"
+RUNTIME_AGENT_TASK_OUTPUT_ORIGIN_STATE_FALLBACK = "project_state_fallback"
 
 
 def _utcnow_iso() -> str:
@@ -77,6 +79,8 @@ class RuntimeAgentTaskRecord(BaseModel):
     result_payload: dict[str, Any] = Field(default_factory=dict)
     output_path: str = ""
     output_artifact_id: str = ""
+    output_origin: str = ""
+    output_source_available: bool = False
     output_preview: str = ""
     history: list[dict[str, Any]] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
@@ -165,6 +169,8 @@ def _render_runtime_agent_task_transcript(task: RuntimeAgentTaskRecord) -> str:
         f"Runtime Agents: {', '.join(task.runtime_agent_ids) or '-'}",
         f"Output Artifact ID: {task.output_artifact_id or '-'}",
         f"Output Path: {task.output_path or '-'}",
+        f"Output Origin: {task.output_origin or '-'}",
+        f"Output Source Available: {'yes' if task.output_source_available else 'no'}",
         "",
         "## Result",
         f"Summary: {task.result_summary or task.placeholder_result or '-'}",
@@ -216,6 +222,8 @@ def _persist_runtime_agent_task_transcript(
             "orchestrator_session_id": task.orchestrator_session_id,
             "agent_action_run_id": task.agent_action_run_id,
             "output_artifact_id": task.output_artifact_id,
+            "output_origin": task.output_origin,
+            "output_source_available": task.output_source_available,
         },
     )
 
@@ -245,6 +253,10 @@ def runtime_agent_task_resume_contract(task: RuntimeAgentTaskRecord) -> dict[str
         "runtime_agent_ids": list(task.runtime_agent_ids),
         "output_artifact_id": str(task.output_artifact_id or "").strip(),
         "output_artifact_ref": output_ref,
+        "output_origin": str(task.output_origin or "").strip(),
+        "output_source_available": bool(task.output_source_available),
+        "output_generated_from_project_state": str(task.output_origin or "").strip()
+        == RUNTIME_AGENT_TASK_OUTPUT_ORIGIN_STATE_FALLBACK,
         "transcript_artifact_id": transcript_id,
         "transcript_artifact_ref": transcript_ref,
         "active": active,
@@ -273,6 +285,10 @@ def runtime_agent_task_mailbox_payload(task: RuntimeAgentTaskRecord) -> dict[str
         "result_summary": task.result_summary or task.placeholder_result,
         "output_artifact_id": str(task.output_artifact_id or "").strip(),
         "output_artifact_ref": str(resume_contract.get("output_artifact_ref") or ""),
+        "output_origin": str(task.output_origin or "").strip(),
+        "output_source_available": bool(task.output_source_available),
+        "output_generated_from_project_state": str(task.output_origin or "").strip()
+        == RUNTIME_AGENT_TASK_OUTPUT_ORIGIN_STATE_FALLBACK,
         "transcript_artifact_id": str(resume_contract.get("transcript_artifact_id") or ""),
         "transcript_artifact_ref": str(resume_contract.get("transcript_artifact_ref") or ""),
         "artifact_ref": f"/api/execution-plane/agents/tasks/{task.id}",
@@ -580,12 +596,19 @@ def _terminal_task_update(
 ) -> RuntimeAgentTaskRecord:
     output_source_path = str(project_state.get("log_path") or task.output_path or "").strip()
     source_output = load_text_from_source(output_source_path)
+    output_origin = (
+        RUNTIME_AGENT_TASK_OUTPUT_ORIGIN_SOURCE_LOG
+        if source_output
+        else RUNTIME_AGENT_TASK_OUTPUT_ORIGIN_STATE_FALLBACK
+    )
+    output_source_available = bool(source_output)
     fallback_output = "\n".join(
         [
             f"Task: {task.id}",
             f"Command: {task.command}",
             f"Status: {status}",
             f"Summary: {summary}",
+            "Output provenance: synthesized from project state because no terminal source log output was available.",
             f"Project status: {str(project_state.get('status') or '')}",
             f"Finished at: {str(project_state.get('finished_at') or '')}",
             f"Last error: {str(project_state.get('last_error') or '')}",
@@ -604,6 +627,10 @@ def _terminal_task_update(
             "agent_action_run_id": task.agent_action_run_id,
             "command": task.command,
             "status": status,
+            "output_origin": output_origin,
+            "output_source_available": output_source_available,
+            "output_generated_from_project_state": output_origin
+            == RUNTIME_AGENT_TASK_OUTPUT_ORIGIN_STATE_FALLBACK,
         },
     )
 
@@ -618,8 +645,14 @@ def _terminal_task_update(
         "log_path": project_state.get("log_path"),
         "output_artifact_id": output_record.id,
         "output_source_path": output_source_path,
+        "output_origin": output_origin,
+        "output_source_available": output_source_available,
+        "output_generated_from_project_state": output_origin
+        == RUNTIME_AGENT_TASK_OUTPUT_ORIGIN_STATE_FALLBACK,
     }
     task.output_artifact_id = output_record.id
+    task.output_origin = output_origin
+    task.output_source_available = output_source_available
     task.output_preview = output_record.preview
     task.completed_at = str(project_state.get("finished_at") or "").strip() or _utcnow_iso()
     _append_task_history(
@@ -630,6 +663,8 @@ def _terminal_task_update(
         extra={
             "output_artifact_id": output_record.id,
             "output_source_path": output_source_path,
+            "output_origin": output_origin,
+            "output_source_available": output_source_available,
             "project_status": str(project_state.get("status") or ""),
         },
     )
