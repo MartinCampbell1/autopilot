@@ -130,6 +130,7 @@ type SelectedSessionContextCardProps = {
   ) => Promise<ExecutionRuntimeAgentTaskTranscriptArtifact>;
   onRefreshAsyncTask?: (task: ExecutionRuntimeAgentTaskRecord) => void;
   onWaitForAsyncTaskSettlement?: (task: ExecutionRuntimeAgentTaskRecord) => void;
+  onCancelAsyncTask?: (task: ExecutionRuntimeAgentTaskRecord) => void;
   onAdvanceCurrentQueue?: (() => void) | null;
 };
 
@@ -164,6 +165,7 @@ export function SelectedSessionContextCard({
   onLoadAsyncTaskTranscriptArtifact,
   onRefreshAsyncTask,
   onWaitForAsyncTaskSettlement,
+  onCancelAsyncTask,
   onAdvanceCurrentQueue,
 }: SelectedSessionContextCardProps) {
   const selectedAsyncTaskResetKey =
@@ -775,6 +777,21 @@ export function SelectedSessionContextCard({
                       {busyActionKey === `async-task-wait:${asyncTaskContext.id}`
                         ? "Waiting..."
                         : "Wait for settle"}
+                    </Button>
+                  )}
+                  {asyncTaskContext && onCancelAsyncTask && !asyncTaskContext.terminal && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-8 rounded-lg border-[#f0d0c9] bg-[#fff0ed] text-[12px] text-[#93370d] hover:bg-[#ffe7e1]"
+                      disabled={Boolean(busyActionKey)}
+                      onClick={() => {
+                        onCancelAsyncTask(asyncTaskContext);
+                      }}
+                    >
+                      {busyActionKey === `async-task-cancel:${asyncTaskContext.id}`
+                        ? "Cancelling..."
+                        : "Cancel task"}
                     </Button>
                   )}
                   {runtimeAgentId && (
