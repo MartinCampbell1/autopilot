@@ -66,8 +66,15 @@ def test_doctor_report_includes_runtime_diagnostics_and_dedupes_recommendations(
                     "message": "Same repo observed in multiple paths.",
                     "fix": "Use `autopilot resume` or `autopilot run --project-id ...` to disambiguate the intended clone/worktree.",
                 },
+                {
+                    "code": "github_cli_missing",
+                    "severity": "warning",
+                    "scope": "ship",
+                    "message": "GitHub CLI is missing.",
+                    "fix": "Install GitHub CLI and run `gh auth login` before relying on `autopilot ship`.",
+                },
             ],
-            "summary": {"error_count": 0, "warning_count": 1, "info_count": 1},
+            "summary": {"error_count": 0, "warning_count": 2, "info_count": 1},
         },
     )
 
@@ -77,8 +84,9 @@ def test_doctor_report_includes_runtime_diagnostics_and_dedupes_recommendations(
         refresh=False,
     )
 
-    assert report["runtime_diagnostics"]["summary"]["warning_count"] == 1
+    assert report["runtime_diagnostics"]["summary"]["warning_count"] == 2
     assert "Install or repair the codex CLI." in report["recommendations"]
     assert "Run `autopilot init` to create a starter PRD and register the project." in report["recommendations"]
     assert "Resume or pause this project to reconcile state before relying on its runtime status." in report["recommendations"]
+    assert "Install GitHub CLI and run `gh auth login` before relying on `autopilot ship`." in report["recommendations"]
     assert len(report["recommendations"]) == len(set(report["recommendations"]))
