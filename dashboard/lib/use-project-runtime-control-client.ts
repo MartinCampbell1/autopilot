@@ -8,6 +8,7 @@ import type {
   ExecutionAgentActionRunRecord,
   ExecutionRuntimeAgentTaskOutputArtifact,
   ExecutionRuntimeAgentTaskRecord,
+  ExecutionRuntimeAgentTaskCancelResponse,
   ExecutionRuntimeAgentTaskTranscriptArtifact,
   ProjectRuntimeControlExchangeRecord,
   ProjectRuntimeControlRequestResult,
@@ -826,6 +827,42 @@ export function useProjectRuntimeControlClient({
     [requestControlResponse]
   );
 
+  const requestCancelRuntimeAgentTask = useCallback(
+    async (
+      projectId: string,
+      taskId: string,
+      options?: { actor?: string | null; note?: string | null; timeoutMs?: number }
+    ): Promise<ExecutionRuntimeAgentTaskCancelResponse> => {
+      const message = await requestControlResponse(
+        projectId,
+        {
+          subtype: "cancel_runtime_agent_task",
+          task_id: taskId,
+          actor: options?.actor ?? "dashboard",
+          note: options?.note ?? "",
+        },
+        { timeoutMs: options?.timeoutMs }
+      );
+      if (message.response.subtype === "error") {
+        throw new Error(message.response.error);
+      }
+      if (!isRecord(message.response.response)) {
+        throw new Error("Runtime returned a malformed runtime-agent task cancel payload.");
+      }
+      const task = parseExecutionRuntimeAgentTaskRecord(message.response.response.task);
+      if (!task) {
+        throw new Error("Runtime returned a malformed runtime-agent task cancel payload.");
+      }
+      return {
+        status: String(message.response.response.status ?? "ok"),
+        task,
+        cancel_applied: Boolean(message.response.response.cancel_applied),
+        message: String(message.response.response.message ?? ""),
+      };
+    },
+    [requestControlResponse]
+  );
+
   const requestListToolPermissionRuntimes = useCallback(
     async (
       projectId: string,
@@ -1002,6 +1039,7 @@ export function useProjectRuntimeControlClient({
       requestGetRuntimeAgentTask,
       requestGetRuntimeAgentTaskOutput,
       requestGetRuntimeAgentTaskTranscript,
+      requestCancelRuntimeAgentTask,
       requestListToolPermissionRuntimes,
       requestGetToolPermissionRuntime,
       requestResolveToolPermissionRuntime,
@@ -1024,6 +1062,7 @@ export function useProjectRuntimeControlClient({
       requestGetRuntimeAgentTask,
       requestGetRuntimeAgentTaskOutput,
       requestGetRuntimeAgentTaskTranscript,
+      requestCancelRuntimeAgentTask,
       requestGetToolPermissionRuntime,
       requestInitialize,
       requestInterrupt,

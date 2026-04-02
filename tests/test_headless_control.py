@@ -875,6 +875,85 @@ def test_headless_control_can_get_runtime_agent_task_and_artifacts(tmp_path: Pat
     assert "Runtime Agent Task Transcript" in transcript_response.response.response["transcript"]["content"]
 
 
+def test_headless_control_can_cancel_runtime_agent_task(tmp_path: Path) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    project = _create_project(config, tmp_path / "project")
+    task = create_or_reuse_runtime_agent_task(
+        config,
+        project_id=str(project["id"]),
+        command="launch",
+        actor="founderos",
+        reason="Launch background work.",
+        orchestrator_session_id="sess_headless",
+        runtime_agent_ids=["proj_headless_runtime:1:worker:a"],
+    )
+    session = create_headless_control_session(config, project_entry=project, session_id="sess_headless")
+
+    response = session.handle_request(
+        {
+            "type": "control_request",
+            "request_id": "req_cancel_runtime_agent_task",
+            "request": {
+                "subtype": "cancel_runtime_agent_task",
+                "task_id": task.id,
+                "actor": "martin",
+                "note": "Stop the background task.",
+            },
+            "session_id": "sess_headless",
+        }
+    )
+
+    assert response.response.subtype == "success"
+    assert response.response.response["status"] == "ok"
+    assert response.response.response["cancel_applied"] is True
+    assert response.response.response["task"]["id"] == task.id
+    assert response.response.response["task"]["status"] == "cancelled"
+    assert response.response.response["task"]["settlement_reason"] == "paused"
+    assert "by martin" in response.response.response["message"]
+    state = ensure_project_state(config, project, seed_mode="migrate")
+    assert state["status"] == "paused"
+    assert state["paused"] is True
+
+
+def test_headless_control_cancel_runtime_agent_task_is_noop_for_terminal_task(tmp_path: Path) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    project = _create_project(config, tmp_path / "project")
+    task = create_or_reuse_runtime_agent_task(
+        config,
+        project_id=str(project["id"]),
+        command="launch",
+        actor="founderos",
+        reason="Launch background work.",
+        orchestrator_session_id="sess_headless",
+        runtime_agent_ids=["proj_headless_runtime:1:worker:a"],
+    )
+    state = ensure_project_state(config, project, seed_mode="migrate")
+    state["status"] = "completed"
+    state["paused"] = False
+    state["finished_at"] = "2026-04-01T12:50:00+00:00"
+    save_project_state(config, project["id"], state)
+
+    session = create_headless_control_session(config, project_entry=project, session_id="sess_headless")
+    response = session.handle_request(
+        {
+            "type": "control_request",
+            "request_id": "req_cancel_runtime_agent_task_terminal",
+            "request": {
+                "subtype": "cancel_runtime_agent_task",
+                "task_id": task.id,
+            },
+            "session_id": "sess_headless",
+        }
+    )
+
+    assert response.response.subtype == "success"
+    assert response.response.response["status"] == "ok"
+    assert response.response.response["cancel_applied"] is False
+    assert response.response.response["task"]["id"] == task.id
+    assert response.response.response["task"]["status"] == "completed"
+    assert response.response.response["message"] == "Runtime-agent task is already terminal."
+
+
 def test_headless_control_can_wait_for_runtime_agent_task_settlement(tmp_path: Path) -> None:
     config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
     project = _create_project(config, tmp_path / "project")

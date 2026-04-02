@@ -2957,6 +2957,7 @@ def cancel_execution_plane_runtime_agent_task(
     refreshed = refresh_runtime_agent_task(config, task)
     if refreshed.status in {"completed", "failed", "cancelled"}:
         return {
+            "status": "ok",
             "task": _materialize_execution_plane_runtime_agent_task_record(refreshed),
             "cancel_applied": False,
             "message": "Runtime-agent task is already terminal.",
@@ -2982,6 +2983,7 @@ def cancel_execution_plane_runtime_agent_task(
     )
     cancelled = refresh_runtime_agent_task(config, refreshed.id)
     return {
+        "status": "ok",
         "task": _materialize_execution_plane_runtime_agent_task_record(cancelled),
         "cancel_applied": True,
         "message": pause_message,
