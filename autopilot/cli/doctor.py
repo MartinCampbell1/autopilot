@@ -13,6 +13,7 @@ from rich.table import Table
 
 from autopilot.core.account_diagnostics import build_provider_setup_snapshot
 from autopilot.core.account_manager import AccountManager
+from autopilot.core.bootstrap_visibility import build_bootstrap_status
 from autopilot.core.config import load_config
 from autopilot.core.onboarding import detect_project_tooling
 from autopilot.core.runtime_diagnostics import build_runtime_diagnostics
@@ -32,6 +33,7 @@ def _doctor_report(
 
     provider_snapshot = build_provider_setup_snapshot(config, manager, refresh=refresh)
     project_report = detect_project_tooling(project_path)
+    bootstrap_status = build_bootstrap_status(project_path=project_path)
     runtime_diagnostics = build_runtime_diagnostics(
         config=config,
         config_path=config_path,
@@ -54,6 +56,8 @@ def _doctor_report(
         recommendations.append("Run `autopilot init` to create a starter PRD and register the project.")
     if not project_report.gates:
         recommendations.append("Add at least one reproducible build, test, or lint command for quality gates.")
+    if project_report.gates and not bool(dict(bootstrap_status.get("verification") or {}).get("artifact_exists")):
+        recommendations.append("Run `autopilot init-verifiers` to persist generated verifier checks for this repo.")
     for diagnostic in runtime_diagnostics["diagnostics"]:
         fix = str(diagnostic.get("fix") or "").strip()
         if fix:
@@ -72,6 +76,7 @@ def _doctor_report(
         },
         "providers": provider_snapshot,
         "project": project_report.to_dict(),
+        "bootstrap": bootstrap_status,
         "runtime_diagnostics": runtime_diagnostics,
         "recommendations": recommendations,
     }
@@ -158,6 +163,25 @@ def doctor(
     project_table.add_row("Package manager", project_payload["package_manager"] or "-")
     project_table.add_row("Detected files", ", ".join(project_payload["files_found"]) or "-")
     console.print(project_table)
+
+    bootstrap_payload = dict(report.get("bootstrap") or {})
+    bootstrap_table = Table(title="Bootstrap State")
+    bootstrap_table.add_column("Surface")
+    bootstrap_table.add_column("State")
+    bootstrap_table.add_column("Path")
+    verification_status = dict(bootstrap_payload.get("verification") or {})
+    github_status = dict(bootstrap_payload.get("github") or {})
+    bootstrap_table.add_row(
+        "Verifier checks",
+        "installed" if bool(verification_status.get("artifact_exists")) else "missing",
+        str(verification_status.get("artifact_path") or ""),
+    )
+    bootstrap_table.add_row(
+        "GitHub workflow",
+        "installed" if bool(github_status.get("workflow_exists")) else "missing",
+        str(github_status.get("workflow_path") or ""),
+    )
+    console.print(bootstrap_table)
 
     gates = project_payload["gates"]
     if gates:

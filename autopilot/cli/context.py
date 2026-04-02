@@ -29,6 +29,7 @@ def _render_context_snapshot(payload: dict[str, object]) -> None:
     status = dict(payload.get("status") or {})
     delivery = dict(payload.get("delivery") or {}).get("status") or {}
     repo = dict(payload.get("repo") or {})
+    bootstrap = dict(payload.get("bootstrap") or {})
     layers = dict(payload.get("instruction_layers") or {})
 
     summary = Table(title="Snapshot")
@@ -39,6 +40,14 @@ def _render_context_snapshot(payload: dict[str, object]) -> None:
     summary.add_row("Delivery", str(dict(delivery).get("status") or ""))
     summary.add_row("Repo", str(repo.get("github_repo") or repo.get("repo_key") or ""))
     summary.add_row("Known paths", str(len(list(repo.get("known_paths") or []))))
+    summary.add_row(
+        "Verifier bootstrap",
+        "yes" if bool(dict(bootstrap.get("verification") or {}).get("artifact_exists")) else "no",
+    )
+    summary.add_row(
+        "GitHub workflow",
+        "yes" if bool(dict(bootstrap.get("github") or {}).get("workflow_exists")) else "no",
+    )
     summary.add_row("Discoveries", str(dict(layers.get("discoveries") or {}).get("count") or 0))
     summary.add_row("Guardrails", "yes" if bool(dict(layers.get("guardrails") or {}).get("present")) else "no")
     console.print(summary)

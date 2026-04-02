@@ -44,9 +44,22 @@ def test_doctor_report_includes_runtime_diagnostics_and_dedupes_recommendations(
             git_present=True,
             prd_present=False,
             ralph_initialized=False,
-            gates=[],
+            gates=[{"name": "test", "cmd": "pytest", "source": "python:test-discovery"}],
             notes=["No build/test/lint commands were auto-detected."],
         ),
+    )
+    monkeypatch.setattr(
+        "autopilot.cli.doctor.build_bootstrap_status",
+        lambda **kwargs: {
+            "verification": {
+                "artifact_exists": False,
+                "artifact_path": str(tmp_path / "project" / ".agents" / "tasks" / "verifiers.json"),
+            },
+            "github": {
+                "workflow_exists": False,
+                "workflow_path": str(tmp_path / "project" / ".github" / "workflows" / "autopilot-bootstrap.yml"),
+            },
+        },
     )
     monkeypatch.setattr(
         "autopilot.cli.doctor.build_runtime_diagnostics",
@@ -85,8 +98,10 @@ def test_doctor_report_includes_runtime_diagnostics_and_dedupes_recommendations(
     )
 
     assert report["runtime_diagnostics"]["summary"]["warning_count"] == 2
+    assert report["bootstrap"]["verification"]["artifact_exists"] is False
     assert "Install or repair the codex CLI." in report["recommendations"]
     assert "Run `autopilot init` to create a starter PRD and register the project." in report["recommendations"]
+    assert "Run `autopilot init-verifiers` to persist generated verifier checks for this repo." in report["recommendations"]
     assert "Resume or pause this project to reconcile state before relying on its runtime status." in report["recommendations"]
     assert "Install GitHub CLI and run `gh auth login` before relying on `autopilot ship`." in report["recommendations"]
     assert len(report["recommendations"]) == len(set(report["recommendations"]))
