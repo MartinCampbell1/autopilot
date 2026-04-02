@@ -49,6 +49,7 @@ from autopilot.core.runtime_budgets import (
     update_budget_policy,
 )
 from autopilot.core.runtime_env import build_runtime_base_env
+from autopilot.core.repo_registry import update_repo_path_mapping
 from autopilot.core.tool_permission_runtime import list_tool_permission_runtimes
 
 TIMELINE_LIMIT = 300
@@ -687,6 +688,13 @@ def attach_tracker_reference(config: AutopilotConfig, project_id: str, reference
     return project
 
 
+def _update_repo_registry_best_effort(config: AutopilotConfig, project_path: Path) -> None:
+    try:
+        update_repo_path_mapping(config, project_path)
+    except Exception:
+        return
+
+
 def register_project(
     config: AutopilotConfig,
     *,
@@ -730,6 +738,7 @@ def register_project(
         elif "task_source" not in existing:
             existing["task_source"] = resolve_project_task_source(existing)
         update_project_entry(config, existing)
+        _update_repo_registry_best_effort(config, project_path)
         return existing
 
     project = {
@@ -746,6 +755,7 @@ def register_project(
     }
     projects.append(project)
     save_projects_registry(config, projects)
+    _update_repo_registry_best_effort(config, project_path)
     return project
 
 

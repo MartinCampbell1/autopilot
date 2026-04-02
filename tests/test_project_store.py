@@ -1,6 +1,7 @@
 """Tests for project registry/runtime state helpers."""
 
 import json
+import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -32,6 +33,29 @@ from autopilot.core.project_store import (
     update_project_budget_policy,
     watchdog_pause_project_run,
 )
+from autopilot.core.repo_registry import get_known_paths_for_repo
+
+
+def _init_git_repo(path: Path, *, remote_url: str | None = None) -> Path:
+    path.mkdir(parents=True, exist_ok=True)
+    result = subprocess.run(
+        ["git", "init"],
+        cwd=path,
+        capture_output=True,
+        text=True,
+        timeout=5,
+    )
+    assert result.returncode == 0, result.stderr
+    if remote_url:
+        result = subprocess.run(
+            ["git", "remote", "add", "origin", remote_url],
+            cwd=path,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        assert result.returncode == 0, result.stderr
+    return path
 
 
 def test_migrate_projects_registry_adds_ids_and_archives_temp_paths(tmp_path: Path) -> None:
@@ -139,6 +163,20 @@ def test_register_project_persists_task_source_contract(tmp_path: Path) -> None:
     assert detail["task_source"]["source_kind"] == "github_issue"
     assert detail["task_source"]["external_id"] == "42"
     assert detail["task_source"]["branch_policy"] == "isolated_worktree"
+
+
+def test_register_project_updates_repo_registry_for_git_project(tmp_path: Path) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    project_dir = _init_git_repo(
+        tmp_path / "repo-project",
+        remote_url="git@github.com:FounderOS/Autopilot.git",
+    )
+
+    register_project(config, name="Repo Project", project_path=project_dir)
+
+    assert set(get_known_paths_for_repo(config, project_path=project_dir)) == {
+        str(project_dir.resolve()),
+    }
 
 
 def test_build_project_summary_exposes_runtime_control_availability(tmp_path: Path) -> None:
