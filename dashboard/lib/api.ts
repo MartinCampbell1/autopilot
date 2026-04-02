@@ -9,6 +9,7 @@ import type {
   ExecutionAgentActionBatchResult,
   ExecutionAgentActionExecuteResult,
   ExecutionAgentActionRunRecord,
+  ExecutionRuntimeAgentTaskCancelResponse,
   ExecutionRuntimeAgentTaskOutputArtifact,
   ExecutionRuntimeAgentTaskTranscriptArtifact,
   IssueResolutionResult,
@@ -239,6 +240,24 @@ export async function fetchExecutionPlaneRuntimeAgentTaskTranscript(
   return jsonOrThrow<ExecutionRuntimeAgentTaskTranscriptArtifact>(
     res,
     `Failed to fetch runtime agent task transcript: ${res.status}`
+  );
+}
+
+export async function cancelExecutionPlaneRuntimeAgentTask(
+  taskId: string,
+  options?: { actor?: string | null; note?: string | null }
+): Promise<ExecutionRuntimeAgentTaskCancelResponse> {
+  const res = await fetch(`${API_BASE}/execution-plane/agents/tasks/${encodeURIComponent(taskId)}/cancel`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      actor: options?.actor ?? "dashboard-control-plane",
+      note: options?.note ?? "",
+    }),
+  });
+  return jsonOrThrow<ExecutionRuntimeAgentTaskCancelResponse>(
+    res,
+    `Failed to cancel runtime agent task: ${res.status}`
   );
 }
 

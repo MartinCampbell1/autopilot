@@ -119,6 +119,7 @@ type BuildSessionDrilldownSectionPropsArgs = {
   ) => Promise<ExecutionRuntimeAgentTaskTranscriptArtifact>;
   refreshAsyncTask: (task: ExecutionRuntimeAgentTaskRecord) => Promise<void>;
   waitForAsyncTaskSettlement: (task: ExecutionRuntimeAgentTaskRecord) => Promise<void>;
+  cancelAsyncTask: (task: ExecutionRuntimeAgentTaskRecord) => Promise<void>;
 };
 
 export function buildSessionDrilldownSectionProps({
@@ -196,6 +197,7 @@ export function buildSessionDrilldownSectionProps({
   loadAsyncTaskTranscriptArtifact,
   refreshAsyncTask,
   waitForAsyncTaskSettlement,
+  cancelAsyncTask,
 }: BuildSessionDrilldownSectionPropsArgs): SessionDrilldownSectionProps {
   return {
     selectedSessionId,
@@ -358,6 +360,9 @@ export function buildSessionDrilldownSectionProps({
       onWaitForAsyncTaskSettlement: (task) => {
         void waitForAsyncTaskSettlement(task);
       },
+      onCancelAsyncTask: (task) => {
+        void cancelAsyncTask(task);
+      },
       onApproveApproval: (approval) => {
         void approveApproval(approval);
       },
@@ -428,6 +433,9 @@ export function buildSessionDrilldownSectionProps({
       },
       onWaitForAsyncTaskSettlement: (task) => {
         void waitForAsyncTaskSettlement(task);
+      },
+      onCancelAsyncTask: (task) => {
+        void cancelAsyncTask(task);
       },
       onAdvanceCurrentQueue:
         currentSessionLineageQueue && selectedSessionLineageEntry

@@ -61,6 +61,7 @@ type BuildRuntimeAgentSectionPropsArgs = {
   inspectAsyncFollowThrough: () => void;
   refreshAsyncTask: (task: ExecutionRuntimeAgentTaskRecord) => Promise<void>;
   waitForAsyncTaskSettlement: (task: ExecutionRuntimeAgentTaskRecord) => Promise<void>;
+  cancelAsyncTask: (task: ExecutionRuntimeAgentTaskRecord) => Promise<void>;
   onAllowToolPermissionRuntime: RuntimeAgentSectionProps["onAllowToolPermissionRuntime"];
   onDenyToolPermissionRuntime: RuntimeAgentSectionProps["onDenyToolPermissionRuntime"];
   agentScopedRuns: ExecutionAgentActionRunRecord[];
@@ -155,6 +156,7 @@ export function buildRuntimeAgentSectionProps({
   inspectAsyncFollowThrough,
   refreshAsyncTask,
   waitForAsyncTaskSettlement,
+  cancelAsyncTask,
   onAllowToolPermissionRuntime,
   onDenyToolPermissionRuntime,
   agentScopedRuns,
@@ -380,6 +382,9 @@ export function buildRuntimeAgentSectionProps({
     },
     onWaitForAsyncTaskSettlement: (task) => {
       void waitForAsyncTaskSettlement(task);
+    },
+    onCancelAsyncTask: (task) => {
+      void cancelAsyncTask(task);
     },
     activitySectionProps,
     timelineSectionProps,

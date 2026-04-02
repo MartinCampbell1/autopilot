@@ -1,6 +1,7 @@
 "use client";
 import { useCallback, useMemo } from "react";
 import {
+  cancelExecutionPlaneRuntimeAgentTask,
   fetchExecutionPlaneRuntimeAgentTaskOutput,
   fetchExecutionPlaneRuntimeAgentTaskTranscript,
 } from "@/lib/api";
@@ -218,6 +219,7 @@ export function useControlPlanePageController(
     handleSSEEvent: handleRuntimeControlSSEEvent,
     requestGetRuntimeAgentActionRun,
     requestGetRuntimeAgentTask,
+    requestCancelRuntimeAgentTask,
     requestGetRuntimeAgentTaskOutput,
     requestGetRuntimeAgentTaskTranscript,
   } = runtimeControl;
@@ -389,6 +391,66 @@ export function useControlPlanePageController(
       loadSessionDetail,
       projects,
       requestGetRuntimeAgentTask,
+      selectedAgentId,
+      selectedSessionId,
+      setBusyActionKey,
+      setErrorMessage,
+      setNotice,
+    ]
+  );
+
+  const cancelAsyncTask = useCallback(
+    async (task: { id?: string | null; project_id?: string | null; runtime_agent_ids?: string[] }) => {
+      const taskId = toStringValue(task.id);
+      if (!taskId) return;
+      setBusyActionKey(`async-task-cancel:${taskId}`);
+      setNotice("");
+      setErrorMessage("");
+      try {
+        const projectId = toStringValue(task.project_id);
+        const runtimeProject = projects.find(
+          (project) =>
+            project.id === projectId
+            && Boolean(project.runtime_control_available)
+            && Boolean(toStringValue(project.runtime_session_id))
+        );
+        const cancelled = runtimeProject
+          ? await requestCancelRuntimeAgentTask(runtimeProject.id, taskId, {
+              actor: "dashboard-control-plane",
+              note: "Stop async follow-through from control plane.",
+              timeoutMs: 5000,
+            })
+          : await cancelExecutionPlaneRuntimeAgentTask(taskId, {
+              actor: "dashboard-control-plane",
+              note: "Stop async follow-through from control plane.",
+            });
+        await loadOverview();
+        if (selectedSessionId) {
+          await loadSessionDetail(selectedSessionId);
+        }
+        const selectedOrTaskAgentId =
+          (selectedAgentId &&
+          (cancelled.task.runtime_agent_ids || task.runtime_agent_ids || []).includes(selectedAgentId))
+            ? selectedAgentId
+            : toStringValue((cancelled.task.runtime_agent_ids || task.runtime_agent_ids || [])[0]);
+        if (selectedOrTaskAgentId) {
+          await loadAgentDetail(selectedOrTaskAgentId);
+        }
+        setNotice(cancelled.message || `Task ${taskId} cancel request processed.`);
+      } catch (error) {
+        setErrorMessage(
+          error instanceof Error ? error.message : "Failed to cancel async task."
+        );
+      } finally {
+        setBusyActionKey("");
+      }
+    },
+    [
+      loadAgentDetail,
+      loadOverview,
+      loadSessionDetail,
+      projects,
+      requestCancelRuntimeAgentTask,
       selectedAgentId,
       selectedSessionId,
       setBusyActionKey,
@@ -1344,6 +1406,7 @@ export function useControlPlanePageController(
       },
       refreshAsyncTask,
       waitForAsyncTaskSettlement,
+      cancelAsyncTask,
       onAllowToolPermissionRuntime: (runtime) => {
         void resolveToolPermissionRuntime(runtime, "allow");
       },
@@ -1533,6 +1596,7 @@ export function useControlPlanePageController(
     loadAsyncTaskTranscriptArtifact,
     refreshAsyncTask,
     waitForAsyncTaskSettlement,
+    cancelAsyncTask,
   });
 
   const headerSectionProps = buildHeaderSectionProps({

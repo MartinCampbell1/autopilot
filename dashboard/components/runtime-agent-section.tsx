@@ -72,6 +72,7 @@ type RuntimeAgentSectionProps = {
   onInspectAsyncFollowThrough: () => void;
   onRefreshAsyncTask?: (task: ExecutionRuntimeAgentTaskRecord) => void;
   onWaitForAsyncTaskSettlement?: (task: ExecutionRuntimeAgentTaskRecord) => void;
+  onCancelAsyncTask?: (task: ExecutionRuntimeAgentTaskRecord) => void;
   activitySectionProps: ComponentProps<typeof RuntimeAgentActivitySection> | null;
   timelineSectionProps: ComponentProps<typeof RuntimeAgentTimelineSection> | null;
 };
@@ -93,6 +94,7 @@ export function RuntimeAgentSection({
   onInspectAsyncFollowThrough,
   onRefreshAsyncTask,
   onWaitForAsyncTaskSettlement,
+  onCancelAsyncTask,
   activitySectionProps,
   timelineSectionProps,
 }: RuntimeAgentSectionProps) {
@@ -471,6 +473,19 @@ export function RuntimeAgentSection({
                             }}
                           >
                             {busyActionKey === `async-task-wait:${task.id}` ? "Waiting..." : "Wait"}
+                          </Button>
+                        )}
+                        {onCancelAsyncTask && !task.terminal && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-7 rounded-lg border-[#f0d0c9] bg-[#fff0ed] px-2 text-[11px] text-[#93370d] hover:bg-[#ffe7e1]"
+                            disabled={Boolean(busyActionKey)}
+                            onClick={() => {
+                              onCancelAsyncTask(task);
+                            }}
+                          >
+                            {busyActionKey === `async-task-cancel:${task.id}` ? "Cancelling..." : "Cancel"}
                           </Button>
                         )}
                       </div>
