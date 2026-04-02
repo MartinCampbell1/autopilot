@@ -14,6 +14,7 @@ from autopilot.core.worktree import (
     merge_worktree,
     read_worktree_metadata,
     remove_worktree,
+    resolve_story_worktree_owner,
     worktree_metadata_path,
     worktree_path,
 )
@@ -206,3 +207,32 @@ class TestWorktree:
 
         assert removed == [stale_path]
         mock_remove.assert_called_once_with(project_path, stale_path, cleanup_branch=True)
+
+    def test_resolve_story_worktree_owner_returns_owner_for_nested_path(self, tmp_path: Path) -> None:
+        project_path = tmp_path / "project"
+        project_path.mkdir()
+        wt_path = tmp_path / "project-story-7"
+        nested_path = wt_path / "apps" / "api"
+        nested_path.mkdir(parents=True)
+        worktree_metadata_path(wt_path).write_text(
+            json.dumps(
+                {
+                    "project_path": str(project_path),
+                    "story_id": 7,
+                    "branch_name": "story-7",
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                    "runtime_pid": None,
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        resolved = resolve_story_worktree_owner(nested_path)
+
+        assert resolved == (project_path.resolve(), wt_path.resolve())
+
+    def test_resolve_story_worktree_owner_returns_none_outside_story_worktree(self, tmp_path: Path) -> None:
+        project_path = tmp_path / "project"
+        project_path.mkdir()
+
+        assert resolve_story_worktree_owner(project_path) is None

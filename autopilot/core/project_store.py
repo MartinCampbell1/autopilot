@@ -49,8 +49,9 @@ from autopilot.core.runtime_budgets import (
     update_budget_policy,
 )
 from autopilot.core.runtime_env import build_runtime_base_env
-from autopilot.core.repo_registry import update_repo_path_mapping
+from autopilot.core.repo_registry import build_repo_registry_key, find_canonical_git_root, update_repo_path_mapping
 from autopilot.core.tool_permission_runtime import list_tool_permission_runtimes
+from autopilot.core.worktree import resolve_story_worktree_owner
 
 TIMELINE_LIMIT = 300
 DISCOVERY_BOARD_LIMIT = 200
@@ -693,6 +694,83 @@ def _update_repo_registry_best_effort(config: AutopilotConfig, project_path: Pat
         update_repo_path_mapping(config, project_path)
     except Exception:
         return
+
+
+def _rebind_project_entry_path(
+    config: AutopilotConfig,
+    project: dict[str, Any],
+    *,
+    project_path: Path,
+) -> dict[str, Any]:
+    normalized_path = project_path.expanduser().resolve()
+    stored_path = Path(project.get("path") or "").expanduser().resolve()
+    if stored_path == normalized_path and not bool(project.get("archived", False)):
+        return project
+    rebound = dict(project)
+    rebound["path"] = str(normalized_path)
+    rebound["archived"] = False
+    update_project_entry(config, rebound)
+    _update_repo_registry_best_effort(config, normalized_path)
+    return rebound
+
+
+def resolve_runtime_project_entry(
+    config: AutopilotConfig,
+    *,
+    project_path: Path,
+    project_id: str | None = None,
+    include_archived: bool = True,
+) -> dict[str, Any] | None:
+    """Resolve one runtime project entry across exact paths, worktrees, and same-repo clones."""
+
+    normalized_path = project_path.expanduser().resolve()
+    exact_match = get_project_entry(
+        config,
+        project_path=normalized_path,
+        include_archived=include_archived,
+    )
+    if exact_match is not None:
+        return exact_match
+
+    worktree_owner = resolve_story_worktree_owner(normalized_path)
+    owner_project_path = worktree_owner[0] if worktree_owner is not None else None
+    checkout_root = owner_project_path or find_canonical_git_root(normalized_path) or normalized_path
+    checkout_repo_key = build_repo_registry_key(checkout_root)
+    _update_repo_registry_best_effort(config, checkout_root)
+
+    if project_id:
+        by_id = get_project_entry(config, project_id=project_id, include_archived=include_archived)
+        if by_id is None:
+            return None
+        project_repo_key = build_repo_registry_key(Path(by_id["path"]))
+        if checkout_repo_key and project_repo_key and checkout_repo_key == project_repo_key:
+            return _rebind_project_entry_path(config, by_id, project_path=checkout_root)
+        return None
+
+    if owner_project_path is not None:
+        owner_project = get_project_entry(
+            config,
+            project_path=owner_project_path,
+            include_archived=include_archived,
+        )
+        if owner_project is not None:
+            return owner_project
+
+    if not checkout_repo_key:
+        return None
+
+    repo_matches = [
+        project
+        for project in load_projects_registry(config, include_archived=include_archived)
+        if checkout_repo_key == build_repo_registry_key(Path(project["path"]))
+    ]
+    if len(repo_matches) == 1:
+        return _rebind_project_entry_path(config, repo_matches[0], project_path=checkout_root)
+    if len(repo_matches) > 1:
+        raise ValueError(
+            "Multiple registered projects match this repo identity. Re-run with --project-id to disambiguate."
+        )
+    return None
 
 
 def register_project(

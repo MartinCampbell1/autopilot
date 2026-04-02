@@ -59,6 +59,24 @@ class WorktreeMetadata(BaseModel):
     runtime_pid: int | None = None
 
 
+def resolve_story_worktree_owner(project_path: Path) -> tuple[Path, Path] | None:
+    """Return owning project path and worktree root when inside an Autopilot story worktree."""
+
+    candidate = project_path.expanduser().resolve()
+    search_roots = [candidate] if candidate.is_dir() else [candidate.parent]
+    if candidate.is_dir():
+        search_roots.extend(candidate.parents)
+    else:
+        search_roots.extend(candidate.parent.parents)
+    for search_root in search_roots:
+        metadata = read_worktree_metadata(search_root)
+        if metadata is None:
+            continue
+        owner_path = Path(metadata.project_path).expanduser().resolve()
+        return owner_path, search_root
+    return None
+
+
 def worktree_path(project_path: Path, story_id: int) -> Path:
     """Return the filesystem path for a story worktree."""
     return project_path.parent / f"{project_path.name}-story-{story_id}"

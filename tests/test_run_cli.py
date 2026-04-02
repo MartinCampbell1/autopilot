@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from autopilot.cli.run import (
     _apply_requested_headless_interrupt,
+    _load_or_register_project,
     _project_branch_policy,
     _ready_open_stories,
     _should_use_story_worktree,
@@ -17,6 +21,7 @@ from autopilot.cli.run import (
 from autopilot.core.config import AutopilotConfig
 from autopilot.core.headless_control import create_headless_control_session
 from autopilot.core.project_store import load_project_state, register_project
+from autopilot.core.worktree import worktree_metadata_path
 
 
 def _create_project(config: AutopilotConfig, root: Path) -> dict:
@@ -44,6 +49,28 @@ def _create_project(config: AutopilotConfig, root: Path) -> dict:
         project_path=root,
         prd_relpath=".agents/tasks/prd.json",
     )
+
+
+def _init_git_repo(path: Path, *, remote_url: str | None = None) -> Path:
+    path.mkdir(parents=True, exist_ok=True)
+    result = subprocess.run(
+        ["git", "init"],
+        cwd=path,
+        capture_output=True,
+        text=True,
+        timeout=5,
+    )
+    assert result.returncode == 0, result.stderr
+    if remote_url:
+        result = subprocess.run(
+            ["git", "remote", "add", "origin", remote_url],
+            cwd=path,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        assert result.returncode == 0, result.stderr
+    return path
 
 
 def test_write_ralph_story_snapshot_selects_only_requested_story(tmp_path: Path) -> None:
@@ -95,6 +122,62 @@ def test_write_ralph_story_snapshot_selects_only_requested_story(tmp_path: Path)
     assert snapshot["stories"][1]["role"] == "backend_worker"
     assert snapshot["stories"][1]["acceptance_criteria"] == ["Pass a smoke check"]
     assert snapshot["stories"][1]["blocked_by"] == []
+
+
+def test_load_or_register_project_rebinds_unique_same_repo_clone(tmp_path: Path) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    remote_url = "git@github.com:FounderOS/Autopilot.git"
+    primary_root = _init_git_repo(tmp_path / "primary", remote_url=remote_url)
+    clone_root = _init_git_repo(tmp_path / "clone", remote_url=remote_url)
+
+    project = _create_project(config, primary_root)
+
+    resolved = _load_or_register_project(config, clone_root, None, ".agents/tasks/prd.json")
+
+    assert resolved["id"] == project["id"]
+    assert Path(resolved["path"]).resolve() == clone_root.resolve()
+
+
+def test_load_or_register_project_uses_story_worktree_owner(tmp_path: Path) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    remote_url = "git@github.com:FounderOS/Autopilot.git"
+    primary_root = _init_git_repo(tmp_path / "primary", remote_url=remote_url)
+    story_worktree = _init_git_repo(tmp_path / "primary-story-7", remote_url=remote_url)
+    nested_path = story_worktree / "apps" / "api"
+    nested_path.mkdir(parents=True, exist_ok=True)
+
+    project = _create_project(config, primary_root)
+    worktree_metadata_path(story_worktree).write_text(
+        json.dumps(
+            {
+                "project_path": str(primary_root),
+                "story_id": 7,
+                "branch_name": "story-7",
+                "created_at": "2026-04-02T00:00:00+00:00",
+                "runtime_pid": None,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    resolved = _load_or_register_project(config, nested_path, None, ".agents/tasks/prd.json")
+
+    assert resolved["id"] == project["id"]
+    assert Path(resolved["path"]).resolve() == primary_root.resolve()
+
+
+def test_load_or_register_project_rejects_ambiguous_same_repo_clone(tmp_path: Path) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    remote_url = "git@github.com:FounderOS/Autopilot.git"
+    project_a_root = _init_git_repo(tmp_path / "project-a", remote_url=remote_url)
+    project_b_root = _init_git_repo(tmp_path / "project-b", remote_url=remote_url)
+    clone_root = _init_git_repo(tmp_path / "clone", remote_url=remote_url)
+
+    _create_project(config, project_a_root)
+    _create_project(config, project_b_root)
+
+    with pytest.raises(ValueError, match="Multiple registered projects match this repo identity"):
+        _load_or_register_project(config, clone_root, None, ".agents/tasks/prd.json")
 
 
 def test_ready_open_stories_skips_blocked_dependencies(tmp_path: Path) -> None:

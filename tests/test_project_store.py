@@ -28,12 +28,14 @@ from autopilot.core.project_store import (
     record_discovery_markers,
     requeue_recoverable_stuck_stories,
     register_project,
+    resolve_runtime_project_entry,
     save_project_prd,
     save_project_state,
     update_project_budget_policy,
     watchdog_pause_project_run,
 )
 from autopilot.core.repo_registry import get_known_paths_for_repo
+from autopilot.core.worktree import worktree_metadata_path
 
 
 def _init_git_repo(path: Path, *, remote_url: str | None = None) -> Path:
@@ -177,6 +179,87 @@ def test_register_project_updates_repo_registry_for_git_project(tmp_path: Path) 
     assert set(get_known_paths_for_repo(config, project_path=project_dir)) == {
         str(project_dir.resolve()),
     }
+
+
+def test_resolve_runtime_project_entry_rebinds_unique_same_repo_clone(tmp_path: Path) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    remote_url = "git@github.com:FounderOS/Autopilot.git"
+    primary_root = _init_git_repo(tmp_path / "primary", remote_url=remote_url)
+    clone_root = _init_git_repo(tmp_path / "clone", remote_url=remote_url)
+
+    project = register_project(config, name="Repo Project", project_path=primary_root)
+
+    resolved = resolve_runtime_project_entry(config, project_path=clone_root)
+
+    assert resolved is not None
+    assert resolved["id"] == project["id"]
+    assert Path(resolved["path"]).resolve() == clone_root.resolve()
+    rebound = get_project_entry(config, project_id=project["id"], include_archived=True)
+    assert rebound is not None
+    assert Path(rebound["path"]).resolve() == clone_root.resolve()
+
+
+def test_resolve_runtime_project_entry_uses_worktree_owner_project(tmp_path: Path) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    primary_root = _init_git_repo(tmp_path / "primary", remote_url="git@github.com:FounderOS/Autopilot.git")
+    story_worktree = _init_git_repo(tmp_path / "primary-story-7", remote_url="git@github.com:FounderOS/Autopilot.git")
+    nested_path = story_worktree / "apps" / "api"
+    nested_path.mkdir(parents=True, exist_ok=True)
+
+    project = register_project(config, name="Repo Project", project_path=primary_root)
+    worktree_metadata_path(story_worktree).write_text(
+        json.dumps(
+            {
+                "project_path": str(primary_root),
+                "story_id": 7,
+                "branch_name": "story-7",
+                "created_at": "2026-04-02T00:00:00+00:00",
+                "runtime_pid": None,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    resolved = resolve_runtime_project_entry(config, project_path=nested_path)
+
+    assert resolved is not None
+    assert resolved["id"] == project["id"]
+    assert Path(resolved["path"]).resolve() == primary_root.resolve()
+
+
+def test_resolve_runtime_project_entry_rejects_ambiguous_same_repo_clone(tmp_path: Path) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    remote_url = "git@github.com:FounderOS/Autopilot.git"
+    project_a_root = _init_git_repo(tmp_path / "project-a", remote_url=remote_url)
+    project_b_root = _init_git_repo(tmp_path / "project-b", remote_url=remote_url)
+    ambiguous_clone = _init_git_repo(tmp_path / "clone", remote_url=remote_url)
+
+    register_project(config, name="Repo Project A", project_path=project_a_root)
+    register_project(config, name="Repo Project B", project_path=project_b_root)
+
+    with pytest.raises(ValueError, match="Multiple registered projects match this repo identity"):
+        resolve_runtime_project_entry(config, project_path=ambiguous_clone)
+
+
+def test_resolve_runtime_project_entry_uses_explicit_project_id_to_disambiguate_same_repo_clone(tmp_path: Path) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    remote_url = "git@github.com:FounderOS/Autopilot.git"
+    project_a_root = _init_git_repo(tmp_path / "project-a", remote_url=remote_url)
+    project_b_root = _init_git_repo(tmp_path / "project-b", remote_url=remote_url)
+    clone_root = _init_git_repo(tmp_path / "clone", remote_url=remote_url)
+
+    project_a = register_project(config, name="Repo Project A", project_path=project_a_root)
+    register_project(config, name="Repo Project B", project_path=project_b_root)
+
+    resolved = resolve_runtime_project_entry(
+        config,
+        project_path=clone_root,
+        project_id=project_a["id"],
+    )
+
+    assert resolved is not None
+    assert resolved["id"] == project_a["id"]
+    assert Path(resolved["path"]).resolve() == clone_root.resolve()
 
 
 def test_build_project_summary_exposes_runtime_control_availability(tmp_path: Path) -> None:
