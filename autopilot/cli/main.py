@@ -129,6 +129,26 @@ def context(
 
 
 @app.command()
+def github(
+    project_path: str = typer.Argument(".", help="Project path to bootstrap for GitHub workflow setup."),
+    project_id: str | None = typer.Option(None, "--project-id", help="Optional registered project id for same-repo disambiguation."),
+    install_workflow: bool = typer.Option(True, "--install/--no-install", help="Install or update the managed GitHub Actions workflow."),
+    overwrite: bool = typer.Option(False, "--overwrite", help="Replace an existing workflow file at the managed path."),
+    json_output: bool = typer.Option(False, "--json", help="Emit the GitHub bootstrap payload as JSON."),
+) -> None:
+    """Bootstrap GitHub workflow setup for one checkout."""
+    from autopilot.cli.github import github as _github
+
+    _github(
+        project_path,
+        project_id=project_id,
+        install_workflow=install_workflow,
+        overwrite=overwrite,
+        json_output=json_output,
+    )
+
+
+@app.command()
 def review(
     project_path: str = typer.Argument(".", help="Project path to review locally."),
     project_id: str | None = typer.Option(None, "--project-id", help="Optional registered project id for same-repo disambiguation."),

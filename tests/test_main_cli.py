@@ -422,6 +422,52 @@ def test_context_command_passes_options(monkeypatch) -> None:
     }
 
 
+def test_github_command_passes_options(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_github(
+        project_path: str = ".",
+        *,
+        project_id: str | None = None,
+        install_workflow: bool = True,
+        overwrite: bool = False,
+        json_output: bool = False,
+    ) -> None:
+        captured.update(
+            {
+                "project_path": project_path,
+                "project_id": project_id,
+                "install_workflow": install_workflow,
+                "overwrite": overwrite,
+                "json_output": json_output,
+            }
+        )
+
+    monkeypatch.setattr("autopilot.cli.github.github", fake_github)
+
+    result = runner.invoke(
+        app,
+        [
+            "github",
+            "/tmp/project",
+            "--project-id",
+            "proj_123",
+            "--no-install",
+            "--overwrite",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert captured == {
+        "project_path": "/tmp/project",
+        "project_id": "proj_123",
+        "install_workflow": False,
+        "overwrite": True,
+        "json_output": True,
+    }
+
+
 def test_preview_actions_command_passes_options(monkeypatch) -> None:
     captured: dict[str, object] = {}
 

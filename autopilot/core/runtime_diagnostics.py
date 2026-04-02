@@ -8,10 +8,12 @@ from pathlib import Path
 from typing import Any
 
 from autopilot.core.config import AutopilotConfig
+from autopilot.core.github_repo_setup import GITHUB_BOOTSTRAP_WORKFLOW_RELPATH
 from autopilot.core.project_store import load_project_state, load_projects_registry
 from autopilot.core.repo_registry import (
     build_repo_registry_key,
     find_canonical_git_root,
+    get_github_repo,
     get_git_remote_url,
     get_known_paths_for_repo,
 )
@@ -177,6 +179,7 @@ def build_runtime_diagnostics(
     github_cli_available = bool(shutil.which("gh"))
     checkout_repo_root = find_canonical_git_root(current_checkout_root)
     if checkout_repo_root is not None:
+        github_repo = str(get_github_repo(checkout_repo_root) or "").strip()
         if not github_cli_available:
             diagnostics.append(
                 _diagnostic(
@@ -186,6 +189,21 @@ def build_runtime_diagnostics(
                     message="GitHub CLI `gh` is not installed, so local ship cannot create pull requests.",
                     fix="Install GitHub CLI and run `gh auth login` before relying on `autopilot ship`.",
                     metadata={"path": str(checkout_repo_root)},
+                )
+            )
+        if github_repo and not (checkout_repo_root / GITHUB_BOOTSTRAP_WORKFLOW_RELPATH).exists():
+            diagnostics.append(
+                _diagnostic(
+                    code="github_actions_workflow_missing",
+                    severity="info",
+                    scope="ship",
+                    message="Managed GitHub Actions bootstrap workflow is not installed yet.",
+                    fix="Run `autopilot github` from a feature branch to install the managed GitHub Actions workflow.",
+                    metadata={
+                        "path": str(checkout_repo_root),
+                        "workflow_relpath": GITHUB_BOOTSTRAP_WORKFLOW_RELPATH,
+                        "github_repo": github_repo,
+                    },
                 )
             )
 
