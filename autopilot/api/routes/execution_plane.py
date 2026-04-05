@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 from autopilot.api.deps import get_account_manager, get_config
 from autopilot.core.approvals import decide_approval, get_approval, list_approvals
+from autopilot.core.brief_metadata import raise_if_founder_approval_missing_for_command
 from autopilot.core.control_plane_issues import get_issue, list_issues, resolve_issue
 from autopilot.core.execution_brief import ExecutionBrief
 from autopilot.core.execution_plane import (
@@ -65,6 +66,7 @@ from autopilot.core.execution_plane import (
     wait_for_execution_plane_agent_action_run_async_settlement,
 )
 from autopilot.core.github_reactions import ingest_story_github_reaction, sync_story_github_pr
+from autopilot.core.project_store import get_project_entry
 from autopilot.core.shared_contract_adapters import SHARED_EXECUTION_BRIEF_RELPATH
 from autopilot.core.shared_contract_codec import load_shared_execution_brief, shared_execution_brief_json_schema
 
@@ -1672,6 +1674,13 @@ async def execute_project_command(
     payload = request or ExecutionCommandRequest()
     command_payload = _command_payload(payload)
     try:
+        project = get_project_entry(config, project_id=project_id, include_archived=True)
+        if project is None:
+            raise KeyError(project_id)
+        try:
+            raise_if_founder_approval_missing_for_command(project, command_name)
+        except ValueError as exc:
+            raise RuntimeError(str(exc)) from exc
         policy = evaluate_execution_command_policy(
             config,
             project_id=project_id,

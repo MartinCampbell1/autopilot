@@ -17,6 +17,7 @@ from autopilot.core.execution_plane import (
     ingest_execution_brief_project,
     ingest_execution_brief_v2_project,
     ingest_shared_execution_brief_project,
+    sync_execution_brief_v2_project,
 )
 from autopilot.core.intake_sessions import link_intake_session_project
 from autopilot.core.shared_contract_adapters import SHARED_EXECUTION_BRIEF_RELPATH
@@ -246,6 +247,12 @@ class ImportBriefV2Request(BaseModel):
     launch_profile: LaunchProfileRequest | None = None
 
 
+class SyncBriefV2Request(BaseModel):
+    """Request to refresh a linked project's canonical ExecutionBriefV2."""
+
+    brief: dict[str, Any]
+
+
 @router.post("/from-brief-v2")
 async def create_project_from_brief_v2(request: ImportBriefV2Request):
     """Ingest a canonical ExecutionBriefV2 and create an execution project.
@@ -295,6 +302,43 @@ async def create_project_from_brief_v2(request: ImportBriefV2Request):
         "initiative_id": brief.initiative_id,
         "schema_version": brief.schema_version,
         "brief_approval_status": brief.brief_approval_status,
+    }
+
+
+@router.post("/briefs/{brief_id}/sync-v2")
+async def sync_project_brief_v2(brief_id: str, request: SyncBriefV2Request):
+    """Refresh the V2 brief artifact and metadata for an existing linked project."""
+
+    try:
+        from founderos_contracts.brief_v2 import ExecutionBriefV2
+    except ImportError:
+        raise HTTPException(501, "founderos_contracts package not installed")
+
+    try:
+        brief = ExecutionBriefV2.model_validate(request.brief)
+    except ValidationError as exc:
+        raise HTTPException(422, f"Invalid ExecutionBriefV2 payload: {exc}") from exc
+
+    if brief.brief_id != brief_id:
+        raise HTTPException(
+            409,
+            f"Path brief_id {brief_id} does not match body brief_id {brief.brief_id}",
+        )
+
+    config = get_config()
+    try:
+        project, brief_path = sync_execution_brief_v2_project(config, brief=brief)
+    except KeyError as exc:
+        raise HTTPException(404, f"No project linked to brief {brief_id}") from exc
+
+    return {
+        "status": "ok",
+        "project": project,
+        "brief_id": brief.brief_id,
+        "initiative_id": brief.initiative_id,
+        "schema_version": brief.schema_version,
+        "brief_approval_status": brief.brief_approval_status,
+        "execution_brief_path": str(brief_path),
     }
 
 

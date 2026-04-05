@@ -22,7 +22,10 @@ from autopilot.core.capability_store import (
 )
 from autopilot.core.config import AutopilotConfig
 from autopilot.core.bounded_executor import execute_bounded_execution_blueprint
-from autopilot.core.brief_metadata import find_project_by_execution_brief_id
+from autopilot.core.brief_metadata import (
+    find_project_by_execution_brief_id,
+    raise_if_founder_approval_missing_for_command,
+)
 from autopilot.core.brief_v2_adapter import should_deduplicate_brief
 from autopilot.core.execution_blueprint import plan_execution_blueprint
 from autopilot.core.execution_brief import (
@@ -7333,8 +7336,10 @@ def execute_execution_plane_command(
 
     if command not in SUPPORTED_EXECUTION_COMMANDS:
         raise ValueError(f"Unsupported execution-plane command: {command}")
-    if get_project_entry(config, project_id=project_id, include_archived=True) is None:
+    project = get_project_entry(config, project_id=project_id, include_archived=True)
+    if project is None:
         raise KeyError(project_id)
+    raise_if_founder_approval_missing_for_command(project, command)
 
     tool = _build_execution_command_tool(config, project_id=project_id, command=command)
     permission_context = _execution_command_permission_context(
@@ -7623,6 +7628,48 @@ def attach_execution_brief_v2_metadata(
     }
     project["control_plane"] = control_plane
     return update_project_entry(config, project)
+
+
+def sync_execution_brief_v2_project(
+    config: AutopilotConfig,
+    *,
+    brief: Any,
+) -> tuple[dict[str, Any], Path]:
+    """Refresh the persisted V2 artifact and metadata for an existing project."""
+
+    project = find_project_by_execution_brief_id(config, brief.brief_id)
+    if project is None:
+        raise KeyError(brief.brief_id)
+
+    project_id = str(project["id"])
+    project_root = Path(str(project["path"])).resolve()
+    brief_path = persist_execution_brief_v2(project_root, brief)
+    attach_execution_brief_v2_metadata(config, project_id=project_id, brief=brief)
+
+    try:
+        from autopilot.core.initiative_lineage import upsert_initiative_lineage
+        from founderos_contracts.lifecycle import FounderMode, InitiativeLifecycleState
+
+        lineage_state = InitiativeLifecycleState.BRIEF_DRAFTED
+        lineage_mode = FounderMode.BRIEF
+        if brief.brief_approval_status == "approved":
+            lineage_state = InitiativeLifecycleState.BRIEF_APPROVED
+            lineage_mode = FounderMode.EXECUTE
+
+        upsert_initiative_lineage(
+            config,
+            brief.initiative_id,
+            brief_id=brief.brief_id,
+            project_id=project_id,
+            option_id=brief.option_id,
+            decision_id=brief.decision_id,
+            lifecycle_state=lineage_state,
+            current_mode=lineage_mode,
+        )
+    except Exception:
+        pass
+
+    return build_execution_plane_project_detail(config, project_id), brief_path
 
 
 def ingest_execution_brief_v2_project(
