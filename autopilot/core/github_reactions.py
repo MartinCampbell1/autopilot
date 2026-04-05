@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
+from autopilot.core.brief_metadata import raise_if_founder_approval_missing_for_project
 from autopilot.core.config import AutopilotConfig
 from autopilot.core.control_plane_issues import GITHUB_ISSUE_CATEGORIES_BY_EVENT
 from autopilot.core.github_prs import normalize_story_github_pr
@@ -347,7 +348,14 @@ def ingest_story_github_reaction(
         )
 
         policy = load_project_command_policy(config, project_id)
-        if bool(policy.get("github_approved_and_green_auto_resume", False)):
+        auto_resume_enabled = bool(policy.get("github_approved_and_green_auto_resume", False))
+        founder_gate_error = ""
+        try:
+            raise_if_founder_approval_missing_for_project(project)
+        except ValueError as exc:
+            founder_gate_error = str(exc)
+
+        if auto_resume_enabled and not founder_gate_error:
             resumed, _, message_text = resume_project_run(config, project_id)
             auto_resumed = bool(resumed)
             emit_project_event(
@@ -367,14 +375,20 @@ def ingest_story_github_reaction(
                 ),
             )
         else:
-            policy_reason = "GitHub approved-and-green auto-resume is disabled by project policy."
+            policy_reasons: list[str] = []
+            if founder_gate_error:
+                policy_reasons.append(founder_gate_error)
+            else:
+                policy_reasons.append(
+                    "GitHub approved-and-green auto-resume is disabled by project policy."
+                )
             issue = create_execution_command_issue(
                 config,
                 project_id=project_id,
                 command="resume",
                 requested_by=actor,
-                reason="GitHub PR is approved and green, but project resume still requires operator approval.",
-                policy_reasons=[policy_reason],
+                reason=founder_gate_error or "GitHub PR is approved and green, but project resume still requires operator approval.",
+                policy_reasons=policy_reasons,
                 runtime_agent_ids=[resolved_runtime_agent_id] if resolved_runtime_agent_id else [],
             )
             approval = create_execution_command_approval(
@@ -382,10 +396,10 @@ def ingest_story_github_reaction(
                 project_id=project_id,
                 command="resume",
                 requested_by=actor,
-                reason="GitHub PR is approved and green.",
+                reason=founder_gate_error or "GitHub PR is approved and green.",
                 issue_id=str(issue["id"]),
                 runtime_agent_ids=[resolved_runtime_agent_id] if resolved_runtime_agent_id else [],
-                policy_reasons=[policy_reason],
+                policy_reasons=policy_reasons,
             )
             issue["approval_id"] = approval["id"]
             emit_project_event(
@@ -406,6 +420,7 @@ def ingest_story_github_reaction(
                     ),
                     "issue_id": issue["id"],
                     "approval_id": approval["id"],
+                    "policy_reasons": policy_reasons,
                 },
             )
 
