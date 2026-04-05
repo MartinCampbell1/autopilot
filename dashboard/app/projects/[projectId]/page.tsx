@@ -4,6 +4,9 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { AppSidebar } from "@/components/app-sidebar";
 import { KanbanBoard } from "@/components/kanban-board";
+import { ProjectCompanyShell } from "@/components/project-company-shell";
+import { ProjectObservabilityPanel } from "@/components/project-observability-panel";
+import { ProjectOperatorShell } from "@/components/project-operator-shell";
 import { StoryDetailPanel } from "@/components/story-detail-panel";
 import { Button } from "@/components/ui/button";
 import {
@@ -15,6 +18,7 @@ import {
   pauseProject,
   resumeProject,
 } from "@/lib/api";
+import { useProjectRuntimeHandoffSignals } from "@/lib/use-project-runtime-handoff-signals";
 import { useSSE } from "@/lib/sse";
 import type { AccountHealth, ProjectDetail, ProjectSummary, Story } from "@/lib/types";
 
@@ -30,9 +34,9 @@ export default function ProjectWorkspacePage() {
   const params = useParams<{ projectId: string }>();
   const router = useRouter();
   const searchParams = useSearchParams();
-  const projectId = String(params.projectId);
+  const projectId = String(params?.projectId ?? "");
   const requestedStoryId = useMemo(() => {
-    const raw = searchParams.get("storyId");
+    const raw = searchParams?.get("storyId");
     if (!raw) return null;
     const parsed = Number(raw);
     return Number.isFinite(parsed) ? parsed : null;
@@ -44,6 +48,14 @@ export default function ProjectWorkspacePage() {
   const [selectedStoryId, setSelectedStoryId] = useState<number | null>(null);
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
+  const visibleProjects = useMemo(
+    () => projects.filter((entry) => !entry.archived),
+    [projects]
+  );
+  const {
+    signals: projectRuntimeHandoffSignals,
+    refresh: refreshProjectRuntimeHandoffSignals,
+  } = useProjectRuntimeHandoffSignals(visibleProjects);
 
   const load = useCallback(async () => {
     try {
@@ -128,7 +140,13 @@ export default function ProjectWorkspacePage() {
 
   return (
     <div className="flex min-h-screen bg-[#fafaf9]">
-      <AppSidebar health={health} projects={projects.filter((entry) => !entry.archived)} activeProjectId={projectId} />
+      <AppSidebar
+        health={health}
+        projects={visibleProjects}
+        activeProjectId={projectId}
+        projectRuntimeHandoffSignals={projectRuntimeHandoffSignals}
+        onRefreshProjectRuntimeHandoffSignals={refreshProjectRuntimeHandoffSignals}
+      />
 
       <main className="flex flex-1 pl-[260px]">
         <div className="min-w-0 flex-1">
@@ -218,6 +236,15 @@ export default function ProjectWorkspacePage() {
                 {message}
               </div>
             )}
+            <div className="mb-4">
+              <ProjectObservabilityPanel monitoring={project.monitoring} />
+            </div>
+            <div className="mb-4">
+              <ProjectOperatorShell project={project} />
+            </div>
+            <div className="mb-4">
+              <ProjectCompanyShell project={project} />
+            </div>
             <KanbanBoard
               project={project}
               selectedStoryId={selectedStoryId}

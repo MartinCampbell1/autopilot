@@ -18,11 +18,13 @@ from autopilot.core import execution_plane as execution_plane_core
 from autopilot.core.project_store import (
     emit_project_event,
     load_project_state,
+    register_project,
     save_project_state,
     update_project_runtime,
     update_story_runtime,
 )
 from autopilot.core.runtime_agent_tasks import create_or_reuse_runtime_agent_task, link_runtime_agent_task_run
+from autopilot.core.shadow_audit import create_shadow_audit_record
 from autopilot.core.tool_permissions import PermissionRuleValue, PermissionUpdate, persist_permission_update
 
 
@@ -84,6 +86,38 @@ def _create_execution_project(client: TestClient, project_root: Path) -> dict:
     return response.json()
 
 
+def _shared_brief_payload() -> dict[str, object]:
+    return {
+        "brief_id": "brief_execution_plane_1",
+        "idea_id": "idea_execution_plane_1",
+        "title": "FounderOS Shared Brief",
+        "prd_summary": "Bridge Quorum shared briefs into execution-plane projects.",
+        "acceptance_criteria": ["Shared brief ingestion works", "Outcome export links back to brief"],
+        "risks": [
+            {
+                "category": "technical",
+                "description": "Cross-plane schema drift",
+                "level": "high",
+                "mitigation": "Use one canonical shared module",
+            }
+        ],
+        "recommended_tech_stack": ["python", "fastapi", "pydantic"],
+        "first_stories": [
+            {
+                "title": "Accept shared brief",
+                "description": "Create a project from the shared contract",
+                "acceptance_criteria": ["Route accepts payload"],
+                "effort": "small",
+            }
+        ],
+        "judge_summary": "The idea is execution-ready.",
+        "confidence": "high",
+        "effort": "small",
+        "urgency": "this_week",
+        "budget_tier": "low",
+    }
+
+
 def _create_orchestrator_session(
     client: TestClient,
     *,
@@ -122,6 +156,19 @@ def test_execution_plane_brief_schema_route_exposes_extended_context(tmp_path: P
     assert payload["title"] == "ExecutionBrief"
     assert "initiative" in payload["properties"]
     assert "orchestration" in payload["properties"]
+
+
+def test_execution_plane_shared_brief_schema_route_exposes_cross_seam_contract(tmp_path: Path, monkeypatch) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    client = _build_client(config, monkeypatch)
+
+    response = client.get("/api/execution-plane/shared-execution-brief/schema")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["title"] == "ExecutionBrief"
+    assert "brief_id" in payload["properties"]
+    assert "idea_id" in payload["properties"]
 
 
 def test_execution_plane_tool_permission_runtime_routes_get_and_resolve(tmp_path: Path, monkeypatch) -> None:
@@ -865,6 +912,45 @@ def test_execution_plane_routes_create_list_and_detail_projects(
 
 
 @patch("autopilot.core.execution_plane.generate_prd_from_spec")
+def test_execution_plane_routes_create_project_from_shared_brief(
+    mock_generate_prd_from_spec,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    client = _build_client(config, monkeypatch)
+    mock_generate_prd_from_spec.return_value = {
+        "title": "FounderOS Shared Brief",
+        "description": "Execution-ready shared-brief project.",
+        "stories": [{"id": 1, "title": "Bootstrap", "description": "Create the bridge"}],
+    }
+
+    response = client.post(
+        "/api/execution-plane/projects/from-shared-brief",
+        json={
+            "brief": _shared_brief_payload(),
+            "project_path": str(tmp_path / "execution-plane-shared-brief-project"),
+            "priority": "high",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "ok"
+    assert payload["brief_id"] == "brief_execution_plane_1"
+    assert payload["idea_id"] == "idea_execution_plane_1"
+    assert payload["shared_execution_brief_path"].endswith(".agents/tasks/shared-execution-brief.json")
+    assert Path(payload["shared_execution_brief_path"]).exists()
+    assert payload["project"]["source_kind"] == "execution_brief"
+    assert payload["project"]["task_source"]["source_kind"] == "execution_brief"
+    assert "Core Thesis" in mock_generate_prd_from_spec.call_args.args[0]
+
+    persisted = json.loads(Path(payload["shared_execution_brief_path"]).read_text())
+    assert persisted["brief_id"] == "brief_execution_plane_1"
+    assert persisted["recommended_tech_stack"] == ["python", "fastapi", "pydantic"]
+
+
+@patch("autopilot.core.execution_plane.generate_prd_from_spec")
 def test_execution_plane_command_route_updates_budget_without_approval(
     mock_generate_prd_from_spec,
     tmp_path: Path,
@@ -1408,6 +1494,8 @@ def test_execution_plane_orchestrator_session_tracks_async_tasks_honestly(
     assert refreshed_detail["async_tasks"][0]["resume_contract"]["project_id"] == project_id
     assert refreshed_detail["async_tasks"][0]["resume_contract"]["output_origin"] == "source_log"
     assert refreshed_detail["async_tasks"][0]["resume_contract"]["output_generated_from_project_state"] is False
+    assert refreshed_detail["async_tasks"][0]["output_artifact_id"] in refreshed_detail["linked_artifact_ids"]
+    assert refreshed_detail["async_tasks"][0]["transcript_artifact_id"] in refreshed_detail["linked_artifact_ids"]
     assert refreshed_detail["runtime_state"] == "requires_action"
     assert refreshed_detail["pending_action"]["kind"] == "complete_session"
     assert refreshed_detail["summary"]["active_async_task_count"] == 0
@@ -2440,6 +2528,9 @@ def test_execution_plane_agent_action_execute_applies_safe_command(
     payload = execute_response.json()
     assert payload["status"] == "ok"
     assert payload["idempotent_replay"] is False
+    assert payload["execution_strategy"] == "bounded_blueprint"
+    assert payload["execution_blueprint"]["task_family"].startswith("action_batch_")
+    assert payload["run"]["execution_blueprint"]["terminal_verdict"]["state"] == "completed"
     assert payload["action"]["action_key"] == action["action_key"]
     assert payload["command_result"]["command"] == "update_budget_policy"
     assert payload["project"]["budget"]["policy"]["agent_max_worker_iterations"] == 8
@@ -2838,6 +2929,183 @@ def test_execution_plane_orchestrator_session_control_surfaces_pending_tool_perm
     assert payload["result"]["pending_tool_permission_runtimes"][0]["id"] == runtime.id
 
 
+def test_execution_plane_orchestrator_session_control_surfaces_shadow_audit_quarantines(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    client = _build_client(config, monkeypatch)
+    session = _create_orchestrator_session(
+        client,
+        project_ids=["proj_shadow"],
+        initiative_id="init_shadow",
+        actor="founderos",
+        title="FounderOS shadow audit sweep",
+    )
+
+    record = create_shadow_audit_record(
+        config,
+        project_id="proj_shadow",
+        orchestrator_session_id=session["id"],
+        runtime_agent_ids=["proj_shadow:1:worker:a"],
+        source_kind="tool_result",
+        source_name="demo.inspect",
+        source_id="toolu_shadow_1",
+        action="quarantine",
+        summary="Suspicious tool output was quarantined before downstream handoff.",
+        findings=["unverified_generated_patch"],
+        content="diff --git a/app.py b/app.py",
+    )
+
+    session_detail = client.get(f"/api/execution-plane/orchestrator-sessions/{session['id']}")
+    assert session_detail.status_code == 200
+    detail = session_detail.json()
+    assert detail["summary"]["shadow_audit_count"] == 1
+    assert detail["summary"]["open_shadow_audit_count"] == 1
+    assert detail["runtime_state"] == "requires_action"
+    assert detail["pending_action"]["kind"] == "review_shadow_audit_quarantines"
+    assert detail["control"]["state"] == "attention_required"
+    assert detail["control"]["counts"]["open_shadow_audits"] == 1
+    assert detail["control"]["pending_action"]["kind"] == "review_shadow_audit_quarantines"
+    assert detail["shadow_audits"][0]["id"] == record.id
+    assert any(item["kind"] == "review_shadow_audit_quarantines" for item in detail["control"]["recommendations"])
+
+    apply_response = client.post(
+        f"/api/execution-plane/orchestrator-sessions/{session['id']}/control/apply",
+        json={
+            "recommendation_kind": "review_shadow_audit_quarantines",
+            "actor": "founderos",
+            "reason": "Inspect quarantined artifacts before resuming progress.",
+        },
+    )
+    assert apply_response.status_code == 200
+    payload = apply_response.json()
+    assert payload["status"] == "ok"
+    assert payload["recommendation"]["kind"] == "review_shadow_audit_quarantines"
+    assert payload["result"]["counts"]["open_shadow_audits"] == 1
+    assert payload["result"]["open_shadow_audits"][0]["id"] == record.id
+
+
+def test_execution_plane_runtime_agent_task_output_shadow_audit_requires_explicit_review_and_resolve(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    client = _build_client(config, monkeypatch)
+    project_root = tmp_path / "shadow-task-project"
+    prd_path = project_root / ".agents" / "tasks" / "prd.json"
+    prd_path.parent.mkdir(parents=True, exist_ok=True)
+    prd_path.write_text(
+        json.dumps(
+            {
+                "title": "Shadow Task Project",
+                "description": "Verify quarantined runtime-task outputs.",
+                "stories": [
+                    {"id": 1, "title": "Launch", "description": "Run background work", "status": "open", "position": 0}
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    project = register_project(
+        config,
+        name="Shadow Task Project",
+        project_path=project_root,
+        prd_relpath=".agents/tasks/prd.json",
+    )
+    project_id = str(project["id"])
+    session = _create_orchestrator_session(
+        client,
+        project_ids=[project_id],
+        initiative_id="init_shadow_task",
+        actor="founderos",
+        title="FounderOS shadow task review",
+    )
+    log_path = config.autopilot_home / "logs" / "shadow-task.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path.write_text("launch started\nlaunch finished cleanly\n", encoding="utf-8")
+
+    task = create_or_reuse_runtime_agent_task(
+        config,
+        project_id=project_id,
+        command="launch",
+        actor="founderos",
+        reason="Launch background work.",
+        orchestrator_session_id=session["id"],
+        runtime_agent_ids=[f"{project_id}:1:worker:a"],
+        output_path=str(log_path),
+        metadata={
+            "shadow_audit": {
+                "action": "quarantine",
+                "summary": "Background task output requires explicit review before handoff.",
+                "findings": ["unverified_subagent_output"],
+            }
+        },
+    )
+    save_project_state(
+        config,
+        project_id,
+        {
+            "status": "completed",
+            "paused": False,
+            "finished_at": "2026-04-02T00:00:00+00:00",
+            "log_path": str(log_path),
+        },
+    )
+
+    blocked_output_response = client.get(f"/api/execution-plane/agents/tasks/{task.id}/output")
+    assert blocked_output_response.status_code == 200
+    blocked_output = blocked_output_response.json()
+    audit_id = blocked_output["shadow_audits"][0]["id"]
+
+    assert blocked_output["status"] == "quarantined"
+    assert blocked_output["content"] == ""
+    assert blocked_output["content_blocked"] is True
+    assert blocked_output["quarantined"] is True
+    assert blocked_output["shadow_audits"][0]["source_kind"] == "runtime_agent_task_output"
+    assert blocked_output["shadow_audits"][0]["blocked_artifact_ref"] == f"/api/execution-plane/agents/tasks/{task.id}/output"
+
+    task_detail_response = client.get(f"/api/execution-plane/agents/tasks/{task.id}")
+    assert task_detail_response.status_code == 200
+    task_detail = task_detail_response.json()
+    assert task_detail["output_quarantined"] is True
+    assert task_detail["open_shadow_audit_count"] == 1
+
+    audit_detail_response = client.get(f"/api/execution-plane/shadow-audits/{audit_id}")
+    assert audit_detail_response.status_code == 200
+    audit_detail = audit_detail_response.json()
+    assert audit_detail["id"] == audit_id
+    assert audit_detail["blocked_artifact"]["artifact_ref"] == f"/api/execution-plane/agents/tasks/{task.id}/output"
+    assert "launch finished cleanly" in audit_detail["blocked_artifact"]["content"]
+
+    session_detail_response = client.get(f"/api/execution-plane/orchestrator-sessions/{session['id']}")
+    assert session_detail_response.status_code == 200
+    session_detail = session_detail_response.json()
+    assert session_detail["summary"]["open_shadow_audit_count"] == 1
+
+    resolve_response = client.post(
+        f"/api/execution-plane/shadow-audits/{audit_id}/resolve",
+        json={"actor": "founderos", "note": "Reviewed and accepted."},
+    )
+    assert resolve_response.status_code == 200
+    resolved_payload = resolve_response.json()
+    assert resolved_payload["status"] == "ok"
+    assert resolved_payload["shadow_audit"]["status"] == "resolved"
+
+    unblocked_output_response = client.get(f"/api/execution-plane/agents/tasks/{task.id}/output")
+    assert unblocked_output_response.status_code == 200
+    unblocked_output = unblocked_output_response.json()
+    assert unblocked_output["status"] == "ok"
+    assert unblocked_output["content_blocked"] is False
+    assert unblocked_output["quarantined"] is False
+    assert "launch finished cleanly" in unblocked_output["content"]
+
+    refreshed_session_response = client.get(f"/api/execution-plane/orchestrator-sessions/{session['id']}")
+    assert refreshed_session_response.status_code == 200
+    refreshed_session = refreshed_session_response.json()
+    assert refreshed_session["summary"]["open_shadow_audit_count"] == 0
+
+
 @patch("autopilot.core.execution_plane.generate_prd_from_spec")
 def test_execution_plane_agent_action_batch_execute_applies_filtered_safe_actions(
     mock_generate_prd_from_spec,
@@ -2918,6 +3186,9 @@ def test_execution_plane_agent_action_batch_execute_applies_filtered_safe_action
     payload = response.json()
     assert payload["status"] == "ok"
     assert payload["idempotent_replay"] is False
+    assert payload["execution_strategy"] == "bounded_blueprint"
+    assert payload["execution_blueprint"]["task_family"].startswith("action_batch_")
+    assert payload["run"]["execution_blueprint"]["terminal_verdict"]["state"] == "completed"
     assert payload["selection"]["mode"] == "filters"
     assert payload["policy"]["profile_name"] == "safe_budget_maintenance"
     assert payload["summary"]["selected_count"] >= 1
@@ -3164,6 +3435,130 @@ def test_execution_plane_agent_action_run_surfaces_linked_async_task_without_inl
     assert refreshed["active_async_task_count"] == 0
     assert refreshed["async_task_status_counts"]["completed"] == 1
     assert refreshed["async_tasks"][0]["id"] == task.id
+
+
+def test_execution_plane_agent_action_run_surfaces_quarantined_linked_async_handoff_until_resolved(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    client = _build_client(config, monkeypatch)
+    project_root = tmp_path / "action-run-shadow-project"
+    prd_path = project_root / ".agents" / "tasks" / "prd.json"
+    prd_path.parent.mkdir(parents=True, exist_ok=True)
+    prd_path.write_text(
+        json.dumps(
+            {
+                "title": "Action Run Shadow Project",
+                "description": "Verify quarantined action-run handoff state.",
+                "stories": [
+                    {"id": 1, "title": "Launch", "description": "Run background work", "status": "open", "position": 0}
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    project = register_project(
+        config,
+        name="Action Run Shadow Project",
+        project_path=project_root,
+        prd_relpath=".agents/tasks/prd.json",
+    )
+    project_id = str(project["id"])
+    session = _create_orchestrator_session(
+        client,
+        project_ids=[project_id],
+        initiative_id="init_shadow_run",
+        actor="founderos",
+        title="FounderOS action-run shadow review",
+    )
+    log_path = config.autopilot_home / "logs" / "action-run-shadow.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path.write_text("launch started\nlaunch finished cleanly\n", encoding="utf-8")
+
+    task = create_or_reuse_runtime_agent_task(
+        config,
+        project_id=project_id,
+        command="launch",
+        actor="founderos",
+        reason="Launch background work.",
+        orchestrator_session_id=session["id"],
+        runtime_agent_ids=["runtime-agent-shadow"],
+        output_path=str(log_path),
+        metadata={
+            "shadow_audit": {
+                "action": "quarantine",
+                "summary": "Background task output requires explicit review before action-run handoff.",
+                "findings": ["unverified_subagent_output"],
+            }
+        },
+    )
+    run = create_agent_action_batch_run(
+        config,
+        run_kind="single_action",
+        orchestrator_session_id=session["id"],
+        actor="founderos",
+        mode="auto",
+        selection={"mode": "single_action", "project_id": project_id},
+        summary={"selected_count": 1, "processed_count": 1, "status_counts": {"ok": 1}},
+        results=[{"status": "ok", "command_result": {"command": "launch"}, "async_task": {"id": task.id}}],
+        status="ok",
+        project_ids=[project_id],
+        runtime_agent_ids=["runtime-agent-shadow"],
+    )
+    link_runtime_agent_task_run(config, task.id, agent_action_run_id=run.id)
+
+    pending_response = client.get(f"/api/execution-plane/agents/action-runs/{run.id}")
+    assert pending_response.status_code == 200
+    assert pending_response.json()["completion_state"] == "pending_async"
+
+    save_project_state(
+        config,
+        project_id,
+        {
+            "status": "completed",
+            "paused": False,
+            "finished_at": "2026-04-02T00:10:00+00:00",
+            "log_path": str(log_path),
+        },
+    )
+
+    quarantined_response = client.get(f"/api/execution-plane/agents/action-runs/{run.id}")
+    assert quarantined_response.status_code == 200
+    quarantined = quarantined_response.json()
+    audit_id = quarantined["shadow_audits"][0]["id"]
+
+    assert quarantined["completion_state"] == "quarantined"
+    assert quarantined["handoff_state"] == "quarantined"
+    assert quarantined["handoff_blocked"] is True
+    assert quarantined["open_shadow_audit_count"] == 1
+    assert quarantined["async_task_count"] == 1
+    assert quarantined["active_async_task_count"] == 0
+    assert quarantined["resume_contract"]["output_quarantined"] is True
+    assert quarantined["async_tasks"][0]["output_quarantined"] is True
+    assert quarantined["shadow_audits"][0]["source_kind"] == "runtime_agent_task_output"
+    assert "require explicit review" in quarantined["completion_message"]
+
+    summary_response = client.get("/api/execution-plane/agents/action-runs/summary", params={"project_id": project_id})
+    assert summary_response.status_code == 200
+    summary = summary_response.json()
+    assert summary["totals"]["quarantined"] >= 1
+    assert summary["by_completion_state"]["quarantined"] >= 1
+
+    resolve_response = client.post(
+        f"/api/execution-plane/shadow-audits/{audit_id}/resolve",
+        json={"actor": "founderos", "note": "Reviewed and accepted."},
+    )
+    assert resolve_response.status_code == 200
+
+    resolved_run_response = client.get(f"/api/execution-plane/agents/action-runs/{run.id}")
+    assert resolved_run_response.status_code == 200
+    resolved_run = resolved_run_response.json()
+    assert resolved_run["completion_state"] == "completed"
+    assert resolved_run["handoff_state"] == "clear"
+    assert resolved_run["handoff_blocked"] is False
+    assert resolved_run["open_shadow_audit_count"] == 0
+    assert resolved_run["resume_contract"]["output_quarantined"] is False
 
 
 @patch("autopilot.core.execution_plane.generate_prd_from_spec")
@@ -3644,6 +4039,9 @@ def test_execution_plane_agent_action_batch_preview_is_non_mutating(
     preview = preview_response.json()
     assert preview["dry_run"] is True
     assert preview["idempotent_replay"] is False
+    assert preview["execution_strategy"] == "bounded_blueprint"
+    assert preview["execution_blueprint"]["task_family"].startswith("action_batch_")
+    assert preview["run"]["execution_blueprint"]["terminal_verdict"]["state"] == "completed"
     assert preview["preview_id"] == preview["run"]["id"]
     assert preview["artifact_ref"].endswith(preview["run"]["id"])
     assert preview["approval_required"] is False

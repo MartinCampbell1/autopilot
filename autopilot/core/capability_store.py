@@ -8,6 +8,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
+from autopilot.core.atomic_io import atomic_write_json as _shared_atomic_write_json
 from autopilot.core.config import AutopilotConfig
 
 
@@ -724,10 +725,7 @@ DEFAULT_LAUNCH_PRESETS: list[LaunchPreset] = [
 
 
 def _atomic_write_json(path: Path, payload: dict | list) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = path.with_suffix(f"{path.suffix}.tmp")
-    tmp_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False))
-    tmp_path.replace(path)
+    _shared_atomic_write_json(path, payload)
 
 
 def _slugify(value: str) -> str:

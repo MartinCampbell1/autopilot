@@ -15,9 +15,15 @@ from rich.console import Console
 
 from autopilot.core.account_manager import AccountManager
 from autopilot.core.adapters import get_adapter
+from autopilot.core.budget_enforcer import (
+    BudgetEnforcementDecision,
+    check_budget_enforcement,
+    reserve_iteration_with_budget_enforcement,
+)
 from autopilot.core.capability_store import normalize_launch_profile, resolve_story_runtime_plan
 from autopilot.core.config import load_config
 from autopilot.core.cost_accounting import merge_usage_records, record_iteration_cost, start_run_cost_bucket
+from autopilot.core.evals.feedback import record_iteration_feedback
 from autopilot.core.headless import (
     RUN_EXIT_FAILED,
     get_active_structured_io,
@@ -65,8 +71,7 @@ from autopilot.core.runtime_agents import (
     resolve_story_runtime_agent_id,
     update_pipeline_stage_state,
 )
-from autopilot.core.run_watchdog import check_runtime_watchdog
-from autopilot.core.runtime_budgets import consume_iteration_budget, start_run_budget_bucket
+from autopilot.core.runtime_budgets import start_run_budget_bucket
 from autopilot.core.runtime_control import (
     RuntimeAgentRole,
     WorkItemLeaseConflict,
@@ -405,9 +410,14 @@ def _serialize_review_results(review_results: list[Any]) -> list[dict[str, Any]]
                     "approved": review_result.get("approved"),
                     "feedback": review_result.get("feedback", ""),
                     "raw_output": review_result.get("raw_output", ""),
+                    "verdict": review_result.get("verdict", ""),
                     "profile_used": review_result.get("profile_used", ""),
                     "elapsed_sec": review_result.get("elapsed_sec", 0.0),
                     "usage": review_result.get("usage", {}),
+                    "verification_checks": review_result.get("verification_checks", []),
+                    "shadow_audit_action": review_result.get("shadow_audit_action", ""),
+                    "shadow_audit_feedback": review_result.get("shadow_audit_feedback", ""),
+                    "shadow_audit_findings": review_result.get("shadow_audit_findings", []),
                 }
             )
             continue
@@ -417,9 +427,24 @@ def _serialize_review_results(review_results: list[Any]) -> list[dict[str, Any]]
                 "approved": getattr(review_result, "approved", False),
                 "feedback": getattr(review_result, "feedback", ""),
                 "raw_output": getattr(review_result, "raw_output", ""),
+                "verdict": getattr(review_result, "verdict", ""),
                 "profile_used": getattr(review_result, "profile_used", ""),
                 "elapsed_sec": getattr(review_result, "elapsed_sec", 0.0),
                 "usage": getattr(review_result, "usage", {}),
+                "verification_checks": [
+                    {
+                        "name": getattr(check, "name", ""),
+                        "command": getattr(check, "command", ""),
+                        "output": getattr(check, "output", ""),
+                        "status": getattr(check, "status", ""),
+                        "details": getattr(check, "details", ""),
+                        "expected_vs_actual": getattr(check, "expected_vs_actual", ""),
+                    }
+                    for check in list(getattr(review_result, "verification_checks", []) or [])
+                ],
+                "shadow_audit_action": getattr(review_result, "shadow_audit_action", ""),
+                "shadow_audit_feedback": getattr(review_result, "shadow_audit_feedback", ""),
+                "shadow_audit_findings": list(getattr(review_result, "shadow_audit_findings", []) or []),
             }
         )
     return serialized
@@ -434,23 +459,41 @@ def _last_iteration_extra(orchestrator: Orchestrator) -> dict[str, Any]:
         "iteration": last_record.iteration,
         "profile_used": last_record.profile_used,
         "provider": last_record.provider,
+        "adapter_id": last_record.adapter_id,
         "gates_passed": last_record.gates_passed,
         "critic_approved": last_record.critic_approved,
         "critic_feedback": last_record.critic_feedback,
         "elapsed_sec": last_record.elapsed_sec,
         "git_diff_empty": last_record.git_diff_empty,
-        "gate_failures": [
-            gate
-            for gate in _serialize_gate_results(last_record.gate_results)
-            if not gate["passed"]
-        ],
+        "prompt_type": last_record.prompt_type,
+        "attempt_strategy": last_record.attempt_strategy,
+        "attempt_number": last_record.attempt_number,
+        "attempt_count": last_record.attempt_count,
+        "escalation_state": last_record.escalation_state,
+        "selected_by_policy": last_record.selected_by_policy,
+        "gate_results": _serialize_gate_results(last_record.gate_results),
         "quality_regression": last_record.quality_regression,
         "regression_summary": last_record.regression_summary,
         "worker_usage": last_record.worker_usage,
         "critic_usage": last_record.critic_usage,
         "review_phases": list(last_record.review_phases),
+        "verification_checks": [
+            {
+                "name": check.name,
+                "command": check.command,
+                "output": check.output,
+                "status": check.status,
+                "details": check.details,
+                "expected_vs_actual": check.expected_vs_actual,
+            }
+            for check in list(last_record.verification_checks or [])
+        ],
         "review_results": _serialize_review_results(last_record.review_results),
         "iteration_usage": iteration_usage,
+        "judge_pack": last_record.judge_pack,
+        "judge_verdict": last_record.judge_verdict,
+        "judge_summary": last_record.judge_summary,
+        "judge_findings": list(last_record.judge_findings),
     }
 
 
@@ -848,11 +891,22 @@ def _run_impl(
                 "story_title": story_title,
                 "status": outcome.value,
                 "iteration": last_record.iteration,
+                "run_id": runtime_session_id,
+                "run_started_at": current_run_started_at,
                 "worker": worker_label,
                 "critic": critic_label,
                 **_last_iteration_extra(orchestrator),
             },
         )
+        try:
+            record_iteration_feedback(
+                config,
+                project_id,
+                run_id=runtime_session_id,
+                iteration_record=last_record,
+            )
+        except Exception:
+            pass
 
     def sync_event(*, event: str, status: str, message: str, story_id: int | None = None, extra: dict[str, Any] | None = None) -> dict[str, Any]:
         with state_lock:
@@ -866,25 +920,20 @@ def _run_impl(
                 extra=extra,
             )
 
-    def apply_runtime_watchdog(
+    def pause_for_budget_enforcement(
+        decision: BudgetEnforcementDecision,
         *,
         story_id: int | None = None,
         runtime_plan: dict[str, Any] | None = None,
         worker_label: str = "",
         critic_label: str = "",
-    ) -> bool:
-        with state_lock:
-            current_state = load_project_state(config, project_id)
-            decision = check_runtime_watchdog(current_state, story_id=story_id)
-        if not decision.triggered:
-            return False
-
-        extra: dict[str, Any] = {
-            "scope": decision.scope,
-            "elapsed_seconds": decision.elapsed_seconds,
-            "limit_seconds": decision.limit_seconds,
-        }
-        resolved_story_id = decision.story_id if decision.scope == "story" else story_id
+    ) -> None:
+        resolved_story_id = decision.story_id if decision.story_id is not None else story_id
+        extra = decision.as_event_extra()
+        if worker_label:
+            extra["worker"] = worker_label
+        if critic_label:
+            extra["critic"] = critic_label
         if runtime_plan is not None and resolved_story_id is not None:
             extra.update(
                 _story_agent_event_extra(
@@ -897,22 +946,63 @@ def _run_impl(
                 )
             )
 
-        watchdog_pause_project_run(
+        if decision.kind == "watchdog":
+            watchdog_pause_project_run(
+                config,
+                project_id,
+                message=decision.reason,
+                story_id=resolved_story_id,
+                extra=extra,
+            )
+            _emit_runtime_message(
+                headless=headless,
+                event="story_watchdog_paused" if decision.scope == "story" else "run_watchdog_paused",
+                message=decision.reason,
+                rich_message=f"[yellow]{decision.reason}[/yellow]",
+                level="warning",
+                project_id=project_id,
+                story_id=resolved_story_id,
+                **extra,
+            )
+            return
+
+        auto_pause_project_run(
             config,
             project_id,
-            message=decision.reason,
+            message=decision.reason or "Runtime budget exhausted.",
             story_id=resolved_story_id,
             extra=extra,
         )
         _emit_runtime_message(
             headless=headless,
-            event="story_watchdog_paused" if decision.scope == "story" else "run_watchdog_paused",
-            message=decision.reason,
-            rich_message=f"[yellow]{decision.reason}[/yellow]",
+            event="budget_paused",
+            message=decision.reason or "Runtime budget exhausted.",
+            rich_message=f"[yellow]{decision.reason or 'Runtime budget exhausted.'}[/yellow]",
             level="warning",
             project_id=project_id,
             story_id=resolved_story_id,
             **extra,
+        )
+
+    def apply_runtime_watchdog(
+        *,
+        story_id: int | None = None,
+        runtime_plan: dict[str, Any] | None = None,
+        worker_label: str = "",
+        critic_label: str = "",
+    ) -> bool:
+        with state_lock:
+            current_state = load_project_state(config, project_id)
+            decision = check_budget_enforcement(current_state, story_id=story_id)
+        if not decision.triggered:
+            return False
+
+        pause_for_budget_enforcement(
+            decision,
+            story_id=story_id,
+            runtime_plan=runtime_plan,
+            worker_label=worker_label,
+            critic_label=critic_label,
         )
         return True
 
@@ -939,27 +1029,27 @@ def _run_impl(
         with account_lock:
             account_mgr.mark_rate_limited(profile.provider, profile.name)
 
-    def reserve_iteration_budget(story_id: int, worker_label: str, critic_label: str) -> tuple[bool, str | None]:
+    def reserve_iteration_budget(story_id: int, worker_label: str, critic_label: str) -> BudgetEnforcementDecision:
         with state_lock:
             state = load_project_state(config, project_id)
-            allowed, reason = consume_iteration_budget(
+            decision = reserve_iteration_with_budget_enforcement(
                 state,
                 story_id=story_id,
                 worker_label=worker_label,
                 critic_label=critic_label,
             )
             save_project_state(config, project_id, state)
-            if allowed:
-                return True, None
+            if not decision.triggered:
+                return decision
 
             story_state = state.setdefault("story_state", {}).get(str(story_id))
             if story_state is not None:
                 story_state["status"] = "open"
                 story_state["agent"] = None
                 story_state["critic"] = None
-                story_state["last_error"] = reason
+                story_state["last_error"] = decision.reason
                 save_project_state(config, project_id, state)
-            return False, reason
+            return decision
 
     def register_parallel_story(story_id: int | None) -> None:
         current_state = load_project_state(config, project_id)
@@ -1629,29 +1719,18 @@ def _run_impl(
                 critic_env = account_mgr.build_env(critic_profile)
                 worker_label = f"{worker_profile.provider}/{worker_profile.name}"
                 critic_label = f"{critic_profile.provider}/{critic_profile.name}"
-                allowed_budget, budget_reason = reserve_iteration_budget(story_id, worker_label, critic_label)
-                if not allowed_budget:
-                    auto_pause_project_run(
-                        config,
-                        project_id,
-                        message=budget_reason or "Runtime budget exhausted.",
+                budget_decision = reserve_iteration_budget(story_id, worker_label, critic_label)
+                if budget_decision.triggered:
+                    pause_for_budget_enforcement(
+                        budget_decision,
                         story_id=story_id,
-                        extra={
-                            "worker": worker_label,
-                            "critic": critic_label,
-                            **_story_agent_event_extra(
-                                project_id,
-                                story_id,
-                                runtime_plan,
-                                worker_label=worker_label,
-                                critic_label=critic_label,
-                                primary_role="worker",
-                            ),
-                        },
+                        runtime_plan=runtime_plan,
+                        worker_label=worker_label,
+                        critic_label=critic_label,
                     )
                     sync_story(
                         story_id,
-                        last_error=budget_reason,
+                        last_error=budget_decision.reason,
                     )
                     unregister_parallel_story(story_id)
                     return "paused"

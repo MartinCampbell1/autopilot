@@ -11,6 +11,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from autopilot.core.artifact_store import get_artifact, persist_artifact
 from autopilot.core.config import AutopilotConfig
 
 TASK_OUTPUT_MAX_CHARS = 65536
@@ -72,6 +73,9 @@ def task_output_metadata_path(config: AutopilotConfig, output_id: str) -> Path:
 def task_output_content_path(config: AutopilotConfig, output_id: str) -> Path:
     """Return content path for one output artifact."""
 
+    artifact = get_artifact(config, output_id)
+    if artifact is not None and str(artifact.content_path or "").strip():
+        return Path(str(artifact.content_path))
     return config.task_outputs_dir / f"{output_id}.txt"
 
 
@@ -116,9 +120,23 @@ def persist_task_output(
         raise ValueError("owner_id is required")
 
     output_id = _task_output_id(normalized_owner_kind, normalized_owner_id)
-    content_path = task_output_content_path(config, output_id)
     stored_content, truncated = _truncate_content(str(content or ""))
-    _atomic_write_text(content_path, stored_content)
+    artifact = persist_artifact(
+        config,
+        artifact_id=output_id,
+        content=stored_content,
+        artifact_type="task_output",
+        stage="verified",
+        owner_kind=normalized_owner_kind,
+        owner_id=normalized_owner_id,
+        media_type="text/plain",
+        file_extension=".txt",
+        metadata={
+            "source_path": str(source_path or "").strip(),
+            "truncated": truncated,
+            **dict(metadata or {}),
+        },
+    )
 
     now = _utcnow_iso()
     existing = get_task_output(config, output_id)
@@ -128,7 +146,7 @@ def persist_task_output(
         owner_kind=normalized_owner_kind,
         owner_id=normalized_owner_id,
         source_path=str(source_path or "").strip(),
-        content_path=str(content_path),
+        content_path=str(artifact.content_path),
         content_bytes=len(stored_content.encode("utf-8")),
         truncated=truncated,
         preview=stored_content[:TASK_OUTPUT_PREVIEW_CHARS],

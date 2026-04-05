@@ -18,6 +18,8 @@ class IntakeSession:
     prd: dict | None = None
     spec_bootstrap: dict | None = None
     project_name: str = ""
+    linked_project_id: str = ""
+    linked_project_name: str = ""
 
     def add_user_message(self, text: str) -> None:
         self.messages.append({"role": "user", "content": text})

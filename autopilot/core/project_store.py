@@ -18,6 +18,11 @@ from typing import Any
 
 import yaml
 
+from autopilot.core.atomic_io import (
+    atomic_write_json as _shared_atomic_write_json,
+    atomic_write_text as _shared_atomic_write_text,
+    atomic_write_yaml as _shared_atomic_write_yaml,
+)
 from autopilot.core.capability_store import (
     DEFAULT_CONNECTORS,
     DEFAULT_SKILL_PACKS,
@@ -38,7 +43,9 @@ from autopilot.core.cost_accounting import default_cost_usage, ensure_cost_state
 from autopilot.core.exact_edit import append_with_fresh_snapshot
 from autopilot.core.execution_brief import TaskSource
 from autopilot.core.github_prs import normalize_story_github_pr
+from autopilot.core.knowledge_distiller import ensure_completed_story_skills
 from autopilot.core.loop_runner import apply_autopilot_ralph_overrides, check_ralph_installed, init_ralph_project
+from autopilot.core.memory_graph import build_memory_graph_snapshot
 from autopilot.core.models import normalize_story_blocked_by, resolve_story_blocked_on, validate_story_dependencies
 from autopilot.core.runtime_agents import build_story_pipeline_state
 from autopilot.core.runtime_budgets import (
@@ -50,6 +57,7 @@ from autopilot.core.runtime_budgets import (
 )
 from autopilot.core.runtime_env import build_runtime_base_env
 from autopilot.core.repo_registry import build_repo_registry_key, find_canonical_git_root, update_repo_path_mapping
+from autopilot.core.session_memory import build_memory_snapshot
 from autopilot.core.tool_permission_runtime import list_tool_permission_runtimes
 from autopilot.core.worktree import resolve_story_worktree_owner
 
@@ -179,18 +187,15 @@ def resolve_project_task_source(project: dict[str, Any]) -> dict[str, Any]:
 
 
 def _atomic_write_text(path: Path, contents: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temp_path = path.with_suffix(f"{path.suffix}.tmp")
-    temp_path.write_text(contents)
-    temp_path.replace(path)
+    _shared_atomic_write_text(path, contents)
 
 
 def _atomic_write_json(path: Path, data: dict[str, Any]) -> None:
-    _atomic_write_text(path, json.dumps(data, indent=2, ensure_ascii=False))
+    _shared_atomic_write_json(path, data)
 
 
 def _atomic_write_yaml(path: Path, data: dict[str, Any]) -> None:
-    _atomic_write_text(path, yaml.safe_dump(data, sort_keys=False, allow_unicode=True))
+    _shared_atomic_write_yaml(path, data)
 
 
 def _read_yaml(path: Path) -> dict[str, Any]:
@@ -927,10 +932,33 @@ def _default_runtime_state(project_id: str, prd: dict[str, Any]) -> dict[str, An
         "budget_usage": default_budget_usage(),
         "cost_usage": default_cost_usage(),
         "discoveries": [],
+        "memory": {
+            "working_log_count": 0,
+            "memory_count": 0,
+            "skill_count": 0,
+            "graph_node_count": 0,
+            "graph_edge_count": 0,
+            "memory_type_counts": {},
+            "graph_node_kind_counts": {},
+            "recent_memories": [],
+            "skills": [],
+        },
         "story_state": {
             str(story["id"]): _story_state_from_definition(story) for story in prd.get("stories", [])
         },
         "timeline": timeline,
+    }
+
+
+def _build_project_memory_state(project_path: Path) -> dict[str, Any]:
+    memory_snapshot = build_memory_snapshot(project_path)
+    graph_snapshot = build_memory_graph_snapshot(project_path)
+    return {
+        **memory_snapshot,
+        "graph_node_count": graph_snapshot["node_count"],
+        "graph_edge_count": graph_snapshot["edge_count"],
+        "graph_node_kind_counts": graph_snapshot["node_kind_counts"],
+        "graph_updated_at": graph_snapshot["updated_at"],
     }
 
 
@@ -1008,6 +1036,7 @@ def ensure_project_state(
     state.setdefault("quality_policy", default_quality_policy())
     state.setdefault("cost_usage", default_cost_usage())
     state.setdefault("discoveries", [])
+    state.setdefault("memory", _build_project_memory_state(Path(project["path"])))
     state.setdefault("timeline", [])
     state.setdefault("story_state", {})
     ensure_budget_state(state)
@@ -1098,6 +1127,13 @@ def ensure_project_state(
         state["finished_at"] = state["finished_at"] or utcnow_iso()
         changed = True
 
+    ensure_completed_story_skills(Path(project["path"]), prd.get("stories", []))
+    memory_state = _build_project_memory_state(Path(project["path"]))
+    if state.get("memory") != memory_state:
+        state["memory"] = memory_state
+        if state.get("status") != "running":
+            changed = True
+
     if changed:
         save_project_state(config, project["id"], state)
 
@@ -1114,10 +1150,9 @@ def save_project_state(config: AutopilotConfig, project_id: str, state: dict[str
 
 
 def _append_event_log(config: AutopilotConfig, event_record: dict[str, Any]) -> None:
-    path = config.events_log_path
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(event_record, ensure_ascii=False) + "\n")
+    from autopilot.core.audit_chain import append_jsonl_audit_record
+
+    append_jsonl_audit_record(config.events_log_path, event_record, chain_kind="events", config=config)
 
 
 def emit_project_event(
@@ -1144,6 +1179,11 @@ def emit_project_event(
         "message": _sanitize_message(message),
         "timestamp": utcnow_iso(),
         "task_source": task_source,
+        "run_id": str(state.get("runtime_session_id") or ""),
+        "run_started_at": ((state.get("cost_usage") or {}).get("run") or {}).get("started_at") or state.get("started_at"),
+        "current_iteration": int(state.get("current_iteration") or 0),
+        "active_worker": state.get("active_worker"),
+        "active_critic": state.get("active_critic"),
     }
     if extra:
         event_record.update(extra)
@@ -1178,6 +1218,48 @@ def emit_project_event(
                 "kind": "project_event",
                 **event_record,
             },
+        )
+    except Exception:
+        pass
+    try:
+        from autopilot.core.evals.benchmarks import append_benchmark_run, build_benchmark_run_snapshot
+        from autopilot.core.evals.feedback import read_feedback_records
+        from autopilot.core.monitoring.traces import build_trace_monitor
+        from autopilot.core.run_trace import read_trace_entries
+
+        if event in {
+            "budget_paused",
+            "interrupt_paused",
+            "paused",
+            "run_completed",
+            "run_failed",
+            "run_finished",
+            "run_paused",
+            "timeout_paused",
+        }:
+            trace_entries = read_trace_entries(config, project_id, limit=2000)
+            trace_monitor = build_trace_monitor(trace_entries)
+            latest_run = (trace_monitor.get("runs") or [None])[-1]
+            if latest_run and str(latest_run.get("run_id") or ""):
+                feedback_records = [
+                    record
+                    for record in read_feedback_records(config, project_id)
+                    if str(record.get("run_id") or "") == str(latest_run.get("run_id") or "")
+                ]
+                append_benchmark_run(
+                    config,
+                    project_id,
+                    build_benchmark_run_snapshot(latest_run, feedback_records=feedback_records),
+                )
+    except Exception:
+        pass
+    try:
+        from autopilot.core.execution_outcomes import maybe_refresh_execution_outcome_bundle_for_event
+
+        maybe_refresh_execution_outcome_bundle_for_event(
+            config,
+            project_id=project_id,
+            event=event,
         )
     except Exception:
         pass
@@ -1982,11 +2064,62 @@ def build_project_detail(config: AutopilotConfig, project_id: str) -> dict[str, 
     }
     trace_summary: dict[str, Any] = {}
     trace_file = ""
+    monitoring: dict[str, Any] = {}
+    audit: dict[str, Any] = {}
+    bootstrap: dict[str, Any] = {}
+    runtime_diagnostics: dict[str, Any] = {}
+    company: dict[str, Any] = {}
     try:
-        from autopilot.core.run_trace import build_trace_summary, read_trace_entries, trace_path
+        from autopilot.core.evals.benchmarks import build_benchmark_summary, read_benchmark_runs
+        from autopilot.core.evals.feedback import build_feedback_summary, read_feedback_records
+        from autopilot.core.monitoring.metrics import build_monitoring_snapshot
+        from autopilot.core.monitoring.traces import build_trace_monitor
+        from autopilot.core.run_trace import build_trace_audit_bundle, build_trace_summary, read_trace_entries, trace_path
 
-        trace_summary = build_trace_summary(read_trace_entries(config, project_id, limit=400))
+        trace_entries = read_trace_entries(config, project_id, limit=1200)
+        trace_summary = build_trace_summary(trace_entries)
         trace_file = str(trace_path(config, project_id))
+        feedback_summary = build_feedback_summary(read_feedback_records(config, project_id, limit=500))
+        benchmark_summary = build_benchmark_summary(read_benchmark_runs(config, project_id, limit=50))
+        monitoring = build_monitoring_snapshot(
+            cost_usage=state.get("cost_usage", default_cost_usage()),
+            trace_monitor=build_trace_monitor(trace_entries),
+            feedback_summary=feedback_summary,
+            benchmark_summary=benchmark_summary,
+        )
+        audit = dict((build_trace_audit_bundle(config, project_id, include_entries=False).get("audit_chain") or {}))
+    except Exception:
+        pass
+    try:
+        from autopilot.core.bootstrap_visibility import build_bootstrap_status
+
+        bootstrap = build_bootstrap_status(project_path=project["path"], project=project)
+    except Exception:
+        pass
+    try:
+        from autopilot.core.runtime_diagnostics import build_runtime_diagnostics
+
+        runtime_diagnostics = build_runtime_diagnostics(
+            config=config,
+            config_path=config.autopilot_home / "config.yaml",
+            project_path=Path(project["path"]),
+        )
+    except Exception:
+        pass
+    try:
+        from autopilot.core.company import build_company_shell
+
+        company = build_company_shell(
+            config,
+            project=project,
+            prd=prd,
+            stories=stories,
+            state=state,
+            delivery_status=dict(summary.get("delivery_status") or {}),
+            latest_handoff=dict(summary.get("latest_handoff") or {}),
+            bootstrap=bootstrap,
+            runtime_diagnostics=runtime_diagnostics,
+        )
     except Exception:
         pass
 
@@ -2020,6 +2153,11 @@ def build_project_detail(config: AutopilotConfig, project_id: str) -> dict[str, 
         "activation_errors": activation_errors,
         "trace_summary": trace_summary,
         "trace_path": trace_file,
+        "monitoring": monitoring,
+        "audit": audit,
+        "bootstrap": bootstrap,
+        "runtime_diagnostics": runtime_diagnostics,
+        "company": company,
     }
 
 
@@ -2291,6 +2429,8 @@ def _persist_paused_project_run(
         raise KeyError(project_id)
 
     resolved_story_id = story_id if story_id is not None else state.get("current_story_id")
+    runtime_session_id = str(state.get("runtime_session_id") or "")
+    run_started_at = ((state.get("cost_usage") or {}).get("run") or {}).get("started_at") or state.get("started_at")
     _, budget_usage = ensure_budget_state(state)
     state.update(
         {
@@ -2312,6 +2452,12 @@ def _persist_paused_project_run(
     if set_last_error:
         state["last_error"] = message
     save_project_state(config, project_id, state)
+    trace_extra = {
+        "run_id": runtime_session_id,
+        "run_started_at": run_started_at,
+    }
+    if extra:
+        trace_extra.update(extra)
     emit_project_event(
         config,
         project_id,
@@ -2319,7 +2465,7 @@ def _persist_paused_project_run(
         status="paused",
         message=message,
         story_id=resolved_story_id,
-        extra=extra,
+        extra=trace_extra,
     )
     return message
 

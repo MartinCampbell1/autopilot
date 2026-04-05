@@ -46,6 +46,8 @@ type RuntimeAgentInspectorColumnProps = {
   latestAgentIssueEntry: AgentTimelineEntry | null;
   latestAgentApprovalEntry: AgentTimelineEntry | null;
   latestAgentEventEntry: AgentTimelineEntry | null;
+  latestAgentShadowAuditEntry: AgentTimelineEntry | null;
+  activeAgentShadowAuditCount: number;
   busyActionKey: string;
   formatTimestamp: (value?: string | null) => string;
   formatJson: (value: unknown) => string;
@@ -61,10 +63,11 @@ type RuntimeAgentInspectorColumnProps = {
   onRejectApproval: (approval: ExecutionApprovalRecord) => void;
   onApplyApproval: (approval: ExecutionApprovalRecord) => void;
   onResolveIssue: (issue: ExecutionIssueRecord) => void;
+  onOpenShadowAuditReviewQueue: (entry: AgentTimelineEntry) => void;
   onAdvanceCurrentPriorityQueue: (entry: AgentTimelineEntry) => void;
   onSearchEntity: (value: string) => void;
   onFocusAgentTimeline: (
-    filter: "issues" | "approvals" | "events" | "attention",
+    filter: "issues" | "approvals" | "events" | "shadow_audits" | "attention",
     entry?: AgentTimelineEntry
   ) => void;
   onFilterSessionByToken: (value: string) => void;
@@ -73,11 +76,29 @@ type RuntimeAgentInspectorColumnProps = {
 function entryStatusClass(entry: AgentTimelineEntry): string {
   if (entry.kind === "approval") return approvalStatusClass(entry.status);
   if (entry.kind === "issue") return passStatusClass(entry.status === "open" ? "partial" : "ok");
+  if (entry.kind === "shadow_audit") {
+    return entry.status === "open" || entry.shadowAudit?.open
+      ? "border-[#f4e0c4] bg-[#fff6e8] text-[#9a6700]"
+      : "border-[#d6e9dc] bg-[#eef8f1] text-[#2b6e3f]";
+  }
   return passStatusClass(entry.status);
 }
 
 function formatGithubValue(value?: string | null): string {
   return value ? value.replaceAll("_", " ") : "Unknown";
+}
+
+function timelineKindLabel(entry: AgentTimelineEntry): string {
+  switch (entry.kind) {
+    case "shadow_audit":
+      return "shadow audit";
+    case "approval":
+      return "approval";
+    case "issue":
+      return "issue";
+    default:
+      return "event";
+  }
 }
 
 export function RuntimeAgentInspectorColumn({
@@ -89,6 +110,8 @@ export function RuntimeAgentInspectorColumn({
   latestAgentIssueEntry,
   latestAgentApprovalEntry,
   latestAgentEventEntry,
+  latestAgentShadowAuditEntry,
+  activeAgentShadowAuditCount,
   busyActionKey,
   formatTimestamp,
   formatJson,
@@ -104,12 +127,15 @@ export function RuntimeAgentInspectorColumn({
   onRejectApproval,
   onApplyApproval,
   onResolveIssue,
+  onOpenShadowAuditReviewQueue,
   onAdvanceCurrentPriorityQueue,
   onSearchEntity,
   onFocusAgentTimeline,
   onFilterSessionByToken,
 }: RuntimeAgentInspectorColumnProps) {
   const githubPr = selectedAgent.story.github_pr as StoryGitHubPullRequest | undefined;
+  const shadowAuditReviewActionLabel =
+    activeAgentShadowAuditCount > 1 ? "Review queue" : "Open review";
   return (
     <>
       {selectedAgentTimelineEntry && (
@@ -119,7 +145,8 @@ export function RuntimeAgentInspectorColumn({
             const workspaceProjectId =
               toStringValue(entry.approval?.project_id) ||
               toStringValue(entry.issue?.project_id) ||
-              toStringValue(entry.event?.project_id);
+              toStringValue(entry.event?.project_id) ||
+              toStringValue(entry.shadowAudit?.project_id);
             const workspaceStoryId =
               entry.issue?.story_id ?? toNullableNumber(entry.event?.story_id);
             const workspaceHref =
@@ -131,9 +158,12 @@ export function RuntimeAgentInspectorColumn({
             const relatedApprovalId =
               toStringValue(entry.approval?.id) ||
               toStringValue(entry.issue?.approval_id) ||
-              toStringValue(entry.event?.approval_id);
+              toStringValue(entry.event?.approval_id) ||
+              toStringValue(entry.shadowAudit?.metadata?.approval_id);
             const relatedIssueId =
-              toStringValue(entry.issue?.id) || toStringValue(entry.event?.issue_id);
+              toStringValue(entry.issue?.id) ||
+              toStringValue(entry.event?.issue_id) ||
+              toStringValue(entry.shadowAudit?.metadata?.issue_id);
             const relatedRunLink = selectedAgentTimelineRunLink;
             const relatedRunResult =
               relatedRunLink && relatedRunLink.run.results[relatedRunLink.resultIndex]
@@ -143,7 +173,7 @@ export function RuntimeAgentInspectorColumn({
               ? describeRunResult(relatedRunResult)
               : null;
             const payload =
-              entry.approval || entry.issue || entry.event || {
+              entry.approval || entry.issue || entry.event || entry.shadowAudit || {
                 id: entry.id,
                 kind: entry.kind,
                 timestamp: entry.timestamp,
@@ -167,7 +197,7 @@ export function RuntimeAgentInspectorColumn({
                       variant="outline"
                       className="rounded-full border-[#e5e5e3] bg-[#fafaf9] px-2.5 py-1 text-[11px] font-medium capitalize text-[#37352f]"
                     >
-                      {entry.kind}
+                      {timelineKindLabel(entry)}
                     </Badge>
                     {selectedAgentTimelinePriority ? (
                       <Badge
@@ -230,11 +260,11 @@ export function RuntimeAgentInspectorColumn({
                   items={[
                     {
                       key: `timeline-${entry.kind}-${entry.id}`,
-                      label: `${entry.kind} ${entry.id}`,
+                      label: `${timelineKindLabel(entry)} ${entry.id}`,
                       tone:
                         entry.kind === "approval"
                           ? "approval"
-                          : entry.kind === "issue"
+                          : entry.kind === "issue" || entry.kind === "shadow_audit"
                             ? "issue"
                             : "event",
                       active: true,
@@ -368,6 +398,18 @@ export function RuntimeAgentInspectorColumn({
                         : "Resolve"}
                     </Button>
                   )}
+                  {entry.shadowAudit ? (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-8 rounded-lg border-[#f4e0c4] bg-[#fff6e8] text-[12px] text-[#9a6700] hover:bg-[#fff0d9]"
+                      onClick={() => {
+                        onOpenShadowAuditReviewQueue(entry);
+                      }}
+                    >
+                      {shadowAuditReviewActionLabel}
+                    </Button>
+                  ) : null}
                   {currentAgentPriorityQueue ? (
                     <Button
                       size="sm"
@@ -482,7 +524,7 @@ export function RuntimeAgentInspectorColumn({
         </div>
       ) : null}
 
-      <div className="grid gap-4 lg:grid-cols-3">
+      <div className="grid gap-4 lg:grid-cols-4">
         <div className="rounded-2xl border border-[#ecebe8] bg-[#fbfbf9] p-4">
           <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#9b9a97]">
             Issues Summary
@@ -719,6 +761,90 @@ export function RuntimeAgentInspectorColumn({
                   }}
                 >
                   Filter session
+                </Button>
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div className="rounded-2xl border border-[#ecebe8] bg-[#fbfbf9] p-4">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#9b9a97]">
+            Shadow Audits Summary
+          </p>
+          <div className="mt-3 grid gap-3">
+            <SessionMetric
+              label="Open Shadow Audits"
+              value={String(activeAgentShadowAuditCount)}
+              detail="Blocked handoffs that still require operator review"
+            />
+          </div>
+          {!latestAgentShadowAuditEntry ? (
+            <p className="mt-3 text-[13px] text-[#9b9a97]">
+              No shadow-audit history for this agent.
+            </p>
+          ) : (
+            <div className="mt-3 rounded-xl border border-[#ecebe8] bg-white p-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="font-mono text-[11px] text-[#37352f]">
+                  {latestAgentShadowAuditEntry.shadowAudit?.id || latestAgentShadowAuditEntry.id}
+                </p>
+                <Badge
+                  variant="outline"
+                  className={`rounded-full px-2.5 py-1 text-[11px] font-medium capitalize ${entryStatusClass(latestAgentShadowAuditEntry)}`}
+                >
+                  {latestAgentShadowAuditEntry.status}
+                </Badge>
+              </div>
+              <p className="mt-2 text-[12px] text-[#6b6b6b]">
+                {latestAgentShadowAuditEntry.message}
+              </p>
+              <p className="mt-1 text-[11px] text-[#9b9a97]">
+                {formatTimestamp(latestAgentShadowAuditEntry.timestamp)}
+              </p>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-7 rounded-full border-[#e5e5e3] bg-white px-2.5 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
+                  onClick={() => {
+                    onFocusAgentTimeline("shadow_audits", latestAgentShadowAuditEntry);
+                  }}
+                >
+                  Open in timeline
+                </Button>
+                {latestAgentShadowAuditEntry.shadowAudit ? (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-7 rounded-full border-[#f4e0c4] bg-[#fff6e8] px-2.5 text-[11px] text-[#9a6700] hover:bg-[#fff0d9]"
+                    onClick={() => {
+                      onOpenShadowAuditReviewQueue(latestAgentShadowAuditEntry);
+                    }}
+                  >
+                    {shadowAuditReviewActionLabel}
+                  </Button>
+                ) : null}
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-7 rounded-full border-[#f4e0c4] bg-[#fff6e8] px-2.5 text-[11px] text-[#9a6700] hover:bg-[#fff0d9]"
+                  onClick={() => {
+                    onFocusAgentTimeline("attention");
+                  }}
+                >
+                  Show attention
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-7 rounded-full border-[#e5e5e3] bg-white px-2.5 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
+                  onClick={() => {
+                    onSearchEntity(
+                      latestAgentShadowAuditEntry.shadowAudit?.id || latestAgentShadowAuditEntry.id
+                    );
+                  }}
+                >
+                  Find in session
                 </Button>
               </div>
             </div>

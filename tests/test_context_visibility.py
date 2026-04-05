@@ -87,6 +87,8 @@ def test_build_context_snapshot_surfaces_instruction_layers_and_recent_events(tm
     assert payload["bootstrap"]["github"]["workflow_exists"] is True
     assert payload["recent_events"][-1]["event"] == "iteration_started"
     assert payload["trace"]["summary"]["entry_count"] >= 1
+    assert "monitoring" in payload
+    assert payload["audit"]["source_verification"]["verified"] is True
     assert "status=running" in payload["microcompact"]
 
 

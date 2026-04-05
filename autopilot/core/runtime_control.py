@@ -10,6 +10,7 @@ from enum import StrEnum
 from pathlib import Path
 
 from autopilot.core.config import AutopilotConfig
+from autopilot.core.worktree import worktree_collaboration_dir, worktree_collaboration_manifest_path
 
 
 def _utcnow_iso() -> str:
@@ -35,6 +36,8 @@ class WorkItemLease:
     status: str
     acquired_at: str
     updated_at: str
+    collaboration_root: str | None = None
+    collaboration_manifest_path: str | None = None
     runtime_pid: int | None = None
 
 
@@ -76,6 +79,11 @@ def claim_work_item_lease(
     """Atomically claim ownership for a story work item."""
     path = work_item_lease_path(config, project_id, story_id)
     path.parent.mkdir(parents=True, exist_ok=True)
+    collaboration_root = None
+    collaboration_manifest = None
+    if checkout_path is not None and checkout_path != project_path:
+        collaboration_root = str(worktree_collaboration_dir(checkout_path))
+        collaboration_manifest = str(worktree_collaboration_manifest_path(checkout_path))
 
     now = _utcnow_iso()
     lease = WorkItemLease(
@@ -87,6 +95,8 @@ def claim_work_item_lease(
         project_path=str(project_path),
         checkout_path=str(checkout_path) if checkout_path is not None else None,
         branch_name=branch_name,
+        collaboration_root=collaboration_root,
+        collaboration_manifest_path=collaboration_manifest,
         status="active",
         acquired_at=now,
         updated_at=now,
@@ -149,6 +159,8 @@ def refresh_work_item_lease(
         current.status = status
     if checkout_path is not None:
         current.checkout_path = str(checkout_path)
+        current.collaboration_root = str(worktree_collaboration_dir(checkout_path))
+        current.collaboration_manifest_path = str(worktree_collaboration_manifest_path(checkout_path))
     if branch_name is not None:
         current.branch_name = branch_name
     current.updated_at = _utcnow_iso()
@@ -171,3 +183,41 @@ def list_project_work_item_leases(config: AutopilotConfig, project_id: str) -> l
         except Exception:
             continue
     return leases
+
+
+def build_runtime_control_channel_status(
+    *,
+    project_id: str,
+    runtime_session_id: str | None = None,
+    runtime_control_available: bool = False,
+) -> dict[str, object]:
+    """Return the explicit runtime-control channel descriptor for company-shell surfaces."""
+
+    normalized_project_id = str(project_id or "").strip()
+    normalized_session_id = str(runtime_session_id or "").strip()
+    if runtime_control_available:
+        status = "live"
+    elif normalized_session_id:
+        status = "standby"
+    else:
+        status = "offline"
+    return {
+        "id": "runtime_control",
+        "name": "Runtime control",
+        "kind": "runtime_control",
+        "enabled": True,
+        "ready": bool(runtime_control_available),
+        "status": status,
+        "target": normalized_session_id or f"project:{normalized_project_id}",
+        "events": [
+            "interrupt",
+            "tool_permission_review",
+            "quarantine_review",
+            "async_follow_through",
+        ],
+        "capabilities": ["interactive", "approvals", "quarantine_review"],
+        "approval_capable": True,
+        "wall_enforced": True,
+        "message_count": 0,
+        "note": "All channel-driven runtime requests still pass through the structured runtime-control wall.",
+    }

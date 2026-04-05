@@ -47,7 +47,7 @@ export function sessionEventKey(event: Record<string, unknown>, fallback = ""): 
 }
 
 export function sessionContextRowDomId(
-  kind: "approval" | "issue" | "event" | "tool_permission_runtime" | "async_task",
+  kind: "approval" | "issue" | "event" | "tool_permission_runtime" | "async_task" | "shadow_audit",
   key: string
 ): string {
   return key ? `session-context-row-${kind}-${domSafeToken(key)}` : "";
@@ -103,11 +103,19 @@ export function resolveAgentTimelineRunLink(
   const linkedApprovalId =
     entry.approval?.id ||
     entry.issue?.approval_id ||
-    toStringValue(entry.event?.approval_id);
-  const linkedIssueId = entry.issue?.id || toStringValue(entry.event?.issue_id);
+    toStringValue(entry.event?.approval_id) ||
+    toStringValue(entry.shadowAudit?.metadata?.approval_id);
+  const linkedIssueId =
+    entry.issue?.id ||
+    toStringValue(entry.event?.issue_id) ||
+    toStringValue(entry.shadowAudit?.metadata?.issue_id);
   const linkedRunId =
+    entry.shadowAuditRunId ||
     toStringValue(entry.event?.agent_action_run_id) ||
-    toStringValue(entry.event?.run_id);
+    toStringValue(entry.event?.run_id) ||
+    (entry.shadowAudit?.source_kind === "agent_action_run" ? entry.shadowAudit.source_id : "") ||
+    toStringValue(entry.shadowAudit?.metadata?.agent_action_run_id) ||
+    toStringValue(entry.shadowAudit?.metadata?.run_id);
 
   if (linkedRunId) {
     const directRun = runs.find((run) => run.id === linkedRunId);
@@ -149,6 +157,13 @@ export function resolveAgentTimelineEntryFromTarget(
   entries: AgentTimelineEntry[],
   target: PendingAgentTimelineTarget
 ): AgentTimelineEntry | null {
+  if (target.shadowAuditId) {
+    const shadowAuditEntry = entries.find(
+      (entry) => entry.kind === "shadow_audit" && entry.shadowAudit?.id === target.shadowAuditId
+    );
+    if (shadowAuditEntry) return shadowAuditEntry;
+  }
+
   if (target.approvalId) {
     const approvalEntry = entries.find(
       (entry) => entry.kind === "approval" && entry.approval?.id === target.approvalId

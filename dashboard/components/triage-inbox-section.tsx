@@ -1,5 +1,7 @@
 "use client";
 
+import { useCallback, useMemo } from "react";
+import { ShadowAuditReviewSheet } from "@/components/shadow-audit-review-sheet";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -15,6 +17,8 @@ import type {
   TriageInboxItem,
 } from "@/lib/control-plane-models";
 import { triagePriorityClass } from "@/lib/control-plane-ui";
+import { useShadowAuditReviewController } from "@/lib/use-shadow-audit-review-controller";
+import type { ExecutionShadowAuditRecord } from "@/lib/types";
 
 type TriageInboxFeedbackTone = "all" | "success" | "info";
 
@@ -23,6 +27,8 @@ type TriageInboxSectionProps = {
   triageInboxItems: TriageInboxItem[];
   selectedTriageInboxItem: TriageInboxItem | null;
   syncedTriageInboxItem: TriageInboxItem | null;
+  availableShadowAudits: ExecutionShadowAuditRecord[];
+  busyActionKey: string;
   formatTimestamp: (value?: string | null) => string;
   onInspectTriageInboxItem: (item: TriageInboxItem) => void;
   onInspectAndAdvanceTriageInboxItem: (item: TriageInboxItem) => void;
@@ -44,6 +50,7 @@ type TriageInboxSectionProps = {
   onOpenTriageInboxHistoryGroup: (itemKey: string) => void;
   onSnoozeTriageInboxItem: (item: TriageInboxItem) => void;
   onDismissTriageInboxItem: (item: TriageInboxItem) => void;
+  onResolveShadowAudit?: (audit: ExecutionShadowAuditRecord) => void;
 };
 
 export function TriageInboxSection({
@@ -51,6 +58,8 @@ export function TriageInboxSection({
   triageInboxItems,
   selectedTriageInboxItem,
   syncedTriageInboxItem,
+  availableShadowAudits,
+  busyActionKey,
   formatTimestamp,
   onInspectTriageInboxItem,
   onInspectAndAdvanceTriageInboxItem,
@@ -72,7 +81,60 @@ export function TriageInboxSection({
   onOpenTriageInboxHistoryGroup,
   onSnoozeTriageInboxItem,
   onDismissTriageInboxItem,
+  onResolveShadowAudit,
 }: TriageInboxSectionProps) {
+  const resolveShadowAuditForItem = (
+    item: TriageInboxItem | null
+  ): ExecutionShadowAuditRecord | null => {
+    if (!item?.shadowAuditId) return null;
+    return availableShadowAudits.find((audit) => audit.id === item.shadowAuditId) || null;
+  };
+  const triageInboxItemByShadowAuditId = useMemo(
+    () =>
+      new Map(
+        triageInboxItems
+          .filter((item) => Boolean(item.shadowAuditId))
+          .map((item) => [item.shadowAuditId as string, item] as const)
+      ),
+    [triageInboxItems]
+  );
+  const focusShadowAuditQueueItem = useCallback(
+    (auditId: string, fallbackItem?: TriageInboxItem | null) => {
+      const matchingItem = triageInboxItemByShadowAuditId.get(auditId) || fallbackItem || null;
+      if (!matchingItem) return;
+      onInspectTriageInboxItem(matchingItem);
+    },
+    [onInspectTriageInboxItem, triageInboxItemByShadowAuditId]
+  );
+  const {
+    queueAudits,
+    queueOpen,
+    setQueueOpen,
+    activeQueueAudit,
+    activeQueueAuditIndex,
+    reviewQueueLabel,
+    openReviewQueue,
+    handleSelectNextQueuedAudit,
+    handleSelectPreviousQueuedAudit,
+    handleResolveQueuedShadowAudit,
+  } = useShadowAuditReviewController({
+    audits: availableShadowAudits,
+    onInspectShadowAudit: (audit) => {
+      focusShadowAuditQueueItem(audit.id);
+    },
+    onResolveShadowAudit,
+  });
+  const openShadowAuditQueue = useCallback(
+    (auditId?: string, fallbackItem?: TriageInboxItem | null) => {
+      const nextAuditId =
+        auditId || fallbackItem?.shadowAuditId || activeQueueAudit?.id || queueAudits[0]?.id || "";
+      if (!nextAuditId) return;
+      focusShadowAuditQueueItem(nextAuditId, fallbackItem);
+      openReviewQueue(nextAuditId);
+    },
+    [activeQueueAudit, focusShadowAuditQueueItem, openReviewQueue, queueAudits]
+  );
+
   return (
     <Card className="border border-[#e5e5e3] bg-white shadow-[0_1px_3px_rgba(15,15,15,0.08),0_0_1px_rgba(15,15,15,0.04)]">
       <CardHeader>
@@ -153,6 +215,21 @@ export function TriageInboxSection({
                         Sync to selection
                       </Button>
                     ) : null}
+                    {activeQueueAudit ? (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-7 rounded-lg border-[#f4e0c4] bg-[#fff6e8] px-2 text-[11px] text-[#9a6700] hover:bg-[#fff0d9]"
+                        onClick={() => {
+                          openShadowAuditQueue(
+                            selectedTriageInboxItem.shadowAuditId,
+                            selectedTriageInboxItem
+                          );
+                        }}
+                      >
+                        {reviewQueueLabel}
+                      </Button>
+                    ) : null}
                   </div>
                 </div>
                 <div className="mt-3 flex flex-wrap gap-2">
@@ -174,6 +251,15 @@ export function TriageInboxSection({
                       className="rounded-full border-[#d3e5ef] bg-[#eef7fb] px-2.5 py-1 text-[11px] font-medium text-[#2a6690]"
                     >
                       Synced with selection
+                    </Badge>
+                  ) : null}
+                  {(selectedTriageInboxItem.shadowAuditCount || 0) > 0 ? (
+                    <Badge
+                      variant="outline"
+                      className="rounded-full border-[#f4e0c4] bg-[#fff6e8] px-2.5 py-1 text-[11px] font-medium text-[#9a6700]"
+                    >
+                      {selectedTriageInboxItem.shadowAuditCount} shadow audit
+                      {(selectedTriageInboxItem.shadowAuditCount || 0) === 1 ? "" : "s"}
                     </Badge>
                   ) : null}
                 </div>
@@ -304,6 +390,9 @@ export function TriageInboxSection({
                         <div className="mt-3 space-y-2">
                           {groupedRecentTriageInboxFeedback.map((group) => {
                             const expanded = expandedTriageInboxResultGroups.includes(group.itemKey);
+                            const groupItem =
+                              triageInboxItems.find((item) => item.key === group.itemKey) || null;
+                            const groupShadowAudit = resolveShadowAuditForItem(groupItem);
                             return (
                               <div
                                 key={`triage-feedback-group-${group.itemKey}`}
@@ -354,6 +443,19 @@ export function TriageInboxSection({
                                     >
                                       Open in inbox
                                     </Button>
+                                    {groupShadowAudit ? (
+                                      <Button
+                                        size="sm"
+                                        variant="outline"
+                                        className="h-7 rounded-lg border-[#f4e0c4] bg-[#fff6e8] px-2 text-[11px] text-[#9a6700] hover:bg-[#fff0d9]"
+                                        onClick={() => {
+                                          onOpenTriageInboxHistoryGroup(group.itemKey);
+                                          openShadowAuditQueue(groupShadowAudit.id);
+                                        }}
+                                      >
+                                        {reviewQueueLabel}
+                                      </Button>
+                                    ) : null}
                                   </div>
                                 </div>
                                 {expanded ? (
@@ -400,10 +502,28 @@ export function TriageInboxSection({
                 ) : null}
               </div>
             ) : null}
+            {activeQueueAudit ? (
+              <ShadowAuditReviewSheet
+                audit={activeQueueAudit}
+                open={queueOpen}
+                onOpenChange={setQueueOpen}
+                hideTrigger
+                busyActionKey={busyActionKey}
+                formatTimestamp={formatTimestamp}
+                onResolveShadowAudit={handleResolveQueuedShadowAudit}
+                queueState={{
+                  currentIndex: Math.max(activeQueueAuditIndex, 0),
+                  totalCount: queueAudits.length,
+                  onSelectNext: handleSelectNextQueuedAudit,
+                  onSelectPrevious: handleSelectPreviousQueuedAudit,
+                }}
+              />
+            ) : null}
 
             <div className="grid gap-3 xl:grid-cols-2 2xl:grid-cols-4">
               {triageInboxItems.map((item) => {
                 const cursorSelected = selectedTriageInboxItem?.key === item.key;
+                const itemShadowAudit = resolveShadowAuditForItem(item);
                 return (
                   <div
                     key={`triage-inbox-${item.key}`}
@@ -443,6 +563,15 @@ export function TriageInboxSection({
                           className="rounded-full border-[#d3e5ef] bg-[#eef7fb] px-2.5 py-1 text-[11px] font-medium text-[#2a6690]"
                         >
                           Synced
+                        </Badge>
+                      ) : null}
+                      {(item.shadowAuditCount || 0) > 0 ? (
+                        <Badge
+                          variant="outline"
+                          className="rounded-full border-[#f4e0c4] bg-[#fff6e8] px-2.5 py-1 text-[11px] font-medium text-[#9a6700]"
+                        >
+                          {item.shadowAuditCount} shadow audit
+                          {(item.shadowAuditCount || 0) === 1 ? "" : "s"}
                         </Badge>
                       ) : null}
                     </div>
@@ -492,6 +621,18 @@ export function TriageInboxSection({
                       >
                         Dismiss
                       </Button>
+                      {itemShadowAudit ? (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-7 rounded-lg border-[#f4e0c4] bg-[#fff6e8] px-2 text-[11px] text-[#9a6700] hover:bg-[#fff0d9]"
+                          onClick={() => {
+                            openShadowAuditQueue(itemShadowAudit.id, item);
+                          }}
+                        >
+                          {reviewQueueLabel}
+                        </Button>
+                      ) : null}
                     </div>
                   </div>
                 );

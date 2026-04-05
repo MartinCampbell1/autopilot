@@ -11,6 +11,7 @@ from rich.panel import Panel
 from rich.table import Table
 
 from autopilot.core.config import load_config
+from autopilot.core.github_review import build_github_review_markdown
 from autopilot.core.review_runtime import build_local_review
 
 console = Console()
@@ -84,6 +85,8 @@ def review(
     *,
     project_id: str | None = None,
     base_branch: str | None = None,
+    judge_pack: str | None = "execution_claims",
+    github_markdown: bool = False,
     json_output: bool = False,
 ) -> None:
     """Run a structured local review against the current checkout."""
@@ -94,9 +97,12 @@ def review(
         project_path=project_path,
         project_id=project_id,
         base_branch=base_branch,
+        judge_pack=judge_pack,
     )
     if json_output:
         typer.echo(json.dumps(payload))
+    elif github_markdown:
+        typer.echo(build_github_review_markdown(payload))
     else:
         _render_review_payload(payload)
 

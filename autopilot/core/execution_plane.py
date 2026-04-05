@@ -13,6 +13,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from autopilot.core.atomic_io import atomic_write_json as _shared_atomic_write_json
 from autopilot.core.capability_store import (
     build_planning_context,
     load_connectors_registry,
@@ -20,6 +21,10 @@ from autopilot.core.capability_store import (
     load_skill_packs_registry,
 )
 from autopilot.core.config import AutopilotConfig
+from autopilot.core.bounded_executor import execute_bounded_execution_blueprint
+from autopilot.core.brief_metadata import find_project_by_execution_brief_id
+from autopilot.core.brief_v2_adapter import should_deduplicate_brief
+from autopilot.core.execution_blueprint import plan_execution_blueprint
 from autopilot.core.execution_brief import (
     ExecutionBrief,
     InitiativeContext,
@@ -28,6 +33,14 @@ from autopilot.core.execution_brief import (
     TaskSource,
     render_execution_brief_as_spec,
 )
+from autopilot.core.shared_contract_adapters import (
+    SHARED_EXECUTION_BRIEF_RELPATH,
+    shared_execution_brief_metadata,
+    shared_execution_brief_path,
+    shared_execution_brief_payload,
+    shared_execution_brief_to_internal,
+)
+from autopilot.core.shared_contracts import ExecutionBrief as SharedExecutionBrief
 from autopilot.core.github_prs import normalize_story_github_pr
 from autopilot.core.intake import generate_prd_from_spec
 from autopilot.core.project_bootstrap import CreatedProject, create_project_from_prd
@@ -56,6 +69,11 @@ from autopilot.core.approvals import (
     save_approval,
 )
 from autopilot.core.approval_runtime import create_or_reuse_approval_runtime
+from autopilot.core.shadow_audit import (
+    get_shadow_audit_record,
+    list_shadow_audit_records,
+    resolve_shadow_audit_record,
+)
 from autopilot.core.tool_permission_runtime import (
     get_tool_permission_runtime,
     list_tool_permission_runtimes,
@@ -205,6 +223,8 @@ class ExecutionPlaneProjectDetail(ExecutionPlaneProjectSnapshot):
     tool_permission_runtimes: list[dict[str, Any]] = Field(default_factory=list)
     brief: dict[str, Any] | None = None
     trace: dict[str, Any] = Field(default_factory=dict)
+    monitoring: dict[str, Any] = Field(default_factory=dict)
+    audit: dict[str, Any] = Field(default_factory=dict)
 
 
 @dataclass(slots=True)
@@ -230,10 +250,7 @@ class ParsedExecutionPlaneAgentActionKey:
 
 
 def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temp_path = path.with_suffix(f"{path.suffix}.tmp")
-    temp_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False))
-    temp_path.replace(path)
+    _shared_atomic_write_json(path, payload)
 
 
 def execution_brief_path(project_root: Path, *, relpath: str = EXECUTION_BRIEF_RELPATH) -> Path:
@@ -252,6 +269,19 @@ def persist_execution_brief(
 
     path = execution_brief_path(project_root, relpath=relpath)
     _atomic_write_json(path, brief.model_dump())
+    return path
+
+
+def persist_shared_execution_brief(
+    project_root: Path,
+    brief: SharedExecutionBrief,
+    *,
+    relpath: str = SHARED_EXECUTION_BRIEF_RELPATH,
+) -> Path:
+    """Persist the raw shared execution brief alongside the local project."""
+
+    path = shared_execution_brief_path(project_root, relpath=relpath)
+    _atomic_write_json(path, shared_execution_brief_payload(brief))
     return path
 
 
@@ -294,6 +324,25 @@ def attach_execution_brief_metadata(
             existing_control_plane[key] = value
 
     project["control_plane"] = existing_control_plane
+    return update_project_entry(config, project)
+
+
+def attach_shared_execution_brief_metadata(
+    config: AutopilotConfig,
+    *,
+    project_id: str,
+    brief: SharedExecutionBrief,
+    brief_relpath: str = SHARED_EXECUTION_BRIEF_RELPATH,
+) -> dict[str, Any]:
+    """Attach shared cross-plane brief metadata to a registered project."""
+
+    project = get_project_entry(config, project_id=project_id, include_archived=True)
+    if project is None:
+        raise KeyError(project_id)
+
+    control_plane = dict(project.get("control_plane") or {})
+    control_plane["shared_execution_brief"] = shared_execution_brief_metadata(brief, brief_relpath=brief_relpath)
+    project["control_plane"] = control_plane
     return update_project_entry(config, project)
 
 
@@ -1443,6 +1492,28 @@ def _materialize_execution_plane_runtime_agent_task_record(
     return payload
 
 
+def _annotate_execution_plane_runtime_agent_task_record(
+    config: AutopilotConfig,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    """Attach open shadow-audit state to one runtime-agent task payload."""
+
+    output_artifact_id = str(payload.get("output_artifact_id") or "").strip()
+    open_shadow_audits = _list_shadow_audits_for_artifact(config, output_artifact_id, status="open")
+    payload["shadow_audits"] = open_shadow_audits
+    payload["open_shadow_audit_count"] = len(open_shadow_audits)
+    payload["output_was_quarantined"] = bool((payload.get("result_payload") or {}).get("output_quarantined"))
+    payload["output_quarantined"] = bool(open_shadow_audits)
+    resume_contract = dict(payload.get("resume_contract") or {})
+    resume_contract["output_quarantined"] = payload["output_quarantined"]
+    resume_contract["output_was_quarantined"] = payload["output_was_quarantined"]
+    resume_contract["open_shadow_audit_count"] = len(open_shadow_audits)
+    if open_shadow_audits:
+        resume_contract["shadow_audit_id"] = str(open_shadow_audits[0].get("id") or "")
+    payload["resume_contract"] = resume_contract
+    return payload
+
+
 def _refresh_result_async_tasks(
     config: AutopilotConfig,
     results: list[dict[str, Any]] | None,
@@ -1500,8 +1571,11 @@ def _collect_execution_plane_agent_action_run_async_tasks(
         if task is None:
             continue
         async_tasks.append(
-            _materialize_execution_plane_runtime_agent_task_record(
-                refresh_runtime_agent_task(config, task)
+            _annotate_execution_plane_runtime_agent_task_record(
+                config,
+                _materialize_execution_plane_runtime_agent_task_record(
+                    refresh_runtime_agent_task(config, task)
+                ),
             )
         )
 
@@ -1531,6 +1605,7 @@ def _derive_execution_plane_agent_action_run_completion(
     active_async_task_ids: list[str] = []
     saw_async_task = False
     latest_completed_at: datetime | None = None
+    open_shadow_audit_ids: set[str] = set()
 
     task_payloads: list[dict[str, Any]] = []
     if linked_async_tasks is not None:
@@ -1552,6 +1627,12 @@ def _derive_execution_plane_agent_action_run_completion(
         task_status = str(async_task.get("status") or "").strip() or "unknown"
         saw_async_task = True
         status_counts[task_status] = status_counts.get(task_status, 0) + 1
+        for shadow_audit in async_task.get("shadow_audits") or []:
+            if not isinstance(shadow_audit, dict):
+                continue
+            shadow_audit_id = str(shadow_audit.get("id") or "").strip()
+            if shadow_audit_id:
+                open_shadow_audit_ids.add(shadow_audit_id)
         if task_status in {"queued", "running"}:
             if task_id:
                 active_async_task_ids.append(task_id)
@@ -1571,6 +1652,19 @@ def _derive_execution_plane_agent_action_run_completion(
             "async_task_status_counts": status_counts,
             "active_async_task_ids": active_async_task_ids,
             "completed_at": None,
+        }
+
+    if open_shadow_audit_ids:
+        count = len(open_shadow_audit_ids)
+        noun = "artifact was" if count == 1 else "artifacts were"
+        return {
+            "completion_state": "quarantined",
+            "completion_message": (
+                f"{count} async handoff {noun} quarantined and require explicit review before treating this run as complete."
+            ),
+            "async_task_status_counts": status_counts,
+            "active_async_task_ids": [],
+            "completed_at": latest_completed_at.isoformat() if latest_completed_at is not None else None,
         }
 
     if not saw_async_task:
@@ -1606,6 +1700,8 @@ def _derive_execution_plane_agent_action_run_completion(
 
 
 def _completion_event_status_for_run(record: AgentActionBatchRunRecord) -> str:
+    if str(record.completion_state or "") == "quarantined":
+        return "warning"
     failed_count = int((record.async_task_status_counts or {}).get("failed") or 0)
     cancelled_count = int((record.async_task_status_counts or {}).get("cancelled") or 0)
     if failed_count:
@@ -1758,6 +1854,9 @@ def _materialize_execution_plane_agent_action_run_record(
     payload["async_tasks"] = async_tasks
     payload["resume_contracts"] = resume_contracts
     payload["resume_contract"] = resume_contracts[0] if len(resume_contracts) == 1 else None
+    payload["execution_strategy"] = str(getattr(record, "execution_strategy", "") or "freeform")
+    payload["execution_blueprint"] = dict(getattr(record, "execution_blueprint", {}) or {}) or None
+    payload["bounded_execution"] = dict(getattr(record, "bounded_execution", {}) or {}) or None
     payload["active_async_task_count"] = (
         sum(1 for task in async_tasks if bool(task.get("active")))
         if async_tasks
@@ -1765,6 +1864,21 @@ def _materialize_execution_plane_agent_action_run_record(
     )
     payload.setdefault("diff_summary", {})
     payload.setdefault("patch_bundle", {})
+    aggregated_shadow_audits: list[dict[str, Any]] = []
+    seen_shadow_audit_ids: set[str] = set()
+    for async_task in async_tasks:
+        for shadow_audit in async_task.get("shadow_audits") or []:
+            if not isinstance(shadow_audit, dict):
+                continue
+            shadow_audit_id = str(shadow_audit.get("id") or "").strip()
+            if not shadow_audit_id or shadow_audit_id in seen_shadow_audit_ids:
+                continue
+            seen_shadow_audit_ids.add(shadow_audit_id)
+            aggregated_shadow_audits.append(dict(shadow_audit))
+    payload["shadow_audits"] = aggregated_shadow_audits
+    payload["open_shadow_audit_count"] = len(aggregated_shadow_audits)
+    payload["handoff_state"] = "quarantined" if aggregated_shadow_audits else "clear"
+    payload["handoff_blocked"] = bool(aggregated_shadow_audits)
     return payload
 
 
@@ -1781,6 +1895,10 @@ def _execution_plane_agent_action_batch_run_response(
         "status": record.status,
         "completion_state": run_payload["completion_state"],
         "completion_message": run_payload["completion_message"],
+        "handoff_state": run_payload["handoff_state"],
+        "handoff_blocked": run_payload["handoff_blocked"],
+        "shadow_audits": run_payload["shadow_audits"],
+        "open_shadow_audit_count": run_payload["open_shadow_audit_count"],
         "async_task_count": run_payload["async_task_count"],
         "active_async_task_count": run_payload["active_async_task_count"],
         "async_tasks": run_payload["async_tasks"],
@@ -1789,10 +1907,14 @@ def _execution_plane_agent_action_batch_run_response(
         "selection": record.selection,
         "policy": record.policy,
         "summary": record.summary,
+        "execution_blueprint": run_payload.get("execution_blueprint") or {},
         "diff_summary": run_payload["diff_summary"],
         "patch_bundle": run_payload["patch_bundle"],
         "preview_id": run_payload["preview_id"],
         "artifact_ref": run_payload["artifact_ref"],
+        "execution_strategy": run_payload["execution_strategy"],
+        "execution_blueprint": run_payload["execution_blueprint"],
+        "bounded_execution": run_payload["bounded_execution"],
         "approval_required": run_payload["approval_required"],
         "apply_mode": run_payload["apply_mode"],
         "dry_run": record.dry_run,
@@ -1816,13 +1938,21 @@ def _execution_plane_agent_action_run_response(
         payload = dict(run_payload["results"][0])
     payload.setdefault("status", record.status)
     payload["preview_id"] = run_payload["preview_id"]
+    payload["execution_blueprint"] = run_payload.get("execution_blueprint") or {}
     payload["diff_summary"] = run_payload["diff_summary"]
     payload["patch_bundle"] = run_payload["patch_bundle"]
     payload["artifact_ref"] = run_payload["artifact_ref"]
+    payload["execution_strategy"] = run_payload["execution_strategy"]
+    payload["execution_blueprint"] = run_payload["execution_blueprint"]
+    payload["bounded_execution"] = run_payload["bounded_execution"]
     payload["approval_required"] = run_payload["approval_required"]
     payload["apply_mode"] = run_payload["apply_mode"]
     payload["completion_state"] = run_payload["completion_state"]
     payload["completion_message"] = run_payload["completion_message"]
+    payload["handoff_state"] = run_payload["handoff_state"]
+    payload["handoff_blocked"] = run_payload["handoff_blocked"]
+    payload["shadow_audits"] = run_payload["shadow_audits"]
+    payload["open_shadow_audit_count"] = run_payload["open_shadow_audit_count"]
     payload["async_task_count"] = run_payload["async_task_count"]
     payload["active_async_task_count"] = run_payload["active_async_task_count"]
     payload["async_tasks"] = run_payload["async_tasks"]
@@ -1833,6 +1963,320 @@ def _execution_plane_agent_action_run_response(
     payload["run"] = run_payload
     payload["idempotent_replay"] = idempotent_replay
     return payload
+
+
+def _summarize_execution_blueprint_result(
+    blueprint: Any,
+    *,
+    cached: bool,
+    bounded_result: Any,
+) -> dict[str, Any]:
+    return {
+        "id": str(blueprint.id),
+        "cache_key": str(blueprint.cache_key),
+        "family": str(getattr(blueprint, "family_key", "")),
+        "task_family": str(getattr(blueprint, "task_family", "")),
+        "planner": dict(getattr(blueprint, "planner", {}) or {}),
+        "follower": dict(getattr(blueprint, "follower", {}) or {}),
+        "cache_hit": bool(cached),
+        "entry_step_id": str(blueprint.entry_step_id),
+        "step_ids": [str(step.id) for step in blueprint.step_nodes],
+        "visited_step_ids": list(bounded_result.visited_node_ids),
+        "terminal_verdict": bounded_result.terminal_verdict.model_dump(),
+    }
+
+
+def _execute_execution_plane_agent_action_batch_follower(
+    config: AutopilotConfig,
+    *,
+    selected_actions: list[dict[str, Any]],
+    actor: str,
+    mode: str,
+    reason: str,
+    dry_run: bool,
+    continue_on_error: bool,
+    include_non_executable: bool,
+    resolved_policy: dict[str, Any],
+    normalized_session_id: str,
+) -> dict[str, Any]:
+    executed_per_project: dict[str, int] = {}
+    results: list[dict[str, Any]] = []
+
+    for action in selected_actions:
+        action_type = str(action.get("action_type") or "")
+        action_priority = str(action.get("priority") or "")
+        project_key = str(action.get("project_id") or "")
+        if resolved_policy["include_action_types"] and action_type not in resolved_policy["include_action_types"]:
+            results.append(
+                {
+                    "status": "skipped",
+                    "action": action,
+                    "message": f"Skipped by batch policy: action type `{action_type}` is not allowed.",
+                }
+            )
+            continue
+        if resolved_policy["skip_paused_projects"] and bool(action.get("project_paused")):
+            results.append(
+                {
+                    "status": "skipped",
+                    "action": action,
+                    "message": "Skipped by batch policy: paused projects are excluded.",
+                }
+            )
+            continue
+        if (
+            resolved_policy["exclude_attention_states"]
+            and str(action.get("attention", {}).get("state") or "") in resolved_policy["exclude_attention_states"]
+        ):
+            results.append(
+                {
+                    "status": "skipped",
+                    "action": action,
+                    "message": "Skipped by batch policy: attention state is excluded.",
+                }
+            )
+            continue
+        if not _priority_meets_threshold(action_priority, resolved_policy.get("priority_at_least")):
+            results.append(
+                {
+                    "status": "skipped",
+                    "action": action,
+                    "message": "Skipped by batch policy: action priority is below threshold.",
+                }
+            )
+            continue
+        if (
+            action_type == "suggested_command"
+            and resolved_policy["allowed_commands"]
+            and str(action.get("command") or "") not in resolved_policy["allowed_commands"]
+        ):
+            results.append(
+                {
+                    "status": "skipped",
+                    "action": action,
+                    "message": "Skipped by batch policy: command is not allowed.",
+                }
+            )
+            continue
+        if (
+            action_type == "recommendation"
+            and resolved_policy["allowed_recommendation_kinds"]
+            and str(action.get("kind") or "") not in resolved_policy["allowed_recommendation_kinds"]
+        ):
+            results.append(
+                {
+                    "status": "skipped",
+                    "action": action,
+                    "message": "Skipped by batch policy: recommendation kind is not allowed.",
+                }
+            )
+            continue
+        if (
+            resolved_policy.get("max_actions_per_project") is not None
+            and executed_per_project.get(project_key, 0) >= int(resolved_policy["max_actions_per_project"])
+        ):
+            results.append(
+                {
+                    "status": "skipped",
+                    "action": action,
+                    "message": "Skipped by batch policy: per-project action limit reached.",
+                }
+            )
+            continue
+
+        execution_mode = mode
+        if action_type == "suggested_command":
+            approval_required = bool(action.get("approval_required"))
+            if approval_required and mode == "auto":
+                approval_strategy = str(resolved_policy.get("approval_strategy") or "").strip()
+                approval_priority_threshold = resolved_policy.get("approval_priority_at_least")
+                if approval_strategy == "skip":
+                    results.append(
+                        {
+                            "status": "skipped",
+                            "action": action,
+                            "message": "Skipped by batch policy: approval-required actions are disabled.",
+                        }
+                    )
+                    continue
+                if approval_strategy == "request":
+                    if not _priority_meets_threshold(action_priority, approval_priority_threshold):
+                        results.append(
+                            {
+                                "status": "skipped",
+                                "action": action,
+                                "message": "Skipped by batch policy: approval escalation priority threshold not met.",
+                            }
+                        )
+                        continue
+                    execution_mode = "request_approval"
+        elif not include_non_executable:
+            results.append(
+                {
+                    "status": "skipped",
+                    "action": action,
+                    "message": "Skipped by batch policy: recommendation-only actions are not executable.",
+                }
+            )
+            continue
+
+        try:
+            if dry_run:
+                approval_required = bool(action.get("approval_required"))
+                if action_type == "suggested_command" and approval_required and execution_mode == "execute_now":
+                    results.append(
+                        {
+                            "status": "error",
+                            "action": action,
+                            "message": "Runtime-agent action requires approval and cannot be previewed as execute_now.",
+                        }
+                    )
+                    if not continue_on_error:
+                        break
+                    continue
+
+                planned_status = "planned_execute"
+                if action_type == "suggested_command" and (
+                    execution_mode == "request_approval" or (execution_mode == "auto" and approval_required)
+                ):
+                    planned_status = "planned_request_approval"
+                results.append(
+                    {
+                        "status": planned_status,
+                        "action": action,
+                        "planned_mode": execution_mode,
+                        "message": "Dry-run preview only. No control-plane mutation was applied.",
+                    }
+                )
+                executed_per_project[project_key] = executed_per_project.get(project_key, 0) + 1
+                continue
+
+            result = execute_execution_plane_agent_action(
+                config,
+                action_key=str(action["action_key"]),
+                actor=actor,
+                mode=execution_mode,
+                reason=reason,
+                orchestrator_session_id=normalized_session_id,
+            )
+            results.append(result)
+            if str(result.get("status") or "") not in {"error", "skipped", "not_executable"}:
+                executed_per_project[project_key] = executed_per_project.get(project_key, 0) + 1
+        except Exception as exc:
+            results.append(
+                {
+                    "status": "error",
+                    "action": action,
+                    "message": str(exc),
+                }
+            )
+            if not continue_on_error:
+                break
+
+    status_counts: dict[str, int] = {}
+    for result in results:
+        result_status = str(result.get("status") or "unknown")
+        status_counts[result_status] = status_counts.get(result_status, 0) + 1
+
+    overall_status = "ok"
+    if status_counts.get("error"):
+        overall_status = "partial" if len(status_counts) > 1 else "error"
+    elif not results:
+        overall_status = "ok"
+
+    approval_required = _execution_plane_agent_action_run_requires_approval(selected_actions, results)
+    apply_mode = _execution_plane_agent_action_apply_mode(
+        dry_run=dry_run,
+        requested_mode=mode,
+        approval_required=approval_required,
+    )
+    pending_async = any(bool((result.get("async_task") or {}).get("id")) for result in results)
+    return {
+        "results": results,
+        "status_counts": status_counts,
+        "overall_status": overall_status,
+        "approval_required": approval_required,
+        "apply_mode": apply_mode,
+        "pending_async": pending_async,
+        "processed_count": len(results),
+    }
+
+
+def _execute_execution_plane_agent_action_batch_step(
+    config: AutopilotConfig,
+    *,
+    action: dict[str, Any],
+    actor: str,
+    mode: str,
+    reason: str,
+    dry_run: bool,
+    resolved_policy: dict[str, Any],
+    continue_on_error: bool,
+    include_non_executable: bool,
+    orchestrator_session_id: str,
+    executed_per_project: dict[str, int],
+) -> tuple[dict[str, Any], bool]:
+    """Execute one batch action step with the same semantics as the legacy batch loop."""
+
+    execution_output = _execute_execution_plane_agent_action_batch_follower(
+        config,
+        selected_actions=[action],
+        actor=actor,
+        mode=mode,
+        reason=reason,
+        dry_run=dry_run,
+        continue_on_error=continue_on_error,
+        include_non_executable=include_non_executable,
+        resolved_policy={
+            **resolved_policy,
+            "max_actions_per_project": (
+                0
+                if (
+                    resolved_policy.get("max_actions_per_project") is not None
+                    and executed_per_project.get(str(action.get("project_id") or ""), 0)
+                    >= int(resolved_policy.get("max_actions_per_project") or 0)
+                )
+                else resolved_policy.get("max_actions_per_project")
+            ),
+        },
+        normalized_session_id=orchestrator_session_id,
+    )
+    results = list(execution_output.get("results") or [])
+    result = dict(results[0] if results else {"status": "unknown", "action": action, "message": "No batch-step result was produced."})
+    counted = str(result.get("status") or "") not in {"error", "skipped", "not_executable"}
+    if counted:
+        project_key = str(action.get("project_id") or "")
+        executed_per_project[project_key] = executed_per_project.get(project_key, 0) + 1
+    return result, counted
+
+
+def _summarize_execution_plane_batch_results(
+    selected_actions: list[dict[str, Any]],
+    results: list[dict[str, Any]],
+    *,
+    dry_run: bool,
+    requested_mode: str,
+) -> tuple[dict[str, int], str, bool, str]:
+    """Normalize batch-result aggregates across bounded and free-form execution paths."""
+
+    status_counts: dict[str, int] = {}
+    for result in results:
+        result_status = str(result.get("status") or "unknown")
+        status_counts[result_status] = status_counts.get(result_status, 0) + 1
+
+    overall_status = "ok"
+    if status_counts.get("error"):
+        overall_status = "partial" if len(status_counts) > 1 else "error"
+    elif not results:
+        overall_status = "ok"
+
+    approval_required = _execution_plane_agent_action_run_requires_approval(selected_actions, results)
+    apply_mode = _execution_plane_agent_action_apply_mode(
+        dry_run=dry_run,
+        requested_mode=requested_mode,
+        approval_required=approval_required,
+    )
+    return status_counts, overall_status, approval_required, apply_mode
 
 
 def _emit_execution_plane_agent_action_batch_run_events(
@@ -2078,6 +2522,83 @@ def _list_orchestrator_session_tool_permission_runtimes(
     ]
 
 
+def _blocked_artifact_ref_for_shadow_audit(record: Any) -> str:
+    """Return the explicit review ref for one quarantined blocked artifact when available."""
+
+    owner_kind = str(getattr(record, "blocked_artifact_owner_kind", "") or "").strip()
+    owner_id = str(getattr(record, "blocked_artifact_owner_id", "") or "").strip()
+    if owner_kind == "runtime_agent_task" and owner_id:
+        return f"/api/execution-plane/agents/tasks/{owner_id}/output"
+    return ""
+
+
+def _materialize_execution_plane_shadow_audit_record(record: Any) -> dict[str, Any]:
+    """Serialize one shadow-audit record with explicit review and resolution refs."""
+
+    payload = record.model_dump()
+    payload["artifact_ref"] = f"/api/execution-plane/shadow-audits/{record.id}"
+    payload["resolve_ref"] = f"/api/execution-plane/shadow-audits/{record.id}/resolve"
+    payload["blocked_artifact_ref"] = _blocked_artifact_ref_for_shadow_audit(record)
+    payload["open"] = str(record.status or "") == "open"
+    return payload
+
+
+def _list_shadow_audits_for_artifact(
+    config: AutopilotConfig,
+    artifact_id: str,
+    *,
+    status: str | None = None,
+) -> list[dict[str, Any]]:
+    """Return shadow-audit records linked to one blocked artifact."""
+
+    normalized_artifact_id = str(artifact_id or "").strip()
+    if not normalized_artifact_id:
+        return []
+    return [
+        _materialize_execution_plane_shadow_audit_record(record)
+        for record in list_shadow_audit_records(
+            config,
+            blocked_artifact_id=normalized_artifact_id,
+            status=status,
+        )
+    ]
+
+
+def _list_orchestrator_session_shadow_audits(
+    config: AutopilotConfig,
+    session: Any,
+    *,
+    status: str | None = None,
+) -> list[dict[str, Any]]:
+    """Return shadow-audit records linked to one orchestrator session."""
+
+    session_id = str(getattr(session, "id", "") or "").strip()
+    session_project_ids = set(getattr(session, "project_ids", []) or [])
+    runtime_agent_ids = set(getattr(session, "linked_runtime_agent_ids", []) or [])
+    linked_shadow_audit_ids = set(getattr(session, "linked_shadow_audit_ids", []) or [])
+    matched: list[dict[str, Any]] = []
+
+    for record in list_shadow_audit_records(config, status=status):
+        if session_id and record.orchestrator_session_id == session_id:
+            matched.append(_materialize_execution_plane_shadow_audit_record(record))
+            continue
+        if record.id in linked_shadow_audit_ids:
+            matched.append(_materialize_execution_plane_shadow_audit_record(record))
+            continue
+        if (
+            record.project_id
+            and not record.orchestrator_session_id
+            and not record.runtime_agent_ids
+            and record.project_id in session_project_ids
+        ):
+            matched.append(_materialize_execution_plane_shadow_audit_record(record))
+            continue
+        if runtime_agent_ids and runtime_agent_ids.intersection(set(record.runtime_agent_ids or [])):
+            matched.append(_materialize_execution_plane_shadow_audit_record(record))
+            continue
+    return matched
+
+
 def build_execution_plane_project_snapshot(
     config: AutopilotConfig,
     project: dict[str, Any],
@@ -2271,7 +2792,10 @@ def build_execution_plane_project_detail(
         trace={
             "summary": detail.get("trace_summary") or {},
             "path": detail.get("trace_path") or "",
+            "monitoring": ((detail.get("monitoring") or {}).get("trace") or {}),
         },
+        monitoring=detail.get("monitoring") or {},
+        audit=detail.get("audit") or {},
     )
     return snapshot.model_dump()
 
@@ -2805,6 +3329,7 @@ def summarize_execution_plane_agent_action_runs(
             "partial": sum(1 for record in records if record.status == "partial"),
             "error": sum(1 for record in records if record.status == "error"),
             "pending_async": sum(1 for record in records if record.completion_state == "pending_async"),
+            "quarantined": sum(1 for record in records if record.completion_state == "quarantined"),
         },
         "by_status": by_status,
         "by_completion_state": by_completion_state,
@@ -3046,7 +3571,10 @@ def list_execution_plane_runtime_agent_tasks(
         agent_action_run_id=agent_action_run_id,
     )
     return [
-        _materialize_execution_plane_runtime_agent_task_record(refresh_runtime_agent_task(config, task))
+        _annotate_execution_plane_runtime_agent_task_record(
+            config,
+            _materialize_execution_plane_runtime_agent_task_record(refresh_runtime_agent_task(config, task)),
+        )
         for task in tasks
     ]
 
@@ -3060,7 +3588,10 @@ def get_execution_plane_runtime_agent_task(
     task = get_runtime_agent_task(config, task_id)
     if task is None:
         raise KeyError(task_id)
-    return _materialize_execution_plane_runtime_agent_task_record(refresh_runtime_agent_task(config, task))
+    return _annotate_execution_plane_runtime_agent_task_record(
+        config,
+        _materialize_execution_plane_runtime_agent_task_record(refresh_runtime_agent_task(config, task)),
+    )
 
 
 def cancel_execution_plane_runtime_agent_task(
@@ -3128,12 +3659,30 @@ def get_execution_plane_runtime_agent_task_output(
     output_record = get_task_output(config, output_artifact_id)
     if output_record is None:
         raise FileNotFoundError(output_artifact_id)
+    shadow_audits = _list_shadow_audits_for_artifact(config, output_artifact_id)
+    open_shadow_audits = [record for record in shadow_audits if bool(record.get("open"))]
+    if open_shadow_audits:
+        return {
+            **output_record.model_dump(),
+            "task_id": task.id,
+            "artifact_ref": f"/api/execution-plane/agents/tasks/{task.id}/output",
+            "status": "quarantined",
+            "content": "",
+            "content_blocked": True,
+            "quarantined": True,
+            "message": "Runtime-agent task output was quarantined by shadow audit and is blocked until resolved.",
+            "shadow_audits": shadow_audits,
+        }
 
     return {
         **output_record.model_dump(),
         "task_id": task.id,
         "artifact_ref": f"/api/execution-plane/agents/tasks/{task.id}/output",
+        "status": "ok",
         "content": read_task_output_text(config, output_artifact_id),
+        "content_blocked": False,
+        "quarantined": False,
+        "shadow_audits": shadow_audits,
     }
 
 
@@ -3158,6 +3707,65 @@ def get_execution_plane_runtime_agent_task_transcript(
         "artifact_ref": f"/api/execution-plane/agents/tasks/{task.id}/transcript",
         "content": read_task_transcript_text(config, transcript_artifact_id),
     }
+
+
+def get_execution_plane_shadow_audit(
+    config: AutopilotConfig,
+    audit_id: str,
+) -> dict[str, Any]:
+    """Return one shadow-audit record together with explicit review artifacts."""
+
+    record = get_shadow_audit_record(config, audit_id)
+    if record is None:
+        raise KeyError(audit_id)
+
+    payload = _materialize_execution_plane_shadow_audit_record(record)
+    audit_artifact = get_task_output(config, record.artifact_id) if str(record.artifact_id or "").strip() else None
+    blocked_artifact = (
+        get_task_output(config, record.blocked_artifact_id)
+        if str(record.blocked_artifact_id or "").strip()
+        else None
+    )
+    return {
+        **payload,
+        "audit_artifact": (
+            {
+                **audit_artifact.model_dump(),
+                "content": read_task_output_text(config, audit_artifact.id),
+            }
+            if audit_artifact is not None
+            else None
+        ),
+        "blocked_artifact": (
+            {
+                **blocked_artifact.model_dump(),
+                "artifact_ref": payload.get("blocked_artifact_ref"),
+                "content": read_task_output_text(config, blocked_artifact.id),
+            }
+            if blocked_artifact is not None
+            else None
+        ),
+    }
+
+
+def resolve_execution_plane_shadow_audit(
+    config: AutopilotConfig,
+    audit_id: str,
+    *,
+    actor: str = "control-plane",
+    note: str = "",
+    outcome: str = "resolved",
+) -> dict[str, Any]:
+    """Resolve one shadow-audit record after explicit review."""
+
+    record = resolve_shadow_audit_record(
+        config,
+        audit_id,
+        actor=actor,
+        note=note,
+        outcome=outcome,
+    )
+    return _materialize_execution_plane_shadow_audit_record(record)
 
 
 def list_execution_plane_orchestrator_sessions(
@@ -3301,12 +3909,13 @@ ORCHESTRATOR_SESSION_CONTROL_PROFILES: dict[str, dict[str, Any]] = {
     "safe_progress": {
         "description": (
             "Inspect blocking approvals, execute safe session actions, preview approval-gated actions, "
-            "inspect active background follow-through, triage linked issues, and close the session once it becomes healthy."
+            "inspect active background follow-through, review quarantined artifacts, triage linked issues, and close the session once it becomes healthy."
         ),
         "recommendation_kinds": [
             "review_pending_approvals",
             "review_pending_tool_permissions",
             "inspect_background_tasks",
+            "review_shadow_audit_quarantines",
             "execute_safe_actions",
             "preview_approval_gated_actions",
             "triage_open_issues",
@@ -3316,12 +3925,13 @@ ORCHESTRATOR_SESSION_CONTROL_PROFILES: dict[str, dict[str, Any]] = {
     },
     "review_only": {
         "description": (
-            "Inspect approvals, issues, and background follow-through, preview session actions, but do not apply mutating session actions."
+            "Inspect approvals, quarantines, issues, and background follow-through, preview session actions, but do not apply mutating session actions."
         ),
         "recommendation_kinds": [
             "review_pending_approvals",
             "review_pending_tool_permissions",
             "inspect_background_tasks",
+            "review_shadow_audit_quarantines",
             "preview_safe_actions",
             "preview_approval_gated_actions",
             "triage_open_issues",
@@ -3490,6 +4100,7 @@ def build_execution_plane_orchestrator_session_control(
         if issue.id in set(session.linked_issue_ids)
     ]
     tool_permission_runtimes = _list_orchestrator_session_tool_permission_runtimes(config, session)
+    shadow_audits = _list_orchestrator_session_shadow_audits(config, session, status="open")
     async_tasks = list_execution_plane_runtime_agent_tasks(
         config,
         orchestrator_session_id=session_id,
@@ -3505,6 +4116,7 @@ def build_execution_plane_orchestrator_session_control(
     pending_tool_permission_runtimes = [
         runtime for runtime in tool_permission_runtimes if str(runtime.get("status") or "") == "pending"
     ]
+    open_shadow_audits = [record for record in shadow_audits if str(record.get("status") or "") == "open"]
     open_issues = [issue for issue in issues if issue.get("status") == "open"]
     active_async_tasks = _active_execution_plane_async_tasks(async_tasks)
     safe_actions = [
@@ -3525,6 +4137,8 @@ def build_execution_plane_orchestrator_session_control(
         state = "needs_approval"
     elif active_async_tasks or pending_async_runs:
         state = "waiting_async"
+    elif open_shadow_audits:
+        state = "attention_required"
     elif safe_actions or approval_actions or recommendation_actions:
         state = "actionable"
     elif open_issues:
@@ -3588,6 +4202,23 @@ def build_execution_plane_orchestrator_session_control(
                     "type": "inspect_background_tasks",
                     "session_id": session_id,
                     "endpoint": f"/api/execution-plane/orchestrator-sessions/{session_id}/control/apply",
+                },
+            }
+        )
+    if open_shadow_audits:
+        recommendations.append(
+            {
+                "kind": "review_shadow_audit_quarantines",
+                "priority": "high",
+                "title": "Review shadow-audit quarantines",
+                "reason": (
+                    f"{len(open_shadow_audits)} quarantined runtime artifact(s) were blocked from downstream use "
+                    "and require inspection before progress can continue safely."
+                ),
+                "counts": {"open_shadow_audits": len(open_shadow_audits)},
+                "operation": {
+                    "type": "inspect_session_shadow_audits",
+                    "session_id": session_id,
                 },
             }
         )
@@ -3711,6 +4342,7 @@ def build_execution_plane_orchestrator_session_control(
         "counts": {
             "pending_approvals": len(pending_approvals),
             "pending_tool_permission_runtimes": len(pending_tool_permission_runtimes),
+            "open_shadow_audits": len(open_shadow_audits),
             "open_issues": len(open_issues),
             "active_async_tasks": len(active_async_tasks),
             "pending_async_runs": len(pending_async_runs),
@@ -3857,6 +4489,18 @@ def apply_execution_plane_orchestrator_session_recommendation(
             "counts": {
                 "issues": len(issues),
                 "open_issues": len(open_issues),
+            },
+        }
+    elif operation_type == "inspect_session_shadow_audits":
+        shadow_audits = _list_orchestrator_session_shadow_audits(config, session)
+        open_shadow_audits = [record for record in shadow_audits if str(record.get("status") or "") == "open"]
+        result = {
+            "status": "ok",
+            "shadow_audits": shadow_audits,
+            "open_shadow_audits": open_shadow_audits,
+            "counts": {
+                "shadow_audits": len(shadow_audits),
+                "open_shadow_audits": len(open_shadow_audits),
             },
         }
     elif operation_type == "inspect_background_tasks":
@@ -4328,6 +4972,7 @@ def get_execution_plane_orchestrator_session(
         if issue.id in set(session.linked_issue_ids)
     ]
     tool_permission_runtimes = _list_orchestrator_session_tool_permission_runtimes(config, session)
+    shadow_audits = _list_orchestrator_session_shadow_audits(config, session)
     async_tasks = list_execution_plane_runtime_agent_tasks(
         config,
         orchestrator_session_id=session_id,
@@ -4350,6 +4995,7 @@ def get_execution_plane_orchestrator_session(
         "approvals": approvals,
         "issues": issues,
         "tool_permission_runtimes": tool_permission_runtimes,
+        "shadow_audits": shadow_audits,
         "async_tasks": async_tasks,
         "events": events,
         "control": control,
@@ -4362,6 +5008,8 @@ def get_execution_plane_orchestrator_session(
             "pending_tool_permission_runtime_count": sum(
                 1 for runtime in tool_permission_runtimes if str(runtime.get("status") or "") == "pending"
             ),
+            "shadow_audit_count": len(shadow_audits),
+            "open_shadow_audit_count": sum(1 for record in shadow_audits if str(record.get("status") or "") == "open"),
             "issue_count": len(issues),
             "open_issue_count": sum(1 for issue in issues if issue.get("status") == "open"),
             "async_task_count": len(async_tasks),
@@ -5301,20 +5949,75 @@ def execute_execution_plane_agent_action_with_run(
             return _execution_plane_agent_action_run_response(config, existing, idempotent_replay=True)
 
     action = get_execution_plane_agent_action(config, action_key)
-    result = execute_execution_plane_agent_action(
+    blueprint_plan = plan_execution_blueprint(
         config,
-        action_key=action_key,
-        actor=actor,
-        mode=mode,
-        reason=reason,
-        orchestrator_session_id=normalized_session_id,
-    )
-    approval_required = _execution_plane_agent_action_run_requires_approval([action], [result])
-    apply_mode = _execution_plane_agent_action_apply_mode(
-        dry_run=False,
+        actions=[action],
         requested_mode=mode,
-        approval_required=approval_required,
+        policy_profile="",
     )
+    execution_strategy = str(blueprint_plan.strategy or "freeform")
+    execution_blueprint_payload: dict[str, Any] | None = None
+    bounded_execution_payload: dict[str, Any] | None = None
+
+    if execution_strategy == "bounded_blueprint" and blueprint_plan.blueprint is not None:
+        executed_per_project: dict[str, int] = {}
+
+        def _step_executor(step: Any, bound_action: dict[str, Any]) -> dict[str, Any]:
+            result, _ = _execute_execution_plane_agent_action_batch_step(
+                config,
+                action=bound_action,
+                actor=actor,
+                mode=mode,
+                reason=reason,
+                dry_run=False,
+                resolved_policy=resolve_execution_plane_agent_action_batch_policy(),
+                continue_on_error=True,
+                include_non_executable=True,
+                orchestrator_session_id=normalized_session_id,
+                executed_per_project=executed_per_project,
+            )
+            return result
+
+        bounded_result = execute_bounded_execution_blueprint(
+            blueprint_plan.blueprint,
+            actions=[action],
+            step_executor=_step_executor,
+            continue_on_error=True,
+        )
+        result = dict(bounded_result.step_results[0].result if bounded_result.step_results else {})
+        _, _, approval_required, apply_mode = _summarize_execution_plane_batch_results(
+            [action],
+            [result],
+            dry_run=False,
+            requested_mode=mode,
+        )
+        execution_blueprint_payload = _summarize_execution_blueprint_result(
+            blueprint_plan.blueprint,
+            cached=blueprint_plan.cache_hit,
+            bounded_result=bounded_result,
+        )
+        bounded_execution_payload = bounded_result.model_dump(exclude_none=True)
+    else:
+        result = execute_execution_plane_agent_action(
+            config,
+            action_key=action_key,
+            actor=actor,
+            mode=mode,
+            reason=reason,
+            orchestrator_session_id=normalized_session_id,
+        )
+        _, _, approval_required, apply_mode = _summarize_execution_plane_batch_results(
+            [action],
+            [result],
+            dry_run=False,
+            requested_mode=mode,
+        )
+        execution_blueprint_payload = {
+            "strategy": "freeform",
+            "cache_hit": False,
+            "fallback_reason": str(blueprint_plan.fallback_reason or ""),
+            "route_policy": dict(blueprint_plan.route_policy or {}),
+        }
     diff_summary = _build_execution_plane_agent_action_diff_summary(
         [action],
         [result],
@@ -5345,6 +6048,7 @@ def execute_execution_plane_agent_action_with_run(
             "mode": "single_action",
             "requested_action_keys": [action_key],
             "selected_action_keys": [action_key],
+            "execution_strategy": execution_strategy,
             "preview_id": "",
             "project_id": action.get("project_id"),
             "initiative_id": (action.get("initiative") or {}).get("id"),
@@ -5357,9 +6061,13 @@ def execute_execution_plane_agent_action_with_run(
             "status_counts": {str(result.get("status") or "unknown"): 1},
             "approval_required_count": 1 if approval_required else 0,
             "apply_mode": apply_mode,
+            "execution_strategy": execution_strategy,
         },
         diff_summary=diff_summary,
         patch_bundle=patch_bundle,
+        execution_strategy=execution_strategy,
+        execution_blueprint=execution_blueprint_payload,
+        bounded_execution=bounded_execution_payload,
         preview_id="",
         artifact_ref="",
         approval_required=approval_required,
@@ -5424,151 +6132,103 @@ def execute_execution_plane_agent_action_with_run(
     return _execution_plane_agent_action_run_response(config, run, idempotent_replay=False)
 
 
-def execute_execution_plane_agent_actions(
+def _select_execution_plane_agent_action_batch_actions(
     config: AutopilotConfig,
     *,
-    action_keys: list[str] | None = None,
-    preview_id: str = "",
-    orchestrator_session_id: str = "",
-    idempotency_key: str = "",
-    actor: str,
-    mode: str = "auto",
-    reason: str = "",
-    policy_profile: str | None = None,
-    policy_overrides: dict[str, Any] | None = None,
-    dry_run: bool = False,
-    include_archived: bool = False,
-    project_id: str | None = None,
-    initiative_id: str | None = None,
-    orchestrator: str | None = None,
-    status: str | None = None,
-    role: str | None = None,
-    attention_state: str | None = None,
-    recommendation_kind: str | None = None,
-    suggested_command: str | None = None,
-    actionable_only: bool = True,
-    command_requires_approval: bool | None = None,
-    priority: str | None = None,
-    limit: int = 20,
-    continue_on_error: bool = True,
-    include_non_executable: bool = False,
-) -> dict[str, Any]:
-    """Execute a batch of runtime-agent actions using explicit keys or filtered selection."""
-
-    normalized_keys: list[str] = []
-    seen_keys: set[str] = set()
-    for item in action_keys or []:
-        key = str(item or "").strip()
-        if not key or key in seen_keys:
-            continue
-        normalized_keys.append(key)
-        seen_keys.add(key)
-
-    if not normalized_keys and not any([project_id, initiative_id, orchestrator]):
-        raise ValueError(
-            "Batch runtime-agent action execution requires explicit action_keys or a project/initiative/orchestrator scope."
-        )
-
-    resolved_policy = resolve_execution_plane_agent_action_batch_policy(
-        profile_name=policy_profile,
-        overrides=policy_overrides,
-    )
-    normalized_session_id = orchestrator_session_id.strip()
-    if normalized_session_id and get_orchestrator_session(config, normalized_session_id) is None:
-        raise KeyError(normalized_session_id)
-    normalized_preview_id = preview_id.strip()
-    if dry_run and normalized_preview_id:
-        raise ValueError("preview_id can only be used when applying a previously generated preview.")
-    normalized_idempotency_key = idempotency_key.strip()
-    request_fingerprint = _execution_plane_agent_action_batch_request_fingerprint(
-        {
-            "action_keys": normalized_keys,
-            "preview_id": normalized_preview_id,
-            "orchestrator_session_id": normalized_session_id,
-            "actor": actor,
-            "mode": mode,
-            "reason": reason,
-            "policy_profile": policy_profile or "",
-            "policy_overrides": policy_overrides or {},
-            "dry_run": dry_run,
-            "include_archived": include_archived,
-            "project_id": project_id,
-            "initiative_id": initiative_id,
-            "orchestrator": orchestrator,
-            "status": status,
-            "role": role,
-            "attention_state": attention_state,
-            "recommendation_kind": recommendation_kind,
-            "suggested_command": suggested_command,
-            "actionable_only": actionable_only,
-            "command_requires_approval": command_requires_approval,
-            "priority": priority,
-            "limit": limit,
-            "continue_on_error": continue_on_error,
-            "include_non_executable": include_non_executable,
-            "resolved_policy": resolved_policy,
-        }
-    )
-    if normalized_idempotency_key:
-        existing = find_agent_action_batch_run_by_idempotency_key(config, normalized_idempotency_key)
-        if existing is not None:
-            if existing.request_fingerprint and existing.request_fingerprint != request_fingerprint:
-                raise RuntimeError(
-                    f"Idempotency key `{normalized_idempotency_key}` was already used for a different batch action request."
-                )
-            return _execution_plane_agent_action_batch_run_response(config, existing, idempotent_replay=True)
-
-    selected_actions: list[dict[str, Any]]
+    normalized_keys: list[str],
+    include_archived: bool,
+    project_id: str | None,
+    initiative_id: str | None,
+    orchestrator: str | None,
+    status: str | None,
+    role: str | None,
+    attention_state: str | None,
+    recommendation_kind: str | None,
+    suggested_command: str | None,
+    actionable_only: bool,
+    command_requires_approval: bool | None,
+    priority: str | None,
+    limit: int,
+    include_non_executable: bool,
+) -> list[dict[str, Any]]:
     if normalized_keys:
-        selected_actions = []
+        selected_actions: list[dict[str, Any]] = []
         for key in normalized_keys[:limit]:
             selected_actions.append(get_execution_plane_agent_action(config, key))
-    else:
-        selected_actions = list_execution_plane_agent_actions(
-            config,
-            include_archived=include_archived,
-            project_id=project_id,
-            initiative_id=initiative_id,
-            orchestrator=orchestrator,
-            status=status,
-            role=role,
-            attention_state=attention_state,
-            recommendation_kind=recommendation_kind,
-            suggested_command=suggested_command,
-            actionable_only=actionable_only,
-            command_requires_approval=command_requires_approval,
-            priority=priority,
+        return selected_actions
+
+    selected_actions = list_execution_plane_agent_actions(
+        config,
+        include_archived=include_archived,
+        project_id=project_id,
+        initiative_id=initiative_id,
+        orchestrator=orchestrator,
+        status=status,
+        role=role,
+        attention_state=attention_state,
+        recommendation_kind=recommendation_kind,
+        suggested_command=suggested_command,
+        actionable_only=actionable_only,
+        command_requires_approval=command_requires_approval,
+        priority=priority,
+    )
+    if not include_non_executable:
+        selected_actions = [item for item in selected_actions if item.get("action_type") == "suggested_command"]
+    return selected_actions[:limit]
+
+
+def _validate_execution_plane_agent_action_batch_preview(
+    config: AutopilotConfig,
+    *,
+    preview_id: str,
+    resolved_policy: dict[str, Any],
+    mode: str,
+    normalized_session_id: str,
+    selected_actions: list[dict[str, Any]],
+) -> None:
+    normalized_preview_id = preview_id.strip()
+    if not normalized_preview_id:
+        return
+
+    preview_record = get_agent_action_batch_run(config, normalized_preview_id)
+    if preview_record is None:
+        raise KeyError(normalized_preview_id)
+    if not preview_record.dry_run:
+        raise ValueError(f"Runtime-agent action run `{normalized_preview_id}` is not a preview run.")
+    if preview_record.mode != mode:
+        raise RuntimeError(
+            f"Preview run `{normalized_preview_id}` was created with mode `{preview_record.mode}`, not `{mode}`."
         )
-        if not include_non_executable:
-            selected_actions = [item for item in selected_actions if item.get("action_type") == "suggested_command"]
-        selected_actions = selected_actions[:limit]
+    if dict(preview_record.policy or {}) != dict(resolved_policy or {}):
+        raise RuntimeError(
+            f"Preview run `{normalized_preview_id}` was created under a different batch policy."
+        )
+    preview_session_id = str(preview_record.orchestrator_session_id or "").strip()
+    if preview_session_id != normalized_session_id:
+        raise RuntimeError(
+            f"Preview run `{normalized_preview_id}` belongs to orchestrator session `{preview_session_id or 'none'}`."
+        )
+    preview_selected_keys = _listify_strings((preview_record.selection or {}).get("selected_action_keys"))
+    current_selected_keys = [str(item["action_key"]) for item in selected_actions]
+    if preview_selected_keys != current_selected_keys:
+        raise RuntimeError(
+            f"Preview run `{normalized_preview_id}` no longer matches the current runtime-agent action selection."
+        )
 
-    if normalized_preview_id:
-        preview_record = get_agent_action_batch_run(config, normalized_preview_id)
-        if preview_record is None:
-            raise KeyError(normalized_preview_id)
-        if not preview_record.dry_run:
-            raise ValueError(f"Runtime-agent action run `{normalized_preview_id}` is not a preview run.")
-        if preview_record.mode != mode:
-            raise RuntimeError(
-                f"Preview run `{normalized_preview_id}` was created with mode `{preview_record.mode}`, not `{mode}`."
-            )
-        if dict(preview_record.policy or {}) != dict(resolved_policy or {}):
-            raise RuntimeError(
-                f"Preview run `{normalized_preview_id}` was created under a different batch policy."
-            )
-        preview_session_id = str(preview_record.orchestrator_session_id or "").strip()
-        if preview_session_id != normalized_session_id:
-            raise RuntimeError(
-                f"Preview run `{normalized_preview_id}` belongs to orchestrator session `{preview_session_id or 'none'}`."
-            )
-        preview_selected_keys = _listify_strings((preview_record.selection or {}).get("selected_action_keys"))
-        current_selected_keys = [str(item["action_key"]) for item in selected_actions]
-        if preview_selected_keys != current_selected_keys:
-            raise RuntimeError(
-                f"Preview run `{normalized_preview_id}` no longer matches the current runtime-agent action selection."
-            )
 
+def _process_execution_plane_agent_action_batch(
+    config: AutopilotConfig,
+    *,
+    selected_actions: list[dict[str, Any]],
+    resolved_policy: dict[str, Any],
+    actor: str,
+    mode: str,
+    reason: str,
+    normalized_session_id: str,
+    dry_run: bool,
+    continue_on_error: bool,
+    include_non_executable: bool,
+) -> tuple[list[dict[str, Any]], dict[str, int], str]:
     executed_per_project: dict[str, int] = {}
     results: list[dict[str, Any]] = []
     for action in selected_actions:
@@ -5584,10 +6244,7 @@ def execute_execution_plane_agent_actions(
                 }
             )
             continue
-        if (
-            resolved_policy["skip_paused_projects"]
-            and bool(action.get("project_paused"))
-        ):
+        if resolved_policy["skip_paused_projects"] and bool(action.get("project_paused")):
             results.append(
                 {
                     "status": "skipped",
@@ -5755,18 +6412,743 @@ def execute_execution_plane_agent_actions(
         overall_status = "partial" if len(status_counts) > 1 else "error"
     elif not results:
         overall_status = "ok"
+    return results, status_counts, overall_status
 
+
+def _persist_execution_plane_agent_action_batch_run(
+    config: AutopilotConfig,
+    *,
+    normalized_idempotency_key: str,
+    normalized_session_id: str,
+    request_fingerprint: str,
+    actor: str,
+    mode: str,
+    reason: str,
+    dry_run: bool,
+    resolved_policy: dict[str, Any],
+    normalized_keys: list[str],
+    normalized_preview_id: str,
+    include_non_executable: bool,
+    limit: int,
+    project_id: str | None,
+    initiative_id: str | None,
+    orchestrator: str | None,
+    status: str | None,
+    role: str | None,
+    attention_state: str | None,
+    recommendation_kind: str | None,
+    suggested_command: str | None,
+    actionable_only: bool,
+    command_requires_approval: bool | None,
+    priority: str | None,
+    selected_actions: list[dict[str, Any]],
+    results: list[dict[str, Any]],
+    status_counts: dict[str, int],
+    overall_status: str,
+    execution_blueprint: dict[str, Any] | None = None,
+) -> AgentActionBatchRunRecord:
     approval_required = _execution_plane_agent_action_run_requires_approval(selected_actions, results)
     apply_mode = _execution_plane_agent_action_apply_mode(
         dry_run=dry_run,
         requested_mode=mode,
         approval_required=approval_required,
     )
+    selection = {
+        "mode": "action_keys" if normalized_keys else "filters",
+        "requested_action_keys": normalized_keys,
+        "selected_action_keys": [str(item["action_key"]) for item in selected_actions],
+        "execution_strategy": execution_strategy,
+        "preview_id": normalized_preview_id,
+        "include_non_executable": include_non_executable,
+        "limit": limit,
+        "project_id": project_id,
+        "initiative_id": initiative_id,
+        "orchestrator": orchestrator,
+        "status_filter": status,
+        "role_filter": role,
+        "attention_state": attention_state,
+        "recommendation_kind": recommendation_kind,
+        "suggested_command": suggested_command,
+        "actionable_only": actionable_only,
+        "command_requires_approval": command_requires_approval,
+        "priority": priority,
+    }
+    if execution_blueprint:
+        selection["execution_blueprint"] = dict(execution_blueprint)
+    summary = {
+        "selected_count": len(selected_actions),
+        "processed_count": len(results),
+        "status_counts": status_counts,
+        "approval_required_count": sum(1 for item in selected_actions if bool(item.get("approval_required"))),
+        "apply_mode": apply_mode,
+        "execution_strategy": execution_strategy,
+    }
+    if execution_blueprint:
+        summary["execution_blueprint_task_family"] = str(execution_blueprint.get("task_family") or "")
+        summary["execution_blueprint_cache_hit"] = bool(execution_blueprint.get("cache_hit"))
+    diff_summary = _build_execution_plane_agent_action_diff_summary(
+        selected_actions,
+        results,
+        status_counts=status_counts,
+        approval_required=approval_required,
+        apply_mode=apply_mode,
+    )
+    patch_bundle = _build_execution_plane_agent_action_patch_bundle(
+        selected_actions,
+        results,
+        requested_mode=mode,
+        dry_run=dry_run,
+        default_apply_mode=apply_mode,
+    )
+    project_ids = {str(item.get("project_id") or "") for item in selected_actions if str(item.get("project_id") or "").strip()}
+    initiative_ids = {
+        str((item.get("initiative") or {}).get("id") or "")
+        for item in selected_actions
+        if str((item.get("initiative") or {}).get("id") or "").strip()
+    }
+    orchestrators = {
+        str((item.get("orchestration") or {}).get("orchestrator") or "")
+        for item in selected_actions
+        if str((item.get("orchestration") or {}).get("orchestrator") or "").strip()
+    }
+    runtime_agent_ids = {
+        str(item.get("runtime_agent_id") or "")
+        for item in selected_actions
+        if str(item.get("runtime_agent_id") or "").strip()
+    }
+    if project_id:
+        project_ids.add(str(project_id))
+    if initiative_id:
+        initiative_ids.add(str(initiative_id))
+    if orchestrator:
+        orchestrators.add(str(orchestrator))
+    run = create_agent_action_batch_run(
+        config,
+        idempotency_key=normalized_idempotency_key,
+        orchestrator_session_id=normalized_session_id,
+        request_fingerprint=request_fingerprint,
+        actor=actor,
+        mode=mode,
+        reason=reason,
+        dry_run=dry_run,
+        policy_profile=str(resolved_policy.get("profile_name") or ""),
+        policy=resolved_policy,
+        selection=selection,
+        summary=summary,
+        diff_summary=diff_summary,
+        patch_bundle=patch_bundle,
+        preview_id=normalized_preview_id,
+        artifact_ref="",
+        approval_required=approval_required,
+        apply_mode=apply_mode,
+        results=results,
+        status=overall_status,
+        project_ids=sorted(project_ids),
+        initiative_ids=sorted(initiative_ids),
+        orchestrators=sorted(orchestrators),
+        runtime_agent_ids=sorted(runtime_agent_ids),
+    )
+    run_updated = False
+    if dry_run and not run.preview_id:
+        run.preview_id = run.id
+        run_updated = True
+    if not run.artifact_ref:
+        run.artifact_ref = f"/api/execution-plane/agents/action-runs/{run.id}"
+        run_updated = True
+    if run_updated:
+        run = save_agent_action_batch_run(config, run)
+    for result in results:
+        task_id = str((result.get("async_task") or {}).get("id") or "")
+        if task_id:
+            link_runtime_agent_task_run(config, task_id, agent_action_run_id=run.id)
+    run = _refresh_execution_plane_agent_action_run_record(config, run)
+    if normalized_session_id:
+        linked_approval_ids = [
+            str(result.get("approval", {}).get("id") or "")
+            for result in results
+            if str(result.get("approval", {}).get("id") or "").strip()
+        ]
+        linked_issue_ids = [
+            str(result.get("issue", {}).get("id") or "")
+            for result in results
+            if str(result.get("issue", {}).get("id") or "").strip()
+        ]
+        link_orchestrator_session_entities(
+            config,
+            normalized_session_id,
+            project_ids=sorted(project_ids),
+            linked_run_ids=[run.id],
+            linked_approval_ids=linked_approval_ids,
+            linked_issue_ids=linked_issue_ids,
+            linked_runtime_agent_ids=sorted(runtime_agent_ids),
+        )
+    _emit_execution_plane_agent_action_batch_run_events(config, run)
+    return run
+
+
+def _execute_execution_plane_agent_actions_via_blueprint(
+    config: AutopilotConfig,
+    *,
+    action_keys: list[str] | None = None,
+    preview_id: str = "",
+    orchestrator_session_id: str = "",
+    idempotency_key: str = "",
+    actor: str,
+    mode: str = "auto",
+    reason: str = "",
+    policy_profile: str | None = None,
+    policy_overrides: dict[str, Any] | None = None,
+    dry_run: bool = False,
+    include_archived: bool = False,
+    project_id: str | None = None,
+    initiative_id: str | None = None,
+    orchestrator: str | None = None,
+    status: str | None = None,
+    role: str | None = None,
+    attention_state: str | None = None,
+    recommendation_kind: str | None = None,
+    suggested_command: str | None = None,
+    actionable_only: bool = True,
+    command_requires_approval: bool | None = None,
+    priority: str | None = None,
+    limit: int = 20,
+    continue_on_error: bool = True,
+    include_non_executable: bool = False,
+) -> dict[str, Any]:
+    normalized_keys: list[str] = []
+    seen_keys: set[str] = set()
+    for item in action_keys or []:
+        key = str(item or "").strip()
+        if not key or key in seen_keys:
+            continue
+        normalized_keys.append(key)
+        seen_keys.add(key)
+
+    if not normalized_keys and not any([project_id, initiative_id, orchestrator]):
+        raise ValueError(
+            "Batch runtime-agent action execution requires explicit action_keys or a project/initiative/orchestrator scope."
+        )
+
+    resolved_policy = resolve_execution_plane_agent_action_batch_policy(
+        profile_name=policy_profile,
+        overrides=policy_overrides,
+    )
+    normalized_session_id = orchestrator_session_id.strip()
+    if normalized_session_id and get_orchestrator_session(config, normalized_session_id) is None:
+        raise KeyError(normalized_session_id)
+    normalized_preview_id = preview_id.strip()
+    if dry_run and normalized_preview_id:
+        raise ValueError("preview_id can only be used when applying a previously generated preview.")
+    normalized_idempotency_key = idempotency_key.strip()
+    request_fingerprint = _execution_plane_agent_action_batch_request_fingerprint(
+        {
+            "action_keys": normalized_keys,
+            "preview_id": normalized_preview_id,
+            "orchestrator_session_id": normalized_session_id,
+            "actor": actor,
+            "mode": mode,
+            "reason": reason,
+            "policy_profile": policy_profile or "",
+            "policy_overrides": policy_overrides or {},
+            "dry_run": dry_run,
+            "include_archived": include_archived,
+            "project_id": project_id,
+            "initiative_id": initiative_id,
+            "orchestrator": orchestrator,
+            "status": status,
+            "role": role,
+            "attention_state": attention_state,
+            "recommendation_kind": recommendation_kind,
+            "suggested_command": suggested_command,
+            "actionable_only": actionable_only,
+            "command_requires_approval": command_requires_approval,
+            "priority": priority,
+            "limit": limit,
+            "continue_on_error": continue_on_error,
+            "include_non_executable": include_non_executable,
+            "resolved_policy": resolved_policy,
+        }
+    )
+    if normalized_idempotency_key:
+        existing = find_agent_action_batch_run_by_idempotency_key(config, normalized_idempotency_key)
+        if existing is not None:
+            if existing.request_fingerprint and existing.request_fingerprint != request_fingerprint:
+                raise RuntimeError(
+                    f"Idempotency key `{normalized_idempotency_key}` was already used for a different batch action request."
+                )
+            return _execution_plane_agent_action_batch_run_response(config, existing, idempotent_replay=True)
+
+    planning_input = {
+        "selection_mode": "action_keys" if normalized_keys else "filters",
+        "mode": mode,
+        "dry_run": dry_run,
+        "policy_profile": str(resolved_policy.get("profile_name") or ""),
+        "include_non_executable": include_non_executable,
+        "project_scoped": bool(project_id),
+        "initiative_scoped": bool(initiative_id),
+        "orchestrator_scoped": bool(orchestrator),
+    }
+    blueprint_resolution = resolve_execution_blueprint(
+        config,
+        task_family="execution_plane.agent_action_batch",
+        planning_input=planning_input,
+    )
+
+    def _run_sequential(execution_blueprint: dict[str, Any] | None = None) -> dict[str, Any]:
+        selected_actions = _select_execution_plane_agent_action_batch_actions(
+            config,
+            normalized_keys=normalized_keys,
+            include_archived=include_archived,
+            project_id=project_id,
+            initiative_id=initiative_id,
+            orchestrator=orchestrator,
+            status=status,
+            role=role,
+            attention_state=attention_state,
+            recommendation_kind=recommendation_kind,
+            suggested_command=suggested_command,
+            actionable_only=actionable_only,
+            command_requires_approval=command_requires_approval,
+            priority=priority,
+            limit=limit,
+            include_non_executable=include_non_executable,
+        )
+        _validate_execution_plane_agent_action_batch_preview(
+            config,
+            preview_id=normalized_preview_id,
+            resolved_policy=resolved_policy,
+            mode=mode,
+            normalized_session_id=normalized_session_id,
+            selected_actions=selected_actions,
+        )
+        results, status_counts, overall_status = _process_execution_plane_agent_action_batch(
+            config,
+            selected_actions=selected_actions,
+            resolved_policy=resolved_policy,
+            actor=actor,
+            mode=mode,
+            reason=reason,
+            normalized_session_id=normalized_session_id,
+            dry_run=dry_run,
+            continue_on_error=continue_on_error,
+            include_non_executable=include_non_executable,
+        )
+        run = _persist_execution_plane_agent_action_batch_run(
+            config,
+            normalized_idempotency_key=normalized_idempotency_key,
+            normalized_session_id=normalized_session_id,
+            request_fingerprint=request_fingerprint,
+            actor=actor,
+            mode=mode,
+            reason=reason,
+            dry_run=dry_run,
+            resolved_policy=resolved_policy,
+            normalized_keys=normalized_keys,
+            normalized_preview_id=normalized_preview_id,
+            include_non_executable=include_non_executable,
+            limit=limit,
+            project_id=project_id,
+            initiative_id=initiative_id,
+            orchestrator=orchestrator,
+            status=status,
+            role=role,
+            attention_state=attention_state,
+            recommendation_kind=recommendation_kind,
+            suggested_command=suggested_command,
+            actionable_only=actionable_only,
+            command_requires_approval=command_requires_approval,
+            priority=priority,
+            selected_actions=selected_actions,
+            results=results,
+            status_counts=status_counts,
+            overall_status=overall_status,
+            execution_blueprint=execution_blueprint,
+        )
+        response = _execution_plane_agent_action_batch_run_response(config, run, idempotent_replay=False)
+        if execution_blueprint is not None:
+            response["execution_blueprint"] = execution_blueprint
+        return response
+
+    if blueprint_resolution.blueprint is None:
+        return _run_sequential(
+            {
+                "task_family": blueprint_resolution.task_family,
+                "cache_key": blueprint_resolution.cache_key,
+                "cache_hit": blueprint_resolution.cache_hit,
+                "routing_policy": blueprint_resolution.routing_policy,
+                "terminal_verdict": {
+                    "status": "fallback_free_form",
+                    "summary": blueprint_resolution.fallback_reason or "Execution fell back to free-form handling.",
+                },
+                "step_trace": [],
+            }
+        )
+
+    bounded_state: dict[str, Any] = {}
+
+    def _handle_select_actions(_step, state: dict[str, Any]) -> dict[str, Any]:
+        try:
+            selected_actions = _select_execution_plane_agent_action_batch_actions(
+                config,
+                normalized_keys=normalized_keys,
+                include_archived=include_archived,
+                project_id=project_id,
+                initiative_id=initiative_id,
+                orchestrator=orchestrator,
+                status=status,
+                role=role,
+                attention_state=attention_state,
+                recommendation_kind=recommendation_kind,
+                suggested_command=suggested_command,
+                actionable_only=actionable_only,
+                command_requires_approval=command_requires_approval,
+                priority=priority,
+                limit=limit,
+                include_non_executable=include_non_executable,
+            )
+        except Exception as exc:
+            state["terminal_error"] = str(exc)
+            return {"status": "error", "selected_count": 0, "selected_action_keys": []}
+        state["selected_actions"] = selected_actions
+        return {
+            "status": "ok",
+            "selected_count": len(selected_actions),
+            "selected_action_keys": [str(item["action_key"]) for item in selected_actions],
+        }
+
+    def _handle_validate_preview(_step, state: dict[str, Any]) -> dict[str, Any]:
+        try:
+            _validate_execution_plane_agent_action_batch_preview(
+                config,
+                preview_id=normalized_preview_id,
+                resolved_policy=resolved_policy,
+                mode=mode,
+                normalized_session_id=normalized_session_id,
+                selected_actions=list(state.get("selected_actions") or []),
+            )
+        except Exception as exc:
+            state["terminal_error"] = str(exc)
+            return {"status": "error", "preview_checked": bool(normalized_preview_id)}
+        return {"status": "ok", "preview_checked": bool(normalized_preview_id)}
+
+    def _handle_process_actions(_step, state: dict[str, Any]) -> dict[str, Any]:
+        results, status_counts, overall_status = _process_execution_plane_agent_action_batch(
+            config,
+            selected_actions=list(state.get("selected_actions") or []),
+            resolved_policy=resolved_policy,
+            actor=actor,
+            mode=mode,
+            reason=reason,
+            normalized_session_id=normalized_session_id,
+            dry_run=dry_run,
+            continue_on_error=continue_on_error,
+            include_non_executable=include_non_executable,
+        )
+        state["results"] = results
+        state["status_counts"] = status_counts
+        state["overall_status"] = overall_status
+        return {
+            "status": overall_status,
+            "processed_count": len(results),
+            "status_counts": status_counts,
+        }
+
+    def _handle_finalize_run(_step, state: dict[str, Any]) -> dict[str, Any]:
+        run = _persist_execution_plane_agent_action_batch_run(
+            config,
+            normalized_idempotency_key=normalized_idempotency_key,
+            normalized_session_id=normalized_session_id,
+            request_fingerprint=request_fingerprint,
+            actor=actor,
+            mode=mode,
+            reason=reason,
+            dry_run=dry_run,
+            resolved_policy=resolved_policy,
+            normalized_keys=normalized_keys,
+            normalized_preview_id=normalized_preview_id,
+            include_non_executable=include_non_executable,
+            limit=limit,
+            project_id=project_id,
+            initiative_id=initiative_id,
+            orchestrator=orchestrator,
+            status=status,
+            role=role,
+            attention_state=attention_state,
+            recommendation_kind=recommendation_kind,
+            suggested_command=suggested_command,
+            actionable_only=actionable_only,
+            command_requires_approval=command_requires_approval,
+            priority=priority,
+            selected_actions=list(state.get("selected_actions") or []),
+            results=list(state.get("results") or []),
+            status_counts=dict(state.get("status_counts") or {}),
+            overall_status=str(state.get("overall_status") or "ok"),
+        )
+        state["run"] = run
+        return {
+            "status": str(state.get("overall_status") or "ok"),
+            "run_id": run.id,
+            "artifact_ref": str(run.artifact_ref or f"/api/execution-plane/agents/action-runs/{run.id}"),
+            "processed_count": len(list(state.get("results") or [])),
+        }
+
+    bounded_result = execute_bounded_blueprint(
+        blueprint_resolution.blueprint,
+        handlers={
+            "select_actions": _handle_select_actions,
+            "validate_preview": _handle_validate_preview,
+            "process_actions": _handle_process_actions,
+            "finalize_run": _handle_finalize_run,
+        },
+        state=bounded_state,
+    )
+    if bounded_result.terminal_verdict.status != "completed":
+        raise RuntimeError(str(bounded_result.state.get("terminal_error") or bounded_result.terminal_verdict.summary))
+
+    run = bounded_result.state.get("run")
+    if not isinstance(run, AgentActionBatchRunRecord):
+        raise RuntimeError("Bounded execution did not persist a runtime-agent batch run.")
+    execution_blueprint = {
+        "blueprint_id": blueprint_resolution.blueprint.id,
+        "task_family": blueprint_resolution.task_family,
+        "cache_key": blueprint_resolution.cache_key,
+        "cache_hit": blueprint_resolution.cache_hit,
+        "routing_policy": blueprint_resolution.routing_policy,
+        "terminal_verdict": bounded_result.terminal_verdict.model_dump(exclude_none=True),
+        "step_trace": [item.model_dump(exclude_none=True) for item in bounded_result.step_trace],
+    }
+    run.selection["execution_blueprint"] = execution_blueprint
+    run.summary["execution_blueprint_task_family"] = blueprint_resolution.task_family
+    run.summary["execution_blueprint_cache_hit"] = blueprint_resolution.cache_hit
+    run = save_agent_action_batch_run(config, run)
+    response = _execution_plane_agent_action_batch_run_response(config, run, idempotent_replay=False)
+    response["execution_blueprint"] = execution_blueprint
+    return response
+
+
+def execute_execution_plane_agent_actions(
+    config: AutopilotConfig,
+    *,
+    action_keys: list[str] | None = None,
+    preview_id: str = "",
+    orchestrator_session_id: str = "",
+    idempotency_key: str = "",
+    actor: str,
+    mode: str = "auto",
+    reason: str = "",
+    policy_profile: str | None = None,
+    policy_overrides: dict[str, Any] | None = None,
+    dry_run: bool = False,
+    include_archived: bool = False,
+    project_id: str | None = None,
+    initiative_id: str | None = None,
+    orchestrator: str | None = None,
+    status: str | None = None,
+    role: str | None = None,
+    attention_state: str | None = None,
+    recommendation_kind: str | None = None,
+    suggested_command: str | None = None,
+    actionable_only: bool = True,
+    command_requires_approval: bool | None = None,
+    priority: str | None = None,
+    limit: int = 20,
+    continue_on_error: bool = True,
+    include_non_executable: bool = False,
+) -> dict[str, Any]:
+    """Execute a batch of runtime-agent actions using explicit keys or filtered selection."""
+
+    normalized_keys: list[str] = []
+    seen_keys: set[str] = set()
+    for item in action_keys or []:
+        key = str(item or "").strip()
+        if not key or key in seen_keys:
+            continue
+        normalized_keys.append(key)
+        seen_keys.add(key)
+
+    if not normalized_keys and not any([project_id, initiative_id, orchestrator]):
+        raise ValueError(
+            "Batch runtime-agent action execution requires explicit action_keys or a project/initiative/orchestrator scope."
+        )
+
+    resolved_policy = resolve_execution_plane_agent_action_batch_policy(
+        profile_name=policy_profile,
+        overrides=policy_overrides,
+    )
+    normalized_session_id = orchestrator_session_id.strip()
+    if normalized_session_id and get_orchestrator_session(config, normalized_session_id) is None:
+        raise KeyError(normalized_session_id)
+    normalized_preview_id = preview_id.strip()
+    if dry_run and normalized_preview_id:
+        raise ValueError("preview_id can only be used when applying a previously generated preview.")
+    normalized_idempotency_key = idempotency_key.strip()
+    request_fingerprint = _execution_plane_agent_action_batch_request_fingerprint(
+        {
+            "action_keys": normalized_keys,
+            "preview_id": normalized_preview_id,
+            "orchestrator_session_id": normalized_session_id,
+            "actor": actor,
+            "mode": mode,
+            "reason": reason,
+            "policy_profile": policy_profile or "",
+            "policy_overrides": policy_overrides or {},
+            "dry_run": dry_run,
+            "include_archived": include_archived,
+            "project_id": project_id,
+            "initiative_id": initiative_id,
+            "orchestrator": orchestrator,
+            "status": status,
+            "role": role,
+            "attention_state": attention_state,
+            "recommendation_kind": recommendation_kind,
+            "suggested_command": suggested_command,
+            "actionable_only": actionable_only,
+            "command_requires_approval": command_requires_approval,
+            "priority": priority,
+            "limit": limit,
+            "continue_on_error": continue_on_error,
+            "include_non_executable": include_non_executable,
+            "resolved_policy": resolved_policy,
+        }
+    )
+    if normalized_idempotency_key:
+        existing = find_agent_action_batch_run_by_idempotency_key(config, normalized_idempotency_key)
+        if existing is not None:
+            if existing.request_fingerprint and existing.request_fingerprint != request_fingerprint:
+                raise RuntimeError(
+                    f"Idempotency key `{normalized_idempotency_key}` was already used for a different batch action request."
+                )
+            return _execution_plane_agent_action_batch_run_response(config, existing, idempotent_replay=True)
+
+    selected_actions: list[dict[str, Any]]
+    if normalized_keys:
+        selected_actions = []
+        for key in normalized_keys[:limit]:
+            selected_actions.append(get_execution_plane_agent_action(config, key))
+    else:
+        selected_actions = list_execution_plane_agent_actions(
+            config,
+            include_archived=include_archived,
+            project_id=project_id,
+            initiative_id=initiative_id,
+            orchestrator=orchestrator,
+            status=status,
+            role=role,
+            attention_state=attention_state,
+            recommendation_kind=recommendation_kind,
+            suggested_command=suggested_command,
+            actionable_only=actionable_only,
+            command_requires_approval=command_requires_approval,
+            priority=priority,
+        )
+        if not include_non_executable:
+            selected_actions = [item for item in selected_actions if item.get("action_type") == "suggested_command"]
+        selected_actions = selected_actions[:limit]
+
+    if normalized_preview_id:
+        preview_record = get_agent_action_batch_run(config, normalized_preview_id)
+        if preview_record is None:
+            raise KeyError(normalized_preview_id)
+        if not preview_record.dry_run:
+            raise ValueError(f"Runtime-agent action run `{normalized_preview_id}` is not a preview run.")
+        if preview_record.mode != mode:
+            raise RuntimeError(
+                f"Preview run `{normalized_preview_id}` was created with mode `{preview_record.mode}`, not `{mode}`."
+            )
+        if dict(preview_record.policy or {}) != dict(resolved_policy or {}):
+            raise RuntimeError(
+                f"Preview run `{normalized_preview_id}` was created under a different batch policy."
+            )
+        preview_session_id = str(preview_record.orchestrator_session_id or "").strip()
+        if preview_session_id != normalized_session_id:
+            raise RuntimeError(
+                f"Preview run `{normalized_preview_id}` belongs to orchestrator session `{preview_session_id or 'none'}`."
+            )
+        preview_selected_keys = _listify_strings((preview_record.selection or {}).get("selected_action_keys"))
+        current_selected_keys = [str(item["action_key"]) for item in selected_actions]
+        if preview_selected_keys != current_selected_keys:
+            raise RuntimeError(
+                f"Preview run `{normalized_preview_id}` no longer matches the current runtime-agent action selection."
+            )
+
+    blueprint_plan = plan_execution_blueprint(
+        config,
+        actions=selected_actions,
+        requested_mode=mode,
+        policy_profile=str(resolved_policy.get("profile_name") or ""),
+    )
+    execution_strategy = str(blueprint_plan.strategy or "freeform")
+    execution_blueprint_payload: dict[str, Any] | None = None
+    bounded_execution_payload: dict[str, Any] | None = None
+    if execution_strategy == "bounded_blueprint" and blueprint_plan.blueprint is not None:
+        executed_per_project: dict[str, int] = {}
+
+        def _step_executor(step: Any, action: dict[str, Any]) -> dict[str, Any]:
+            result, _ = _execute_execution_plane_agent_action_batch_step(
+                config,
+                action=action,
+                actor=actor,
+                mode=mode,
+                reason=reason,
+                dry_run=dry_run,
+                resolved_policy=resolved_policy,
+                continue_on_error=continue_on_error,
+                include_non_executable=include_non_executable,
+                orchestrator_session_id=normalized_session_id,
+                executed_per_project=executed_per_project,
+            )
+            return result
+
+        bounded_result = execute_bounded_execution_blueprint(
+            blueprint_plan.blueprint,
+            actions=selected_actions,
+            step_executor=_step_executor,
+            continue_on_error=continue_on_error,
+        )
+        results = [dict(step.result) for step in bounded_result.step_results]
+        status_counts, overall_status, approval_required, apply_mode = _summarize_execution_plane_batch_results(
+            selected_actions,
+            results,
+            dry_run=dry_run,
+            requested_mode=mode,
+        )
+        execution_blueprint_payload = _summarize_execution_blueprint_result(
+            blueprint_plan.blueprint,
+            cached=blueprint_plan.cache_hit,
+            bounded_result=bounded_result,
+        )
+        bounded_execution_payload = bounded_result.model_dump(exclude_none=True)
+    else:
+        results, status_counts, overall_status = _process_execution_plane_agent_action_batch(
+            config,
+            selected_actions=selected_actions,
+            resolved_policy=resolved_policy,
+            actor=actor,
+            mode=mode,
+            reason=reason,
+            normalized_session_id=normalized_session_id,
+            dry_run=dry_run,
+            continue_on_error=continue_on_error,
+            include_non_executable=include_non_executable,
+        )
+        _, _, approval_required, apply_mode = _summarize_execution_plane_batch_results(
+            selected_actions,
+            results,
+            dry_run=dry_run,
+            requested_mode=mode,
+        )
+        execution_blueprint_payload = {
+            "strategy": "freeform",
+            "cache_hit": False,
+            "fallback_reason": str(blueprint_plan.fallback_reason or ""),
+            "route_policy": dict(blueprint_plan.route_policy or {}),
+        }
 
     selection = {
         "mode": "action_keys" if normalized_keys else "filters",
         "requested_action_keys": normalized_keys,
         "selected_action_keys": [str(item["action_key"]) for item in selected_actions],
+        "execution_strategy": execution_strategy,
         "preview_id": normalized_preview_id,
         "include_non_executable": include_non_executable,
         "limit": limit,
@@ -5788,6 +7170,7 @@ def execute_execution_plane_agent_actions(
         "status_counts": status_counts,
         "approval_required_count": sum(1 for item in selected_actions if bool(item.get("approval_required"))),
         "apply_mode": apply_mode,
+        "execution_strategy": execution_strategy,
     }
     diff_summary = _build_execution_plane_agent_action_diff_summary(
         selected_actions,
@@ -5840,6 +7223,9 @@ def execute_execution_plane_agent_actions(
         summary=summary,
         diff_summary=diff_summary,
         patch_bundle=patch_bundle,
+        execution_strategy=execution_strategy,
+        execution_blueprint=execution_blueprint_payload,
+        bounded_execution=bounded_execution_payload,
         preview_id=normalized_preview_id,
         artifact_ref="",
         approval_required=approval_required,
@@ -5971,7 +7357,7 @@ def execute_execution_plane_command(
     )
     if run_result.status == "approval_required":
         raise RuntimeError(run_result.message or f"Execution command `{command}` requires approval.")
-    if run_result.status in {"denied", "blocked", "error"}:
+    if run_result.status in {"denied", "blocked", "error", "quarantined"}:
         raise RuntimeError(run_result.message or f"Execution command `{command}` failed.")
     result = dict((run_result.tool_result.payload if run_result.tool_result else {}) or {})
     result["project"] = build_execution_plane_project_detail(config, project_id)
@@ -6069,6 +7455,29 @@ def resolve_execution_plane_tool_permission_runtime(
     return runtime.model_dump()
 
 
+def _check_brief_approval_gate(brief: Any, *, launch: bool) -> None:
+    """Block launch if the brief requires founder approval but hasn't been approved.
+
+    Only applies to briefs with approval_policy (ExecutionBriefV2).
+    Legacy briefs without approval_policy are not gated.
+    """
+    if not launch:
+        return
+    if not hasattr(brief, "approval_policy"):
+        return  # Legacy brief — no gate
+    approval_policy = getattr(brief, "approval_policy", None)
+    if approval_policy is None:
+        return  # Legacy brief — no gate
+    if not hasattr(brief, "brief_approval_status"):
+        return  # Legacy brief — no gate
+    approval_status = getattr(brief, "brief_approval_status", None) or ""
+    if getattr(approval_policy, "founder_approval_required", False) and approval_status != "approved":
+        raise ValueError(
+            f"Brief must be approved by founder before launch. "
+            f"Current status: {approval_status}"
+        )
+
+
 def ingest_execution_brief_project(
     config: AutopilotConfig,
     manager: Any,
@@ -6081,6 +7490,8 @@ def ingest_execution_brief_project(
     launch_profile: dict[str, Any] | None = None,
 ) -> IngestedExecutionProject:
     """Convert a typed execution brief into a registered Autopilot project."""
+
+    _check_brief_approval_gate(brief, launch=launch)
 
     effective_brief = brief.model_copy(update={"task_source": _resolve_execution_brief_task_source(brief)})
     profile = manager.get_next("codex")
@@ -6125,6 +7536,227 @@ def ingest_execution_brief_project(
             created.project_id,
             launch_profile=launch_profile,
         )
+
+    return IngestedExecutionProject(
+        created=created,
+        prd=prd,
+        brief_path=brief_path,
+        launched=launched,
+        message=message,
+        log_path=log_path,
+        launch_profile=launch_profile,
+    )
+
+
+def ingest_shared_execution_brief_project(
+    config: AutopilotConfig,
+    manager: Any,
+    *,
+    brief: SharedExecutionBrief,
+    project_name: str | None = None,
+    project_path: str | None = None,
+    priority: str = "normal",
+    launch: bool = False,
+    launch_profile: dict[str, Any] | None = None,
+) -> IngestedExecutionProject:
+    """Convert the shared cross-plane brief into a registered Autopilot project."""
+
+    ingested = ingest_execution_brief_project(
+        config,
+        manager,
+        brief=shared_execution_brief_to_internal(brief),
+        project_name=project_name or brief.title,
+        project_path=project_path,
+        priority=priority,
+        launch=launch,
+        launch_profile=launch_profile,
+    )
+    persist_shared_execution_brief(ingested.created.path, brief)
+    attach_shared_execution_brief_metadata(
+        config,
+        project_id=ingested.created.project_id,
+        brief=brief,
+    )
+    return ingested
+
+
+# ---------------------------------------------------------------------------
+# ExecutionBriefV2 ingestion — canonical live contract
+# ---------------------------------------------------------------------------
+
+EXECUTION_BRIEF_V2_RELPATH = ".agents/tasks/execution-brief-v2.json"
+
+
+def persist_execution_brief_v2(
+    project_root: Path,
+    brief: Any,
+    *,
+    relpath: str = EXECUTION_BRIEF_V2_RELPATH,
+) -> Path:
+    """Persist a canonical ExecutionBriefV2 artifact inside the project."""
+    path = (project_root / relpath).resolve()
+    _atomic_write_json(path, brief.model_dump(mode="json"))
+    return path
+
+
+def attach_execution_brief_v2_metadata(
+    config: AutopilotConfig,
+    *,
+    project_id: str,
+    brief: Any,
+    brief_relpath: str = EXECUTION_BRIEF_V2_RELPATH,
+) -> dict[str, Any]:
+    """Attach V2 brief control-plane metadata to a registered project."""
+    project = get_project_entry(config, project_id=project_id, include_archived=True)
+    if project is None:
+        raise KeyError(project_id)
+
+    control_plane = dict(project.get("control_plane") or {})
+    control_plane["execution_brief_v2"] = {
+        "schema_version": brief.schema_version,
+        "brief_id": brief.brief_id,
+        "revision_id": brief.revision_id,
+        "initiative_id": brief.initiative_id,
+        "relpath": brief_relpath,
+        "brief_approval_status": brief.brief_approval_status,
+        "founder_approval_required": brief.approval_policy.founder_approval_required,
+    }
+    project["control_plane"] = control_plane
+    return update_project_entry(config, project)
+
+
+def ingest_execution_brief_v2_project(
+    config: AutopilotConfig,
+    manager: Any,
+    *,
+    brief: Any,
+    project_name: str | None = None,
+    project_path: str | None = None,
+    priority: str = "normal",
+    launch: bool = False,
+    launch_profile: dict[str, Any] | None = None,
+) -> IngestedExecutionProject:
+    """Create a real Autopilot project from a canonical ExecutionBriefV2.
+
+    This is the V2-native ingestion path:
+    1. Enforces approval gate (must be first — no side effects before reject)
+    2. Deduplicates by brief_id
+    3. Renders V2 brief as Markdown spec (using brief.to_markdown())
+    4. Generates PRD from spec via codex
+    5. Creates project from PRD
+    6. Persists canonical V2 artifact and attaches control-plane metadata
+    """
+    _check_brief_approval_gate(brief, launch=launch)
+
+    existing_project = find_project_by_execution_brief_id(config, brief.brief_id)
+    if should_deduplicate_brief(brief.brief_id, str((existing_project or {}).get("id") or "") or None):
+        raise ValueError(
+            f"Execution brief {brief.brief_id} is already linked to project "
+            f"{existing_project['id']}"
+        )
+
+    profile = manager.get_next("codex")
+    if profile is None:
+        raise RuntimeError("No available accounts for execution brief planning")
+
+    env = manager.build_env(profile)
+    planning_context = build_planning_context(
+        connectors=load_connectors_registry(config),
+        skill_packs=load_skill_packs_registry(config),
+        role_templates=load_role_templates(),
+    )
+
+    # V2 briefs render directly to markdown — no lossy intermediate conversion
+    spec = brief.to_markdown()
+    prd = generate_prd_from_spec(
+        spec,
+        provider="codex",
+        env=env,
+        planning_context=planning_context,
+        timeout_sec=config.codex_timeout_sec,
+    )
+
+    # Build task_source from V2 metadata
+    task_source = {
+        "source_kind": "execution_brief_v2",
+        "external_id": brief.brief_id,
+        "repo": "",
+        "branch_policy": "isolated_worktree",
+        "brief_ref": EXECUTION_BRIEF_V2_RELPATH,
+    }
+
+    created = create_project_from_prd(
+        config=config,
+        prd=prd,
+        project_name=project_name or brief.title,
+        project_path=project_path,
+        priority=priority,
+        launch=False,
+        task_source=task_source,
+    )
+
+    brief_path = persist_execution_brief_v2(created.path, brief)
+    attach_execution_brief_v2_metadata(
+        config,
+        project_id=created.project_id,
+        brief=brief,
+    )
+
+    # Update initiative lineage to track this project creation
+    try:
+        from autopilot.core.initiative_lineage import upsert_initiative_lineage
+        from founderos_contracts.lifecycle import (
+            FounderMode,
+            InitiativeLifecycleState,
+        )
+
+        lineage_state = InitiativeLifecycleState.BRIEF_DRAFTED
+        lineage_mode = FounderMode.BRIEF
+        if brief.brief_approval_status == "approved":
+            lineage_state = InitiativeLifecycleState.BRIEF_APPROVED
+            lineage_mode = FounderMode.EXECUTE
+
+        upsert_initiative_lineage(
+            config,
+            brief.initiative_id,
+            brief_id=brief.brief_id,
+            project_id=created.project_id,
+            option_id=brief.option_id,
+            decision_id=brief.decision_id,
+            lifecycle_state=lineage_state,
+            current_mode=lineage_mode,
+        )
+    except Exception:
+        pass  # Lineage tracking is best-effort; never block project creation
+
+    launched = False
+    log_path: Path | None = None
+    message = created.message
+    if launch:
+        from autopilot.core.project_store import launch_project_run
+
+        launched, log_path, message = launch_project_run(
+            config,
+            created.project_id,
+            launch_profile=launch_profile,
+        )
+
+        # Advance lineage to EXECUTION_STARTED on successful launch
+        if launched:
+            try:
+                from autopilot.core.initiative_lineage import upsert_initiative_lineage
+                from founderos_contracts.lifecycle import (
+                    FounderMode,
+                    InitiativeLifecycleState,
+                )
+                upsert_initiative_lineage(
+                    config,
+                    brief.initiative_id,
+                    lifecycle_state=InitiativeLifecycleState.EXECUTION_STARTED,
+                    current_mode=FounderMode.EXECUTE,
+                )
+            except Exception:
+                pass
 
     return IngestedExecutionProject(
         created=created,

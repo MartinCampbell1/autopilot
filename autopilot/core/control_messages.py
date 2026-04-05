@@ -394,13 +394,36 @@ def resolve_control_event_id(value: dict[str, Any], sequence: int) -> str:
 
     parsed = parse_control_message(value)
     if isinstance(parsed, ControlRequestEnvelope):
-        return parsed.request_id
+        return f"{parsed.request_id}:request"
     if isinstance(parsed, ControlResponseEnvelope):
-        return parsed.response.request_id
+        return f"{parsed.response.request_id}:response"
     explicit = str(value.get("event_id") or value.get("id") or "").strip()
     if explicit:
         return explicit
     return f"evt_{sequence}"
+
+
+def build_sse_replay_id(sequence: int) -> str:
+    """Build one SSE replay cursor id from a monotonic sequence number."""
+
+    normalized = max(int(sequence or 0), 0)
+    return f"evt_{normalized}"
+
+
+def parse_sse_replay_sequence(value: str | None) -> int | None:
+    """Parse one replay cursor back into its sequence number."""
+
+    normalized = str(value or "").strip()
+    if not normalized:
+        return None
+    match = re.fullmatch(r"evt_(\d+)", normalized)
+    if match is not None:
+        parsed = int(match.group(1))
+        return parsed if parsed >= 0 else None
+    if normalized.isdigit():
+        parsed = int(normalized)
+        return parsed if parsed >= 0 else None
+    return None
 
 
 def build_structured_event_envelope(
@@ -411,13 +434,20 @@ def build_structured_event_envelope(
 ) -> StructuredEventEnvelope:
     """Wrap one raw execution event in a stable structured envelope."""
 
+    parsed = parse_control_message(value)
+    event_name = str(value.get("event") or getattr(parsed, "type", "project_event"))
+    session_id = (
+        str(getattr(parsed, "session_id", "") or "").strip()
+        or str(value.get("orchestrator_session_id") or value.get("session_id") or "").strip()
+        or None
+    )
     return StructuredEventEnvelope(
-        event=str(value.get("event") or "project_event"),
+        event=event_name,
         event_id=resolve_control_event_id(value, sequence),
         sequence=sequence,
         data=value,
         source=source,
-        session_id=str(value.get("orchestrator_session_id") or value.get("session_id") or "").strip() or None,
+        session_id=session_id,
         timestamp=str(value.get("timestamp") or "").strip() or None,
     )
 

@@ -16,9 +16,14 @@ interface StoryCardProps {
   story: Story;
   onClick?: () => void;
   isSelected?: boolean;
+  runtimeHandoffSummary?: {
+    runtimeAgentCount: number;
+    blockedHandoffCount: number;
+    openShadowAuditCount: number;
+  } | null;
 }
 
-export function StoryCard({ story, onClick, isSelected }: StoryCardProps) {
+export function StoryCard({ story, onClick, isSelected, runtimeHandoffSummary }: StoryCardProps) {
   const cfg = STATUS_CONFIG[story.status] || STATUS_CONFIG.open;
   const updated = story.updated_at
     ? new Intl.DateTimeFormat("en", {
@@ -38,6 +43,9 @@ export function StoryCard({ story, onClick, isSelected }: StoryCardProps) {
         "border border-[rgba(15,15,15,0.04)]",
         "shadow-[0_1px_3px_rgba(15,15,15,0.08),0_0_1px_rgba(15,15,15,0.04)]",
         "hover:shadow-[0_4px_12px_rgba(15,15,15,0.1),0_0_1px_rgba(15,15,15,0.04)] hover:-translate-y-px",
+        runtimeHandoffSummary?.openShadowAuditCount
+          ? "border-[#f4e0c4] bg-[#fffdf8] shadow-[0_1px_3px_rgba(154,103,0,0.1),0_0_1px_rgba(154,103,0,0.08)]"
+          : null,
         isSelected && "ring-2 ring-[#2563eb]/25 shadow-[0_4px_12px_rgba(15,15,15,0.1)]"
       )}
     >
@@ -72,6 +80,17 @@ export function StoryCard({ story, onClick, isSelected }: StoryCardProps) {
           {story.connector_activation?.length ? (
             <span className="rounded-[4px] bg-[#f1f1ef] px-2.5 py-[3px] text-[11px] text-[#6b6b6b] font-medium">
               {story.connector_activation.filter((item) => item.status === "active").length} active tools
+            </span>
+          ) : null}
+          {runtimeHandoffSummary?.blockedHandoffCount ? (
+            <span className="rounded-[4px] bg-[#fff1cc] px-2.5 py-[3px] text-[11px] font-medium text-[#9a6700]">
+              handoff blocked
+            </span>
+          ) : null}
+          {runtimeHandoffSummary?.openShadowAuditCount ? (
+            <span className="rounded-[4px] bg-[#fff6e8] px-2.5 py-[3px] text-[11px] font-medium text-[#9a6700]">
+              {runtimeHandoffSummary.openShadowAuditCount} shadow audit
+              {runtimeHandoffSummary.openShadowAuditCount === 1 ? "" : "s"}
             </span>
           ) : null}
         </div>

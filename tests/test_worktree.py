@@ -13,8 +13,11 @@ from autopilot.core.worktree import (
     gc_stale_worktrees,
     merge_worktree,
     read_worktree_metadata,
+    read_worktree_collaboration_manifest,
     remove_worktree,
     resolve_story_worktree_owner,
+    worktree_collaboration_dir,
+    worktree_collaboration_manifest_path,
     worktree_metadata_path,
     worktree_path,
 )
@@ -61,6 +64,12 @@ class TestWorktree:
         assert metadata.story_id == 3
         assert metadata.branch_name == branch_name
         assert metadata.project_path == str(project_path)
+        collaboration = read_worktree_collaboration_manifest(result)
+        assert collaboration is not None
+        assert collaboration.story_id == 3
+        assert collaboration.branch_name == branch_name
+        assert collaboration.artifact_dir == str(worktree_collaboration_dir(result))
+        assert worktree_collaboration_manifest_path(result).exists()
 
     @patch("autopilot.core.worktree.subprocess.run")
     def test_create_worktree_deletes_existing_branch_when_present(self, mock_run: MagicMock, tmp_path: Path) -> None:

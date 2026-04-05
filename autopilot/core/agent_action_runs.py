@@ -10,6 +10,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from autopilot.core.atomic_io import atomic_write_json as _shared_atomic_write_json
 from autopilot.core.config import AutopilotConfig
 
 
@@ -18,10 +19,7 @@ def _utcnow_iso() -> str:
 
 
 def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temp_path = path.with_suffix(f"{path.suffix}.tmp")
-    temp_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False))
-    temp_path.replace(path)
+    _shared_atomic_write_json(path, payload)
 
 
 class AgentActionBatchRunRecord(BaseModel):
@@ -42,6 +40,9 @@ class AgentActionBatchRunRecord(BaseModel):
     summary: dict[str, Any] = Field(default_factory=dict)
     diff_summary: dict[str, Any] = Field(default_factory=dict)
     patch_bundle: dict[str, Any] = Field(default_factory=dict)
+    execution_strategy: str = "freeform"
+    execution_blueprint: dict[str, Any] = Field(default_factory=dict)
+    bounded_execution: dict[str, Any] = Field(default_factory=dict)
     preview_id: str = ""
     artifact_ref: str = ""
     approval_required: bool = False
@@ -107,6 +108,9 @@ def create_agent_action_batch_run(
     summary: dict[str, Any] | None = None,
     diff_summary: dict[str, Any] | None = None,
     patch_bundle: dict[str, Any] | None = None,
+    execution_strategy: str = "freeform",
+    execution_blueprint: dict[str, Any] | None = None,
+    bounded_execution: dict[str, Any] | None = None,
     preview_id: str = "",
     artifact_ref: str = "",
     approval_required: bool = False,
@@ -141,6 +145,9 @@ def create_agent_action_batch_run(
         summary=dict(summary or {}),
         diff_summary=dict(diff_summary or {}),
         patch_bundle=dict(patch_bundle or {}),
+        execution_strategy=str(execution_strategy or "").strip() or "freeform",
+        execution_blueprint=dict(execution_blueprint or {}),
+        bounded_execution=dict(bounded_execution or {}),
         preview_id=preview_id.strip(),
         artifact_ref=artifact_ref.strip(),
         approval_required=approval_required,

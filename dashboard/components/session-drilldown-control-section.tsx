@@ -1,7 +1,9 @@
 "use client";
 
 import Link from "next/link";
+import { useMemo } from "react";
 import { BreakdownChips, RelationshipStrip, SessionMetric } from "@/components/control-plane-display";
+import { ShadowAuditReviewSheet } from "@/components/shadow-audit-review-sheet";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -12,10 +14,12 @@ import {
   sessionStatusClass,
 } from "@/lib/control-plane-ui";
 import { formatTimestamp } from "@/lib/control-plane-data";
+import { useShadowAuditReviewController } from "@/lib/use-shadow-audit-review-controller";
 import type {
   ExecutionApprovalRecord,
   ExecutionAgentActionRunRecord,
   ExecutionIssueRecord,
+  ExecutionShadowAuditRecord,
   OrchestratorSessionControl,
   OrchestratorSessionControlProfile,
   OrchestratorSessionControlRecommendation,
@@ -56,6 +60,8 @@ type SessionDrilldownControlSectionProps = {
   onApplyPreviewRun: (run: ExecutionAgentActionRunRecord) => void;
   onApplyControlPlan: (profile: OrchestratorSessionControlProfile) => void;
   onApplyRecommendation: (recommendation: OrchestratorSessionControlRecommendation) => void;
+  onInspectShadowAudit: (audit: ExecutionShadowAuditRecord) => void;
+  onResolveShadowAudit: (audit: ExecutionShadowAuditRecord) => void;
 };
 
 export function SessionDrilldownControlSection({
@@ -92,7 +98,30 @@ export function SessionDrilldownControlSection({
   onApplyPreviewRun,
   onApplyControlPlan,
   onApplyRecommendation,
+  onInspectShadowAudit,
+  onResolveShadowAudit,
 }: SessionDrilldownControlSectionProps) {
+  const openSessionShadowAudits = useMemo(
+    () =>
+      (selectedSession.shadow_audits || []).filter((audit) => audit.open || audit.status === "open"),
+    [selectedSession.shadow_audits]
+  );
+  const {
+    queueAudits,
+    queueOpen,
+    setQueueOpen,
+    activeQueueAudit,
+    activeQueueAuditIndex,
+    reviewQueueLabel,
+    openReviewQueue: openRecommendationShadowAuditQueue,
+    handleSelectNextQueuedAudit,
+    handleSelectPreviousQueuedAudit,
+    handleResolveQueuedShadowAudit,
+  } = useShadowAuditReviewController({
+    audits: openSessionShadowAudits,
+    onInspectShadowAudit,
+    onResolveShadowAudit,
+  });
   const latestPreviewCommandCounts = (latestPreviewRun?.diff_summary?.command_counts ||
     {}) as Record<string, number>;
   const latestPreviewPolicyReasonCounts = (latestPreviewRun?.diff_summary?.policy_reason_counts ||
@@ -275,7 +304,7 @@ export function SessionDrilldownControlSection({
         </div>
       </div>
 
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
         <SessionMetric
           label="Pending Approvals"
           value={String(selectedSession.summary.pending_approval_count)}
@@ -290,6 +319,11 @@ export function SessionDrilldownControlSection({
           label="Pending Tool Permissions"
           value={String(selectedSession.summary.pending_tool_permission_runtime_count || 0)}
           detail={`${selectedSession.summary.tool_permission_runtime_count || 0} linked runtimes`}
+        />
+        <SessionMetric
+          label="Open Shadow Audits"
+          value={String(selectedSession.summary.open_shadow_audit_count || 0)}
+          detail={`${selectedSession.summary.shadow_audit_count || 0} quarantined artifact${(selectedSession.summary.shadow_audit_count || 0) === 1 ? "" : "s"}`}
         />
         <SessionMetric
           label="Safe Actions"
@@ -640,6 +674,10 @@ export function SessionDrilldownControlSection({
           <div className="mt-3 space-y-3">
             {selectedControl.recommendations.map((recommendation) => {
               const busy = busyActionKey === `recommendation:${recommendation.kind}`;
+              const primaryOpenShadowAudit =
+                recommendation.kind === "review_shadow_audit_quarantines"
+                  ? (queueAudits[0] ?? null)
+                  : null;
 
               return (
                 <div
@@ -697,10 +735,39 @@ export function SessionDrilldownControlSection({
                     >
                       {busy ? "Running..." : recommendationActionLabel(recommendation)}
                     </Button>
+                    {primaryOpenShadowAudit ? (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-9 rounded-lg border-[#f4e0c4] bg-[#fff6e8] text-[12px] text-[#9a6700] hover:bg-[#fff0d9]"
+                        onClick={() => {
+                          openRecommendationShadowAuditQueue(primaryOpenShadowAudit.id);
+                        }}
+                      >
+                        {reviewQueueLabel}
+                      </Button>
+                    ) : null}
                   </div>
                 </div>
               );
             })}
+            {activeQueueAudit ? (
+              <ShadowAuditReviewSheet
+                audit={activeQueueAudit}
+                open={queueOpen}
+                onOpenChange={setQueueOpen}
+                hideTrigger
+                busyActionKey={busyActionKey}
+                formatTimestamp={formatTimestamp}
+                onResolveShadowAudit={handleResolveQueuedShadowAudit}
+                queueState={{
+                  currentIndex: Math.max(activeQueueAuditIndex, 0),
+                  totalCount: queueAudits.length,
+                  onSelectNext: handleSelectNextQueuedAudit,
+                  onSelectPrevious: handleSelectPreviousQueuedAudit,
+                }}
+              />
+            ) : null}
           </div>
         )}
       </div>

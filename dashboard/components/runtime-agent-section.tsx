@@ -4,6 +4,7 @@ import Link from "next/link";
 import type { ComponentProps } from "react";
 import { RuntimeAgentActivitySection } from "@/components/runtime-agent-activity-section";
 import { RuntimeAgentTimelineSection } from "@/components/runtime-agent-timeline-section";
+import { ShadowAuditReviewSheet } from "@/components/shadow-audit-review-sheet";
 import { SessionMetric } from "@/components/control-plane-display";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -19,8 +20,11 @@ import {
   passStatusClass,
   priorityClass,
 } from "@/lib/control-plane-ui";
+import { sortToolPermissionRuntimesByRecency } from "@/lib/control-plane-decision-ordering";
+import { useShadowAuditReviewController } from "@/lib/use-shadow-audit-review-controller";
 import type {
   ExecutionAgentActionRunRecord,
+  ExecutionShadowAuditRecord,
   ExecutionRuntimeAgentDetail,
   ExecutionRuntimeAgentTaskRecord,
   ToolPermissionRuntimeRecord,
@@ -61,6 +65,7 @@ type RuntimeAgentSectionProps = {
   toNumber: (value: unknown, fallback?: number) => number;
   toStringValue: (value: unknown, fallback?: string) => string;
   pendingAsyncRuns: ExecutionAgentActionRunRecord[];
+  openShadowAudits: ExecutionShadowAuditRecord[];
   onAllowToolPermissionRuntime: (runtime: ToolPermissionRuntimeRecord) => void;
   onDenyToolPermissionRuntime: (runtime: ToolPermissionRuntimeRecord) => void;
   onCopyLink: () => void;
@@ -75,6 +80,8 @@ type RuntimeAgentSectionProps = {
   onRefreshAsyncTask?: (task: ExecutionRuntimeAgentTaskRecord) => void;
   onWaitForAsyncTaskSettlement?: (task: ExecutionRuntimeAgentTaskRecord) => void;
   onCancelAsyncTask?: (task: ExecutionRuntimeAgentTaskRecord) => void;
+  onInspectShadowAudit?: (audit: ExecutionShadowAuditRecord) => void;
+  onResolveShadowAudit?: (audit: ExecutionShadowAuditRecord) => void;
   activitySectionProps: ComponentProps<typeof RuntimeAgentActivitySection> | null;
   timelineSectionProps: ComponentProps<typeof RuntimeAgentTimelineSection> | null;
 };
@@ -88,6 +95,7 @@ export function RuntimeAgentSection({
   toNumber,
   toStringValue,
   pendingAsyncRuns,
+  openShadowAudits,
   onAllowToolPermissionRuntime,
   onDenyToolPermissionRuntime,
   onCopyLink,
@@ -99,19 +107,34 @@ export function RuntimeAgentSection({
   onRefreshAsyncTask,
   onWaitForAsyncTaskSettlement,
   onCancelAsyncTask,
+  onInspectShadowAudit,
+  onResolveShadowAudit,
   activitySectionProps,
   timelineSectionProps,
 }: RuntimeAgentSectionProps) {
-  const pendingToolPermissionRuntimes = (selectedAgent?.tool_permission_runtimes || [])
-    .filter((runtime) => runtime.status === "pending")
-    .sort((left, right) => {
-      const updatedDelta = Date.parse(right.updated_at) - Date.parse(left.updated_at);
-      if (updatedDelta !== 0) return updatedDelta;
-      return right.id.localeCompare(left.id);
-    });
+  const pendingToolPermissionRuntimes = sortToolPermissionRuntimesByRecency(
+    (selectedAgent?.tool_permission_runtimes || []).filter((runtime) => runtime.status === "pending")
+  );
   const activeAsyncTasks = (selectedAgent?.async_tasks || []).filter((task) =>
     Boolean(task.active) || task.status === "queued" || task.status === "running"
   );
+  const {
+    queueAudits,
+    queueOpen,
+    setQueueOpen,
+    activeQueueAudit,
+    activeQueueAuditIndex,
+    reviewQueueLabel,
+    openReviewQueue: openShadowAuditRecommendationQueue,
+    handleSelectNextQueuedAudit,
+    handleSelectPreviousQueuedAudit,
+    handleResolveQueuedShadowAudit,
+  } = useShadowAuditReviewController({
+    audits: openShadowAudits,
+    onInspectShadowAudit,
+    onResolveShadowAudit,
+  });
+  const primaryOpenShadowAudit = queueAudits[0] || null;
 
   return (
     <Card className="border border-[#e5e5e3] bg-white shadow-[0_1px_3px_rgba(15,15,15,0.08),0_0_1px_rgba(15,15,15,0.04)]">
@@ -300,6 +323,21 @@ export function RuntimeAgentSection({
                           </Button>
                         </div>
                       )}
+                      {toStringValue(recommendation.kind) === "review_shadow_audit_quarantines" &&
+                      primaryOpenShadowAudit ? (
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-8 rounded-lg border-[#f4e0c4] bg-[#fff6e8] text-[12px] text-[#9a6700] hover:bg-[#fff0d9]"
+                            onClick={() => {
+                              openShadowAuditRecommendationQueue(primaryOpenShadowAudit.id);
+                            }}
+                          >
+                            {reviewQueueLabel}
+                          </Button>
+                        </div>
+                      ) : null}
                     </div>
                   ))}
                   {selectedAgent.suggested_commands.slice(0, 2).map((command, index) => (
@@ -367,6 +405,23 @@ export function RuntimeAgentSection({
                 </div>
               )}
             </div>
+            {activeQueueAudit ? (
+              <ShadowAuditReviewSheet
+                audit={activeQueueAudit}
+                open={queueOpen}
+                onOpenChange={setQueueOpen}
+                hideTrigger
+                busyActionKey={busyActionKey}
+                formatTimestamp={formatTimestamp}
+                onResolveShadowAudit={handleResolveQueuedShadowAudit}
+                queueState={{
+                  currentIndex: Math.max(activeQueueAuditIndex, 0),
+                  totalCount: queueAudits.length,
+                  onSelectNext: handleSelectNextQueuedAudit,
+                  onSelectPrevious: handleSelectPreviousQueuedAudit,
+                }}
+              />
+            ) : null}
 
             {(activeAsyncTasks.length > 0 || pendingAsyncRuns.length > 0) && (
               <div className="rounded-2xl border border-[#ecebe8] bg-[#fbfbf9] p-4">
@@ -457,30 +512,69 @@ export function RuntimeAgentSection({
                     </div>
                   ))}
                   {activeAsyncTasks.map((task) => (
-                    <div
-                      key={`pending-task-${task.id}`}
-                      className="rounded-xl border border-[#ecebe8] bg-white p-3"
-                    >
-                      <div className="flex flex-wrap items-start justify-between gap-3">
-                        <div>
-                          <p className="text-[13px] font-semibold text-[#37352f]">
-                            {task.command || task.id}
-                          </p>
-                          <p className="mt-1 text-[12px] text-[#787774]">
-                            {task.id} · {task.status}
-                          </p>
-                        </div>
-                        <Badge
-                          variant="outline"
-                          className="rounded-full border-[#d3e5ef] bg-[#eef7fb] px-2.5 py-1 text-[11px] font-medium text-[#2a6690]"
+                    (() => {
+                      const taskOpenShadowAudits = (task.shadow_audits || [])
+                        .filter((audit) => audit.open || audit.status === "open")
+                        .sort(
+                          (left, right) =>
+                            right.updated_at.localeCompare(left.updated_at) ||
+                            right.id.localeCompare(left.id)
+                        );
+                      const primaryTaskShadowAudit = taskOpenShadowAudits[0] || null;
+                      return (
+                        <div
+                          key={`pending-task-${task.id}`}
+                          className="rounded-xl border border-[#ecebe8] bg-white p-3"
                         >
-                          running
-                        </Badge>
-                      </div>
+                          <div className="flex flex-wrap items-start justify-between gap-3">
+                            <div>
+                              <p className="text-[13px] font-semibold text-[#37352f]">
+                                {task.command || task.id}
+                              </p>
+                              <p className="mt-1 text-[12px] text-[#787774]">
+                                {task.id} · {task.status}
+                              </p>
+                            </div>
+                            <div className="flex flex-wrap gap-2">
+                              <Badge
+                                variant="outline"
+                                className={`rounded-full px-2.5 py-1 text-[11px] font-medium ${
+                                  task.output_quarantined || taskOpenShadowAudits.length > 0
+                                    ? "border-[#f4e0c4] bg-[#fff6e8] text-[#9a6700]"
+                                    : "border-[#d3e5ef] bg-[#eef7fb] text-[#2a6690]"
+                                }`}
+                              >
+                                {task.output_quarantined || taskOpenShadowAudits.length > 0
+                                  ? "handoff blocked"
+                                  : "running"}
+                              </Badge>
+                              {taskOpenShadowAudits.length > 0 ? (
+                                <Badge
+                                  variant="outline"
+                                  className="rounded-full border-[#f4e0c4] bg-[#fff6e8] px-2.5 py-1 text-[11px] font-medium text-[#9a6700]"
+                                >
+                                  {taskOpenShadowAudits.length} shadow audit
+                                  {taskOpenShadowAudits.length === 1 ? "" : "s"}
+                                </Badge>
+                              ) : null}
+                            </div>
+                          </div>
                       <p className="mt-2 text-[12px] text-[#6b6b6b]">
                         {task.result_summary || task.placeholder_result || "Background task is still running."}
                       </p>
                       <div className="mt-3 flex flex-wrap gap-2">
+                        {primaryTaskShadowAudit ? (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-7 rounded-lg border-[#f4e0c4] bg-[#fff6e8] px-2 text-[11px] text-[#9a6700] hover:bg-[#fff0d9]"
+                            onClick={() => {
+                              openShadowAuditRecommendationQueue(primaryTaskShadowAudit.id);
+                            }}
+                          >
+                            {reviewQueueLabel}
+                          </Button>
+                        ) : null}
                         {onRefreshAsyncTask && (
                           <Button
                             size="sm"
@@ -533,7 +627,9 @@ export function RuntimeAgentSection({
                           detail={task.runtime_agent_id || selectedAgent.runtime_agent_id}
                         />
                       </div>
-                    </div>
+                        </div>
+                      );
+                    })()
                   ))}
                 </div>
               </div>

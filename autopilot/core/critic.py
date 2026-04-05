@@ -10,12 +10,10 @@ from pathlib import Path
 from autopilot.core.adapters import AdapterExecutionRequest, AdapterMode, get_adapter
 from autopilot.core.capability_store import normalize_review_phases
 from autopilot.core.cost_accounting import merge_usage_records, summarize_invocation_usage
+from autopilot.core.evals.judges import build_critic_judge_context, evaluate_judge_pack
 from autopilot.core.models import CriticResult, Profile, ReviewPhaseResult, VerificationCheck
-from autopilot.core.verification_agent import (
-    NON_ACTIONABLE_VERIFICATION_FEEDBACK,
-    VERDICT_PATTERN,
-    validate_verifier_output,
-)
+from autopilot.core.shadow_audit import audit_verifier_output
+from autopilot.core.verification_agent import NON_ACTIONABLE_VERIFICATION_FEEDBACK, VERDICT_PATTERN
 
 TEMPLATE_DIR = Path(__file__).parent.parent / "templates"
 ISSUE_PATTERN = re.compile(r"^\s*-\s*Issue\b.*", re.IGNORECASE)
@@ -349,14 +347,17 @@ def parse_critic_output(raw_output: str) -> CriticResult:
         return CriticResult(approved=False, feedback="Empty output from critic", raw_output=raw_output)
 
     verification_checks = _parse_verification_checks(raw_output)
-    verdict, validation_feedback = validate_verifier_output(raw_output, verification_checks)
-    if validation_feedback:
+    verdict, shadow_audit = audit_verifier_output(raw_output, verification_checks)
+    if shadow_audit.action in {"retry", "quarantine", "escalate"}:
         return CriticResult(
             approved=False,
-            feedback=validation_feedback,
+            feedback=shadow_audit.summary,
             raw_output=raw_output,
             verdict=verdict,
             verification_checks=verification_checks,
+            shadow_audit_action=shadow_audit.action,
+            shadow_audit_feedback=shadow_audit.summary,
+            shadow_audit_findings=list(shadow_audit.findings),
         )
     if verdict:
         if verdict == "PASS":
@@ -366,6 +367,8 @@ def parse_critic_output(raw_output: str) -> CriticResult:
                 raw_output=raw_output,
                 verdict=verdict,
                 verification_checks=verification_checks,
+                shadow_audit_action=shadow_audit.action,
+                shadow_audit_findings=list(shadow_audit.findings),
             )
         return CriticResult(
             approved=False,
@@ -373,6 +376,8 @@ def parse_critic_output(raw_output: str) -> CriticResult:
             raw_output=raw_output,
             verdict=verdict,
             verification_checks=verification_checks,
+            shadow_audit_action=shadow_audit.action,
+            shadow_audit_findings=list(shadow_audit.findings),
         )
 
     upper = raw_output.upper()
@@ -591,6 +596,9 @@ def _review_phase_result(phase: str, result: CriticResult) -> ReviewPhaseResult:
         elapsed_sec=result.elapsed_sec,
         usage=dict(result.usage or {}),
         verification_checks=list(getattr(result, "verification_checks", []) or []),
+        shadow_audit_action=str(getattr(result, "shadow_audit_action", "pass") or "pass"),
+        shadow_audit_feedback=str(getattr(result, "shadow_audit_feedback", "") or ""),
+        shadow_audit_findings=list(getattr(result, "shadow_audit_findings", []) or []),
     )
 
 
@@ -608,6 +616,36 @@ def _aggregate_review_feedback(review_results: list[ReviewPhaseResult]) -> str:
     return "\n".join(feedback_lines).strip()
 
 
+def _apply_judge_pack(
+    result: CriticResult,
+    *,
+    judge_pack: str | None = None,
+    judge_registry: dict[str, object] | None = None,
+) -> CriticResult:
+    normalized_pack = str(judge_pack or "").strip()
+    if not normalized_pack:
+        return result
+
+    judge_result = evaluate_judge_pack(
+        normalized_pack,
+        build_critic_judge_context(result),
+        registry=judge_registry,
+    )
+    result.judge_pack = judge_result.pack_id
+    result.judge_verdict = judge_result.verdict
+    result.judge_summary = judge_result.summary
+    result.judge_findings = list(judge_result.findings)
+
+    if result.approved and judge_result.verdict != "PASS":
+        result.approved = False
+        result.verdict = judge_result.verdict
+        if not feedback_is_actionable(result.feedback):
+            result.feedback = judge_result.summary
+    elif not result.verdict:
+        result.verdict = judge_result.verdict
+    return result
+
+
 def run_review_plan(
     *,
     story_title: str,
@@ -619,21 +657,27 @@ def run_review_plan(
     timeout: int = 600,
     profile: Profile | None = None,
     review_phases: list[str] | None = None,
+    judge_pack: str | None = None,
+    judge_registry: dict[str, object] | None = None,
 ) -> CriticResult:
     """Run either one broad critic pass or a focused multi-phase review fan-out."""
 
     phases = normalize_review_phases(review_phases, default=[], story_execution_mode="solo")
     if not phases:
-        return _run_review_phase(
-            story_title=story_title,
-            story_description=story_description,
-            diff=diff,
-            provider=provider,
-            env=env,
-            workdir=workdir,
-            timeout=timeout,
-            profile=profile,
-            phase=None,
+        return _apply_judge_pack(
+            _run_review_phase(
+                story_title=story_title,
+                story_description=story_description,
+                diff=diff,
+                provider=provider,
+                env=env,
+                workdir=workdir,
+                timeout=timeout,
+                profile=profile,
+                phase=None,
+            ),
+            judge_pack=judge_pack,
+            judge_registry=judge_registry,
         )
 
     phase_results: list[ReviewPhaseResult] = []
@@ -657,14 +701,18 @@ def run_review_plan(
 
     approved = all(result.approved for result in phase_results)
     verdict = "PASS" if approved else ("PARTIAL" if any(result.verdict == "PARTIAL" for result in phase_results) else "FAIL")
-    return CriticResult(
-        approved=approved,
-        feedback="" if approved else _aggregate_review_feedback(phase_results),
-        raw_output="\n\n".join(raw_outputs).strip(),
-        verdict=verdict,
-        profile_used=profile.name if profile is not None else "",
-        elapsed_sec=round(sum(result.elapsed_sec for result in phase_results), 2),
-        usage=merge_usage_records(*usage_records),
-        review_phases=phases,
-        review_results=phase_results,
+    return _apply_judge_pack(
+        CriticResult(
+            approved=approved,
+            feedback="" if approved else _aggregate_review_feedback(phase_results),
+            raw_output="\n\n".join(raw_outputs).strip(),
+            verdict=verdict,
+            profile_used=profile.name if profile is not None else "",
+            elapsed_sec=round(sum(result.elapsed_sec for result in phase_results), 2),
+            usage=merge_usage_records(*usage_records),
+            review_phases=phases,
+            review_results=phase_results,
+        ),
+        judge_pack=judge_pack,
+        judge_registry=judge_registry,
     )

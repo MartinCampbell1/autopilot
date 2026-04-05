@@ -1,13 +1,17 @@
 "use client";
 
+import { useMemo } from "react";
+import { ShadowAuditReviewSheet } from "@/components/shadow-audit-review-sheet";
 import { SessionMetric } from "@/components/control-plane-display";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import type { AgentScopedOutcome } from "@/lib/control-plane-models";
 import { passStatusClass } from "@/lib/control-plane-ui";
+import { useShadowAuditReviewController } from "@/lib/use-shadow-audit-review-controller";
 import type {
   ExecutionAgentActionRunRecord,
+  ExecutionShadowAuditRecord,
   ExecutionRuntimeAgentDetail,
 } from "@/lib/types";
 
@@ -29,6 +33,8 @@ type RuntimeAgentActivitySectionProps = {
   selectedRunId: string;
   selectedRunResultIndex: number;
   onSelectRun: (runId: string, resultIndex: number) => void;
+  onInspectShadowAudit?: (audit: ExecutionShadowAuditRecord) => void;
+  onResolveShadowAudit?: (audit: ExecutionShadowAuditRecord) => void;
   onWaitForAsyncSettlement?: (run: ExecutionAgentActionRunRecord) => void;
   onCancelAsyncSettlement?: (run: ExecutionAgentActionRunRecord) => void;
   formatTimestamp: (value?: string | null) => string;
@@ -55,6 +61,8 @@ export function RuntimeAgentActivitySection({
   selectedRunId,
   selectedRunResultIndex,
   onSelectRun,
+  onInspectShadowAudit,
+  onResolveShadowAudit,
   onWaitForAsyncSettlement,
   onCancelAsyncSettlement,
   formatTimestamp,
@@ -69,6 +77,45 @@ export function RuntimeAgentActivitySection({
   onFindOutcomeInSession,
 }: RuntimeAgentActivitySectionProps) {
   const discoveries = selectedAgent.story.discoveries ?? [];
+  const agentRunShadowAuditRows = useMemo(() => {
+    const rowsByAuditId = new Map<
+      string,
+      { audit: ExecutionShadowAuditRecord; run: ExecutionAgentActionRunRecord }
+    >();
+    filteredAgentScopedRuns.forEach((run) => {
+      (run.shadow_audits || [])
+        .filter((audit) => audit.open || audit.status === "open")
+        .forEach((audit) => {
+          if (!rowsByAuditId.has(audit.id)) {
+            rowsByAuditId.set(audit.id, { audit, run });
+          }
+        });
+    });
+    return Array.from(rowsByAuditId.values());
+  }, [filteredAgentScopedRuns]);
+  const {
+    queueAudits,
+    queueOpen,
+    setQueueOpen,
+    activeQueueAudit,
+    activeQueueAuditIndex,
+    reviewQueueLabel,
+    openReviewQueue: openAgentActivityShadowAuditQueue,
+    handleSelectNextQueuedAudit,
+    handleSelectPreviousQueuedAudit,
+    handleResolveQueuedShadowAudit,
+  } = useShadowAuditReviewController({
+    audits: agentRunShadowAuditRows.map((entry) => entry.audit),
+    onInspectShadowAudit: (audit) => {
+      const relatedRun =
+        agentRunShadowAuditRows.find((entry) => entry.audit.id === audit.id)?.run || null;
+      if (relatedRun) {
+        onSelectRun(relatedRun.id, 0);
+      }
+      onInspectShadowAudit?.(audit);
+    },
+    onResolveShadowAudit,
+  });
 
   return (
     <div className="grid gap-4 xl:grid-cols-3">
@@ -129,6 +176,9 @@ export function RuntimeAgentActivitySection({
               const selected = selectedRunId === run.id;
               const waitActionKey = `run-wait:${run.id}`;
               const cancelActionKey = `run-cancel:${run.id}`;
+              const openShadowAudits = (run.shadow_audits || [])
+                .filter((audit) => audit.open || audit.status === "open");
+              const primaryShadowAudit = openShadowAudits[0] || null;
               return (
                 <div
                   key={`${selectedAgent.runtime_agent_id}-run-${run.id}`}
@@ -159,6 +209,23 @@ export function RuntimeAgentActivitySection({
                           async pending
                         </Badge>
                       )}
+                      {run.completion_state === "quarantined" && (
+                        <Badge
+                          variant="outline"
+                          className="rounded-full border-[#f4e0c4] bg-[#fff6e8] px-2.5 py-1 text-[11px] font-medium text-[#9a6700]"
+                        >
+                          handoff blocked
+                        </Badge>
+                      )}
+                      {openShadowAudits.length > 0 && (
+                        <Badge
+                          variant="outline"
+                          className="rounded-full border-[#f4e0c4] bg-[#fff6e8] px-2.5 py-1 text-[11px] font-medium text-[#9a6700]"
+                        >
+                          {openShadowAudits.length} shadow audit
+                          {openShadowAudits.length === 1 ? "" : "s"}
+                        </Badge>
+                      )}
                     </div>
                   </div>
                   <p className="mt-2 text-[12px] text-[#6b6b6b]">
@@ -178,7 +245,9 @@ export function RuntimeAgentActivitySection({
                       detail={
                         run.completion_state === "pending_async"
                           ? `${run.mode || "auto"} · ${run.active_async_task_count ?? 0} active async task${(run.active_async_task_count ?? 0) === 1 ? "" : "s"}`
-                          : run.mode || "auto"
+                          : run.completion_state === "quarantined"
+                            ? `${run.mode || "auto"} · ${run.open_shadow_audit_count ?? 0} shadow audit${(run.open_shadow_audit_count ?? 0) === 1 ? "" : "s"} open`
+                            : run.mode || "auto"
                       }
                     />
                   </div>
@@ -197,6 +266,18 @@ export function RuntimeAgentActivitySection({
                     >
                       {selected ? "Selected" : "Inspect run"}
                     </Button>
+                    {primaryShadowAudit ? (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-7 rounded-lg border-[#f4e0c4] bg-[#fff6e8] px-2 text-[11px] text-[#9a6700] hover:bg-[#fff0d9]"
+                        onClick={() => {
+                          openAgentActivityShadowAuditQueue(primaryShadowAudit.id);
+                        }}
+                      >
+                        {reviewQueueLabel}
+                      </Button>
+                    ) : null}
                     {run.completion_state === "pending_async" && onWaitForAsyncSettlement && (
                       <Button
                         size="sm"
@@ -227,6 +308,23 @@ export function RuntimeAgentActivitySection({
                 </div>
               );
             })}
+            {activeQueueAudit ? (
+              <ShadowAuditReviewSheet
+                audit={activeQueueAudit}
+                open={queueOpen}
+                onOpenChange={setQueueOpen}
+                hideTrigger
+                busyActionKey={busyActionKey}
+                formatTimestamp={formatTimestamp}
+                onResolveShadowAudit={handleResolveQueuedShadowAudit}
+                queueState={{
+                  currentIndex: Math.max(activeQueueAuditIndex, 0),
+                  totalCount: queueAudits.length,
+                  onSelectNext: handleSelectNextQueuedAudit,
+                  onSelectPrevious: handleSelectPreviousQueuedAudit,
+                }}
+              />
+            ) : null}
           </div>
         )}
       </div>

@@ -10,6 +10,7 @@ import {
   importProviderSession,
   openProviderLogin,
 } from "@/lib/api";
+import { useProjectRuntimeHandoffSignals } from "@/lib/use-project-runtime-handoff-signals";
 import type { AccountHealth, AccountsByProvider, ProjectSummary } from "@/lib/types";
 
 const PROVIDERS = ["codex", "claude", "gemini"] as const;
@@ -20,6 +21,10 @@ export default function AccountsPage() {
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [busyProvider, setBusyProvider] = useState<string>("");
   const [message, setMessage] = useState("");
+  const {
+    signals: projectRuntimeHandoffSignals,
+    refresh: refreshProjectRuntimeHandoffSignals,
+  } = useProjectRuntimeHandoffSignals(projects);
 
   const load = useCallback(async () => {
     try {
@@ -67,7 +72,12 @@ export default function AccountsPage() {
 
   return (
     <div className="flex min-h-screen bg-[#fafaf9]">
-      <AppSidebar health={health} projects={projects} />
+      <AppSidebar
+        health={health}
+        projects={projects}
+        projectRuntimeHandoffSignals={projectRuntimeHandoffSignals}
+        onRefreshProjectRuntimeHandoffSignals={refreshProjectRuntimeHandoffSignals}
+      />
 
       <main className="flex-1 pl-[260px]">
         <header className="sticky top-0 z-30 flex h-[52px] items-center justify-between border-b border-[#e5e5e3] bg-white px-6">

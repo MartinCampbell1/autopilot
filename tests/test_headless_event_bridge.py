@@ -70,3 +70,91 @@ def test_headless_event_log_control_bridge_processes_targeted_requests(tmp_path:
         assert response_payload["response"]["response"]["session"]["project_id"] == project["id"]
     finally:
         bridge.close()
+
+
+def test_headless_event_log_control_bridge_replays_pending_requests_queued_before_start(tmp_path: Path) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    project = _create_project(config, tmp_path / "project_replay")
+    append_event_log_message(
+        config,
+        {
+            "type": "control_request",
+            "request_id": "req_prestart",
+            "request": {"subtype": "initialize"},
+            "session_id": "sess_bg_replay",
+            "project_id": project["id"],
+        },
+    )
+
+    session = create_headless_control_session(config, project_entry=project, session_id="sess_bg_replay")
+    bridge = HeadlessEventLogControlBridge(config=config, session=session, poll_interval_sec=0.05)
+    bridge.start()
+    try:
+        deadline = time.time() + 2.0
+        response_payload: dict[str, object] | None = None
+        while time.time() < deadline:
+            if config.events_log_path.exists():
+                lines = [json.loads(line) for line in config.events_log_path.read_text().splitlines() if line.strip()]
+                response_payload = next(
+                    (
+                        item
+                        for item in lines
+                        if item.get("type") == "control_response"
+                        and ((item.get("response") or {}).get("request_id") == "req_prestart")
+                    ),
+                    None,
+                )
+                if response_payload is not None:
+                    break
+            time.sleep(0.05)
+
+        assert response_payload is not None
+        assert response_payload["response"]["subtype"] == "success"
+        assert response_payload["response"]["response"]["session"]["project_id"] == project["id"]
+    finally:
+        bridge.close()
+
+
+def test_headless_event_log_control_bridge_skips_prestart_requests_that_already_have_response(tmp_path: Path) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    project = _create_project(config, tmp_path / "project_replay_resolved")
+    append_event_log_message(
+        config,
+        {
+            "type": "control_request",
+            "request_id": "req_prestart_resolved",
+            "request": {"subtype": "initialize"},
+            "session_id": "sess_bg_replay_resolved",
+            "project_id": project["id"],
+        },
+    )
+    append_event_log_message(
+        config,
+        {
+            "type": "control_response",
+            "response": {
+                "subtype": "success",
+                "request_id": "req_prestart_resolved",
+                "response": {"accepted": True},
+            },
+            "session_id": "sess_bg_replay_resolved",
+            "project_id": project["id"],
+        },
+    )
+
+    session = create_headless_control_session(config, project_entry=project, session_id="sess_bg_replay_resolved")
+    bridge = HeadlessEventLogControlBridge(config=config, session=session, poll_interval_sec=0.05)
+    bridge.start()
+    try:
+        time.sleep(0.2)
+        lines = [json.loads(line) for line in config.events_log_path.read_text().splitlines() if line.strip()]
+        matching_responses = [
+            item
+            for item in lines
+            if item.get("type") == "control_response"
+            and ((item.get("response") or {}).get("request_id") == "req_prestart_resolved")
+        ]
+
+        assert len(matching_responses) == 1
+    finally:
+        bridge.close()

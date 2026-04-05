@@ -9,15 +9,19 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { ShadowAuditReviewSheet } from "@/components/shadow-audit-review-sheet";
+import { sortToolPermissionRuntimesByRecency } from "@/lib/control-plane-decision-ordering";
 import {
   approvalStatusClass,
   issueSeverityClass,
   issueStatusClass,
 } from "@/lib/control-plane-ui";
+import { useShadowAuditReviewController } from "@/lib/use-shadow-audit-review-controller";
 import type {
   ExecutionApprovalRecord,
   ExecutionAgentActionRunRecord,
   ExecutionIssueRecord,
+  ExecutionShadowAuditRecord,
   ExecutionRuntimeAgentTaskRecord,
   OrchestratorSessionDetail,
   ToolPermissionRuntimeRecord,
@@ -64,6 +68,25 @@ function asyncTaskStatusClass(status: string): string {
   }
 }
 
+function shadowAuditStatusClass(status: string): string {
+  switch (status) {
+    case "open":
+      return "border-[#f4e0c4] bg-[#fff6e8] text-[#9a6700]";
+    case "resolved":
+      return "border-[#d6e9dc] bg-[#eef8f1] text-[#2b6e3f]";
+    default:
+      return "border-[#e5e5e3] bg-[#f7f7f5] text-[#787774]";
+  }
+}
+
+function shadowAuditSourceLabel(audit: ExecutionShadowAuditRecord): string {
+  const sourceName = (audit.source_name || "").trim();
+  if (sourceName) return sourceName;
+  const sourceKind = (audit.source_kind || "").trim();
+  if (!sourceKind) return "shadow audit";
+  return sourceKind.replaceAll("_", " ");
+}
+
 type LinkedDecisionsCardProps = {
   selectedSession: OrchestratorSessionDetail | null;
   linkedRuns: ExecutionAgentActionRunRecord[];
@@ -77,10 +100,11 @@ type LinkedDecisionsCardProps = {
   selectedSessionIssueId: string;
   selectedSessionToolPermissionRuntimeId: string;
   selectedSessionAsyncTaskId: string;
+  selectedSessionShadowAuditId: string;
   busyActionKey: string;
   formatTimestamp: (value?: string | null) => string;
   sessionContextRowDomId: (
-    kind: "approval" | "issue" | "event" | "tool_permission_runtime" | "async_task",
+    kind: "approval" | "issue" | "event" | "tool_permission_runtime" | "async_task" | "shadow_audit",
     key: string
   ) => string;
   onSearchEntity: (value: string) => void;
@@ -90,9 +114,11 @@ type LinkedDecisionsCardProps = {
   onInspectIssue: (issue: ExecutionIssueRecord) => void;
   onInspectToolPermissionRuntime: (runtime: ToolPermissionRuntimeRecord) => void;
   onInspectAsyncTask: (task: ExecutionRuntimeAgentTaskRecord) => void;
+  onInspectShadowAudit?: (audit: ExecutionShadowAuditRecord) => void;
   onRefreshAsyncTask?: (task: ExecutionRuntimeAgentTaskRecord) => void;
   onWaitForAsyncTaskSettlement?: (task: ExecutionRuntimeAgentTaskRecord) => void;
   onCancelAsyncTask?: (task: ExecutionRuntimeAgentTaskRecord) => void;
+  onResolveShadowAudit?: (audit: ExecutionShadowAuditRecord) => void;
   onApproveApproval: (approval: ExecutionApprovalRecord) => void;
   onRejectApproval: (approval: ExecutionApprovalRecord) => void;
   onApplyApproval: (approval: ExecutionApprovalRecord) => void;
@@ -114,6 +140,7 @@ export function LinkedDecisionsCard({
   selectedSessionIssueId,
   selectedSessionToolPermissionRuntimeId,
   selectedSessionAsyncTaskId,
+  selectedSessionShadowAuditId,
   busyActionKey,
   formatTimestamp,
   sessionContextRowDomId,
@@ -124,9 +151,11 @@ export function LinkedDecisionsCard({
   onInspectIssue,
   onInspectToolPermissionRuntime,
   onInspectAsyncTask,
+  onInspectShadowAudit,
   onRefreshAsyncTask,
   onWaitForAsyncTaskSettlement,
   onCancelAsyncTask,
+  onResolveShadowAudit,
   onApproveApproval,
   onRejectApproval,
   onApplyApproval,
@@ -134,13 +163,9 @@ export function LinkedDecisionsCard({
   onAllowToolPermissionRuntime,
   onDenyToolPermissionRuntime,
 }: LinkedDecisionsCardProps) {
-  const pendingToolPermissionRuntimes = (selectedSession?.tool_permission_runtimes || [])
-    .filter((runtime) => runtime.status === "pending")
-    .sort((left, right) => {
-      const updatedDelta = Date.parse(right.updated_at) - Date.parse(left.updated_at);
-      if (updatedDelta !== 0) return updatedDelta;
-      return right.id.localeCompare(left.id);
-    });
+  const pendingToolPermissionRuntimes = sortToolPermissionRuntimesByRecency(
+    (selectedSession?.tool_permission_runtimes || []).filter((runtime) => runtime.status === "pending")
+  );
   const activeAsyncTasks = (selectedSession?.async_tasks || [])
     .filter((task) => task.status === "queued" || task.status === "running" || task.active)
     .sort((left, right) => {
@@ -148,6 +173,25 @@ export function LinkedDecisionsCard({
       if (updatedDelta !== 0) return updatedDelta;
       return right.id.localeCompare(left.id);
     });
+  const openShadowAudits = (selectedSession?.shadow_audits || [])
+    .filter((audit) => audit.open || audit.status === "open");
+  const {
+    queueAudits,
+    queueOpen,
+    setQueueOpen,
+    activeQueueAudit,
+    activeQueueAuditIndex,
+    reviewQueueLabel,
+    openReviewQueue: openLinkedDecisionShadowAuditQueue,
+    handleSelectNextQueuedAudit,
+    handleSelectPreviousQueuedAudit,
+    handleResolveQueuedShadowAudit,
+  } = useShadowAuditReviewController({
+    audits: openShadowAudits,
+    onInspectShadowAudit,
+    onResolveShadowAudit,
+    singleReviewLabel: "Inspect review",
+  });
 
   const renderAsyncTaskRow = (task: ExecutionRuntimeAgentTaskRecord) => {
     const selected = selectedSessionAsyncTaskId === task.id;
@@ -184,6 +228,14 @@ export function LinkedDecisionsCard({
               >
                 {task.command || "task"}
               </Badge>
+              {Boolean(task.output_quarantined || (task.open_shadow_audit_count || 0) > 0) && (
+                <Badge
+                  variant="outline"
+                  className="rounded-full border-[#f4e0c4] bg-[#fff6e8] px-2.5 py-1 text-[11px] font-medium text-[#9a6700]"
+                >
+                  handoff blocked
+                </Badge>
+              )}
               <Button
                 size="sm"
                 variant={selected ? "default" : "outline"}
@@ -277,9 +329,15 @@ export function LinkedDecisionsCard({
                 {task.output_artifact_ref && (
                   <Badge
                     variant="outline"
-                    className="rounded-full border-[#d6e9dc] bg-[#eef8f1] px-2.5 py-1 text-[11px] font-medium text-[#2b6e3f]"
+                    className={`rounded-full px-2.5 py-1 text-[11px] font-medium ${
+                      task.output_quarantined || (task.open_shadow_audit_count || 0) > 0
+                        ? "border-[#f4e0c4] bg-[#fff6e8] text-[#9a6700]"
+                        : "border-[#d6e9dc] bg-[#eef8f1] text-[#2b6e3f]"
+                    }`}
                   >
-                    output ready
+                    {task.output_quarantined || (task.open_shadow_audit_count || 0) > 0
+                      ? "output quarantined"
+                      : "output ready"}
                   </Badge>
                 )}
                 {task.transcript_artifact_ref && (
@@ -313,7 +371,7 @@ export function LinkedDecisionsCard({
           Linked Decisions
         </CardTitle>
         <CardDescription className="text-[13px] text-[#787774]">
-          Approvals, issues, tool-permission runtimes, and active background follow-through attached to the selected session.
+          Approvals, issues, quarantined handoffs, tool-permission runtimes, and active background follow-through attached to the selected session.
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -323,6 +381,171 @@ export function LinkedDecisionsCard({
           </div>
         ) : (
           <div className="space-y-4">
+            <div className="rounded-2xl border border-[#ecebe8] bg-[#fbfbf9] p-4">
+              <div className="flex items-center justify-between">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#9b9a97]">
+                  Shadow Audits
+                </p>
+                <Badge
+                  variant="outline"
+                  className="rounded-full border-[#e5e5e3] bg-white px-2.5 py-1 text-[11px] font-medium text-[#37352f]"
+                >
+                  {openShadowAudits.length}
+                </Badge>
+              </div>
+              {openShadowAudits.length === 0 ? (
+                <p className="mt-3 text-[13px] text-[#9b9a97]">
+                  No quarantined handoffs are blocking this session.
+                </p>
+              ) : (
+                <div className="mt-3 space-y-3">
+                  {queueAudits.map((audit) => {
+                    const selected = selectedSessionShadowAuditId === audit.id;
+                    const linkedTask =
+                      (selectedSession.async_tasks || []).find(
+                        (task) =>
+                          task.id === audit.source_id || task.id === audit.blocked_artifact_owner_id
+                      ) || null;
+                    const relatedRun =
+                      linkedTask?.agent_action_run_id
+                        ? linkedRuns.find((run) => run.id === linkedTask.agent_action_run_id) || null
+                        : null;
+                    return (
+                      <div
+                        key={`${selectedSession.id}-shadow-audit-${audit.id}`}
+                        id={sessionContextRowDomId("shadow_audit", audit.id)}
+                        className={`rounded-xl border p-3 ${
+                          selected ? "border-[#d3e5ef] bg-[#f7fbfd]" : "border-[#ecebe8] bg-white"
+                        }`}
+                      >
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                          <div>
+                            <div className="flex flex-wrap items-center gap-2">
+                              <p className="font-mono text-[11px] text-[#37352f]">{audit.id}</p>
+                              <Badge
+                                variant="outline"
+                                className={`rounded-full px-2.5 py-1 text-[11px] font-medium capitalize ${shadowAuditStatusClass(audit.status)}`}
+                              >
+                                {audit.status}
+                              </Badge>
+                              <Badge
+                                variant="outline"
+                                className="rounded-full border-[#e5e5e3] bg-[#fafaf9] px-2.5 py-1 text-[11px] font-medium text-[#37352f]"
+                              >
+                                {shadowAuditSourceLabel(audit)}
+                              </Badge>
+                            </div>
+                            <p className="mt-2 text-[13px] text-[#6b6b6b]">
+                              {audit.summary || "Quarantined runtime artifact requires explicit review."}
+                            </p>
+                            <p className="mt-2 text-[12px] text-[#9b9a97]">
+                              {formatTimestamp(audit.created_at)}
+                              {audit.blocked_artifact_owner_id
+                                ? ` · blocked ${audit.blocked_artifact_owner_kind || "artifact"} ${audit.blocked_artifact_owner_id}`
+                                : ""}
+                            </p>
+                            {(audit.findings.length > 0 || audit.runtime_agent_ids.length > 0) && (
+                              <div className="mt-2 flex flex-wrap gap-2">
+                                {audit.findings.slice(0, 3).map((finding) => (
+                                  <Badge
+                                    key={`${audit.id}-${finding}`}
+                                    variant="outline"
+                                    className="rounded-full border-[#f4e0c4] bg-[#fff6e8] px-2.5 py-1 text-[11px] font-medium text-[#9a6700]"
+                                  >
+                                    {finding}
+                                  </Badge>
+                                ))}
+                                {audit.runtime_agent_ids.slice(0, 2).map((runtimeAgentId) => (
+                                  <Button
+                                    key={`${audit.id}-${runtimeAgentId}`}
+                                    size="sm"
+                                    variant="outline"
+                                    className="h-7 rounded-full border-[#e5e5e3] bg-white px-2.5 text-[11px] text-[#37352f] hover:bg-[#f7f7f5]"
+                                    onClick={() => {
+                                      onFocusRuntimeAgent(runtimeAgentId);
+                                    }}
+                                  >
+                                    {runtimeAgentId}
+                                  </Button>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                          <div className="flex flex-wrap gap-2">
+                            <Button
+                              size="sm"
+                              variant={selected ? "default" : "outline"}
+                              className={`h-8 rounded-lg text-[12px] ${
+                                selected
+                                  ? "bg-[#1a1a1a] text-white hover:bg-[#333]"
+                                  : "border-[#e5e5e3] bg-white text-[#37352f] hover:bg-[#f7f7f5]"
+                              }`}
+                              onClick={() => {
+                                onInspectShadowAudit?.(audit);
+                              }}
+                            >
+                              {selected ? "Selected" : "Select"}
+                            </Button>
+                            {linkedTask ? (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="h-8 rounded-lg border-[#e5e5e3] bg-white text-[12px] text-[#37352f] hover:bg-[#f7f7f5]"
+                                onClick={() => {
+                                  onInspectAsyncTask(linkedTask);
+                                }}
+                              >
+                                Inspect task
+                              </Button>
+                            ) : null}
+                            {relatedRun ? (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="h-8 rounded-lg border-[#e5e5e3] bg-white text-[12px] text-[#37352f] hover:bg-[#f7f7f5]"
+                                onClick={() => {
+                                  onInspectRun(relatedRun.id);
+                                }}
+                              >
+                                Inspect run
+                              </Button>
+                            ) : null}
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-8 rounded-lg border-[#f4e0c4] bg-[#fff6e8] text-[12px] text-[#9a6700] hover:bg-[#fff0d9]"
+                              onClick={() => {
+                                openLinkedDecisionShadowAuditQueue(audit.id);
+                              }}
+                            >
+                              {reviewQueueLabel}
+                            </Button>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                  {activeQueueAudit ? (
+                    <ShadowAuditReviewSheet
+                      audit={activeQueueAudit}
+                      open={queueOpen}
+                      onOpenChange={setQueueOpen}
+                      hideTrigger
+                      busyActionKey={busyActionKey}
+                      formatTimestamp={formatTimestamp}
+                      onResolveShadowAudit={handleResolveQueuedShadowAudit}
+                      queueState={{
+                        currentIndex: Math.max(activeQueueAuditIndex, 0),
+                        totalCount: queueAudits.length,
+                        onSelectNext: handleSelectNextQueuedAudit,
+                        onSelectPrevious: handleSelectPreviousQueuedAudit,
+                      }}
+                    />
+                  ) : null}
+                </div>
+              )}
+            </div>
+
             <div className="rounded-2xl border border-[#ecebe8] bg-[#fbfbf9] p-4">
               <div className="flex items-center justify-between">
                 <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#9b9a97]">

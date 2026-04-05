@@ -1,8 +1,16 @@
 "use client";
 
+import { useEffect, useMemo, useState } from "react";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { StoryCard } from "./story-card";
-import type { ProjectDetail, StoryStatus } from "@/lib/types";
+import { fetchExecutionPlaneAgentActionRuns, fetchExecutionPlaneProject } from "@/lib/api";
+import { buildStoryRuntimeHandoffIndex } from "@/lib/story-runtime-handoffs";
+import type {
+  ExecutionAgentActionRunRecord,
+  ExecutionPlaneProjectDetail,
+  ProjectDetail,
+  StoryStatus,
+} from "@/lib/types";
 
 const COLUMNS: Array<{ key: StoryStatus; label: string; emptyText: string }> = [
   { key: "open", label: "Open", emptyText: "No open stories" },
@@ -30,6 +38,60 @@ function taskSourceLabel(project: ProjectDetail) {
 }
 
 export function KanbanBoard({ project, selectedStoryId, onStoryClick, className }: KanbanBoardProps) {
+  const [runtimeProjectDetail, setRuntimeProjectDetail] = useState<ExecutionPlaneProjectDetail | null>(null);
+  const [runtimeRuns, setRuntimeRuns] = useState<ExecutionAgentActionRunRecord[]>([]);
+  const [runtimeError, setRuntimeError] = useState("");
+  const runtimeSyncKey = useMemo(
+    () =>
+      project.stories
+        .map((story) => `${story.id}:${story.status}:${story.updated_at ?? ""}`)
+        .join("|"),
+    [project.stories]
+  );
+  useEffect(() => {
+    let cancelled = false;
+    void Promise.all([
+      fetchExecutionPlaneProject(project.id),
+      fetchExecutionPlaneAgentActionRuns({ projectId: project.id }),
+    ])
+      .then(([runtimeProjectPayload, runtimeRunsPayload]) => {
+        if (cancelled) return;
+        setRuntimeProjectDetail(runtimeProjectPayload);
+        setRuntimeRuns(runtimeRunsPayload.runs || []);
+        setRuntimeError("");
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        setRuntimeError(
+          error instanceof Error
+            ? error.message
+            : "Runtime handoff signals are temporarily unavailable."
+        );
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [project.id, runtimeSyncKey, project.current_story_id, project.last_activity_at, project.status]);
+
+  const storyRuntimeHandoffs = useMemo(
+    () => buildStoryRuntimeHandoffIndex(runtimeProjectDetail, runtimeRuns),
+    [runtimeProjectDetail, runtimeRuns]
+  );
+  const blockedStoryCount = useMemo(
+    () =>
+      Array.from(storyRuntimeHandoffs.values()).filter(
+        (snapshot) => snapshot.openShadowAudits.length > 0 || snapshot.blockedRuns.length > 0
+      ).length,
+    [storyRuntimeHandoffs]
+  );
+  const openShadowAuditCount = useMemo(
+    () =>
+      Array.from(storyRuntimeHandoffs.values()).reduce(
+        (sum, snapshot) => sum + snapshot.openShadowAudits.length,
+        0
+      ),
+    [storyRuntimeHandoffs]
+  );
   const deliveryLoop = project.delivery_loop;
   const deliveryStatus = project.delivery_status;
   const handoffArtifact = deliveryLoop?.artifact;
@@ -104,6 +166,15 @@ export function KanbanBoard({ project, selectedStoryId, onStoryClick, className 
             <p className="mt-1 line-clamp-2 break-all text-[12px] text-[#787774]">
               {handoffArtifact?.path || deliveryLoop?.handoff?.url || "No artifact recorded yet."}
             </p>
+            {blockedStoryCount > 0 ? (
+              <p className="mt-2 text-[12px] font-medium text-[#9a6700]">
+                {blockedStoryCount} stor{blockedStoryCount === 1 ? "y" : "ies"} blocked by {openShadowAuditCount} shadow audit
+                {openShadowAuditCount === 1 ? "" : "s"}
+              </p>
+            ) : null}
+            {runtimeError ? (
+              <p className="mt-2 text-[12px] text-[#9a6700]">{runtimeError}</p>
+            ) : null}
           </div>
         </div>
       </div>
@@ -139,6 +210,15 @@ export function KanbanBoard({ project, selectedStoryId, onStoryClick, className 
                         key={story.id}
                         story={story}
                         isSelected={selectedStoryId === story.id}
+                        runtimeHandoffSummary={
+                          storyRuntimeHandoffs.has(story.id)
+                            ? {
+                                runtimeAgentCount: storyRuntimeHandoffs.get(story.id)?.agents.length ?? 0,
+                                blockedHandoffCount: storyRuntimeHandoffs.get(story.id)?.blockedRuns.length ?? 0,
+                                openShadowAuditCount: storyRuntimeHandoffs.get(story.id)?.openShadowAudits.length ?? 0,
+                              }
+                            : null
+                        }
                         onClick={() => onStoryClick?.(story.id)}
                       />
                     ))

@@ -10,11 +10,14 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { ShadowAuditReviewSheet } from "@/components/shadow-audit-review-sheet";
 import { BreakdownChips, SessionMetric } from "@/components/control-plane-display";
 import { passStatusClass } from "@/lib/control-plane-ui";
+import { useShadowAuditReviewController } from "@/lib/use-shadow-audit-review-controller";
 import type {
   ExecutionAgentActionRunRecord,
   ExecutionPlaneCountMap,
+  ExecutionShadowAuditRecord,
 } from "@/lib/types";
 
 type RunResultDetails = {
@@ -32,6 +35,8 @@ type SelectedActionRunCardProps = {
   onApplyPreviewRun: (run: ExecutionAgentActionRunRecord) => void;
   onWaitForAsyncSettlement?: (run: ExecutionAgentActionRunRecord) => void;
   onCancelAsyncSettlement?: (run: ExecutionAgentActionRunRecord) => void;
+  onInspectShadowAudit?: (audit: ExecutionShadowAuditRecord) => void;
+  onResolveShadowAudit?: (audit: ExecutionShadowAuditRecord) => void;
   formatTimestamp: (value?: string | null) => string;
   formatScopeList: (items: string[], emptyText: string) => string;
   describeRunResult: (result: Record<string, unknown>) => RunResultDetails;
@@ -42,6 +47,36 @@ type SelectedActionRunCardProps = {
   children?: ReactNode;
 };
 
+function handoffStateClass(state: string): string {
+  switch (state) {
+    case "quarantined":
+      return "border-[#f4e0c4] bg-[#fff6e8] text-[#9a6700]";
+    case "clear":
+      return "border-[#d6e9dc] bg-[#eef8f1] text-[#2b6e3f]";
+    default:
+      return "border-[#e5e5e3] bg-[#fafaf9] text-[#37352f]";
+  }
+}
+
+function shadowAuditStatusClass(status: string): string {
+  switch (status) {
+    case "open":
+      return "border-[#f4e0c4] bg-[#fff6e8] text-[#9a6700]";
+    case "resolved":
+      return "border-[#d6e9dc] bg-[#eef8f1] text-[#2b6e3f]";
+    default:
+      return "border-[#e5e5e3] bg-[#fafaf9] text-[#37352f]";
+  }
+}
+
+function shadowAuditSourceLabel(audit: ExecutionShadowAuditRecord): string {
+  const sourceName = (audit.source_name || "").trim();
+  if (sourceName) return sourceName;
+  const sourceKind = (audit.source_kind || "").trim();
+  if (!sourceKind) return "shadow audit";
+  return sourceKind.replaceAll("_", " ");
+}
+
 export function SelectedActionRunCard({
   selectedRun,
   selectedRunResultIndex,
@@ -51,6 +86,8 @@ export function SelectedActionRunCard({
   onApplyPreviewRun,
   onWaitForAsyncSettlement,
   onCancelAsyncSettlement,
+  onInspectShadowAudit,
+  onResolveShadowAudit,
   formatTimestamp,
   formatScopeList,
   describeRunResult,
@@ -79,6 +116,31 @@ export function SelectedActionRunCard({
         .map((item) => asRecord(item))
         .filter((item): item is Record<string, unknown> => item !== null)
     : [];
+  const openShadowAudits = (selectedRun?.shadow_audits || [])
+    .filter((audit) => audit.open || audit.status === "open");
+  const {
+    queueAudits,
+    queueOpen,
+    setQueueOpen,
+    activeQueueAudit,
+    activeQueueAuditIndex,
+    reviewQueueLabel,
+    openReviewQueue: openRunShadowAuditQueue,
+    handleSelectNextQueuedAudit,
+    handleSelectPreviousQueuedAudit,
+    handleResolveQueuedShadowAudit,
+  } = useShadowAuditReviewController({
+    audits: openShadowAudits,
+    onInspectShadowAudit,
+    onResolveShadowAudit,
+    singleReviewLabel: "Inspect review",
+  });
+  const handoffState =
+    queueAudits.length > 0
+      ? "quarantined"
+      : toStringValue(selectedRun?.handoff_state, "clear");
+  const handoffBlocked =
+    Boolean(selectedRun?.handoff_blocked) || selectedRun?.completion_state === "quarantined";
 
   return (
     <Card className="border border-[#e5e5e3] bg-white shadow-[0_1px_3px_rgba(15,15,15,0.08),0_0_1px_rgba(15,15,15,0.04)]">
@@ -133,6 +195,14 @@ export function SelectedActionRunCard({
                       className="rounded-full border-[#d3e5ef] bg-[#eef7fb] px-2.5 py-1 text-[11px] font-medium text-[#2a6690]"
                     >
                       waiting on async follow-through
+                    </Badge>
+                  )}
+                  {handoffBlocked && (
+                    <Badge
+                      variant="outline"
+                      className="rounded-full border-[#f4e0c4] bg-[#fff6e8] px-2.5 py-1 text-[11px] font-medium text-[#9a6700]"
+                    >
+                      handoff blocked
                     </Badge>
                   )}
                   {Boolean(selectedRun.approval_required) && (
@@ -240,7 +310,18 @@ export function SelectedActionRunCard({
                 detail={
                   selectedRun.completion_state === "pending_async"
                     ? selectedRun.completion_message || "Background follow-through is still running."
-                    : selectedRun.completion_message || "No async follow-through is pending."
+                    : handoffBlocked
+                      ? selectedRun.completion_message || "Explicit review is required before this handoff is released."
+                      : selectedRun.completion_message || "No async follow-through is pending."
+                }
+              />
+              <SessionMetric
+                label="Handoff"
+                  value={handoffState.replaceAll("_", " ")}
+                  detail={
+                  queueAudits.length > 0
+                    ? `${queueAudits.length} shadow audit${queueAudits.length === 1 ? "" : "s"} open`
+                    : "No explicit review block is attached."
                 }
               />
             </div>
@@ -250,6 +331,114 @@ export function SelectedActionRunCard({
               values={(selectedRun.summary.status_counts as ExecutionPlaneCountMap | undefined) || {}}
               emptyText="No result statuses recorded."
             />
+
+            {queueAudits.length > 0 && (
+              <div className="rounded-2xl border border-[#f4e0c4] bg-[#fff9ef] p-4">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[#9a6700]">
+                      Shadow Audit Barrier
+                    </p>
+                    <p className="mt-2 text-[13px] text-[#6b6b6b]">
+                      {selectedRun.completion_message ||
+                        "Quarantined async handoff requires explicit operator review before this run is treated as complete."}
+                    </p>
+                  </div>
+                  <Badge
+                    variant="outline"
+                    className={`rounded-full px-2.5 py-1 text-[11px] font-medium capitalize ${handoffStateClass(handoffState)}`}
+                  >
+                    {handoffState.replaceAll("_", " ")}
+                  </Badge>
+                </div>
+                <div className="mt-3 space-y-3">
+                  {queueAudits.map((audit) => (
+                    <div
+                      key={`${selectedRun.id}-shadow-audit-${audit.id}`}
+                      className="rounded-xl border border-[#f4e0c4] bg-white p-3"
+                    >
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <p className="font-mono text-[11px] text-[#37352f]">{audit.id}</p>
+                            <Badge
+                              variant="outline"
+                              className={`rounded-full px-2.5 py-1 text-[11px] font-medium capitalize ${shadowAuditStatusClass(audit.status)}`}
+                            >
+                              {audit.status}
+                            </Badge>
+                            <Badge
+                              variant="outline"
+                              className="rounded-full border-[#e5e5e3] bg-[#fafaf9] px-2.5 py-1 text-[11px] font-medium text-[#37352f]"
+                            >
+                              {shadowAuditSourceLabel(audit)}
+                            </Badge>
+                          </div>
+                          <p className="mt-2 text-[12px] text-[#6b6b6b]">
+                            {audit.summary || "Quarantined handoff requires explicit review."}
+                          </p>
+                          <p className="mt-2 text-[12px] text-[#9b9a97]">
+                            {formatTimestamp(audit.created_at)}
+                            {audit.blocked_artifact_owner_id
+                              ? ` · blocked ${audit.blocked_artifact_owner_kind || "artifact"} ${audit.blocked_artifact_owner_id}`
+                              : ""}
+                          </p>
+                          {(audit.findings.length > 0 || audit.runtime_agent_ids.length > 0) && (
+                            <div className="mt-2 flex flex-wrap gap-2">
+                              {audit.findings.slice(0, 3).map((finding) => (
+                                <Badge
+                                  key={`${audit.id}-${finding}`}
+                                  variant="outline"
+                                  className="rounded-full border-[#f4e0c4] bg-[#fff6e8] px-2.5 py-1 text-[11px] font-medium text-[#9a6700]"
+                                >
+                                  {finding}
+                                </Badge>
+                              ))}
+                              {audit.runtime_agent_ids.slice(0, 2).map((runtimeAgentId) => (
+                                <Badge
+                                  key={`${audit.id}-${runtimeAgentId}`}
+                                  variant="outline"
+                                  className="rounded-full border-[#e5e5e3] bg-white px-2.5 py-1 text-[11px] font-medium text-[#37352f]"
+                                >
+                                  {runtimeAgentId}
+                                </Badge>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-8 rounded-lg border-[#f4e0c4] bg-[#fff6e8] text-[12px] text-[#9a6700] hover:bg-[#fff0d9]"
+                          onClick={() => {
+                            openRunShadowAuditQueue(audit.id);
+                          }}
+                        >
+                          {reviewQueueLabel}
+                        </Button>
+                      </div>
+                    </div>
+                  ))}
+                  {activeQueueAudit ? (
+                    <ShadowAuditReviewSheet
+                      audit={activeQueueAudit}
+                      open={queueOpen}
+                      onOpenChange={setQueueOpen}
+                      hideTrigger
+                      busyActionKey={busyActionKey}
+                      formatTimestamp={formatTimestamp}
+                      onResolveShadowAudit={handleResolveQueuedShadowAudit}
+                      queueState={{
+                        currentIndex: Math.max(activeQueueAuditIndex, 0),
+                        totalCount: queueAudits.length,
+                        onSelectNext: handleSelectNextQueuedAudit,
+                        onSelectPrevious: handleSelectPreviousQueuedAudit,
+                      }}
+                    />
+                  ) : null}
+                </div>
+              </div>
+            )}
 
             {(selectedRun.preview_id || selectedRun.artifact_ref || diffSummary || patchOperations.length > 0) && (
               <div className="rounded-2xl border border-[#d8e7ef] bg-[#f7fbfd] p-4">

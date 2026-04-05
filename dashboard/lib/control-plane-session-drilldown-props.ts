@@ -64,7 +64,7 @@ type BuildSessionDrilldownSectionPropsArgs = {
   eventFamily: (eventName: string) => string;
   sessionEventKey: (event: Record<string, unknown>, fallback?: string) => string;
   sessionContextRowDomId: (
-    kind: "approval" | "issue" | "event" | "tool_permission_runtime" | "async_task",
+    kind: "approval" | "issue" | "event" | "tool_permission_runtime" | "async_task" | "shadow_audit",
     key: string
   ) => string;
   syncLinkedSelection: (payload: {
@@ -74,6 +74,7 @@ type BuildSessionDrilldownSectionPropsArgs = {
     issueId?: string;
     toolPermissionRuntimeId?: string;
     asyncTaskId?: string;
+    shadowAuditId?: string;
     runtimeAgentId?: string;
   }) => void;
   selectedPass: SessionDrilldownSectionProps["selectedControlPassCardProps"]["selectedPass"];
@@ -82,6 +83,7 @@ type BuildSessionDrilldownSectionPropsArgs = {
   selectedSessionIssueId: string;
   selectedSessionToolPermissionRuntimeId: string;
   selectedSessionAsyncTaskId: string;
+  selectedSessionShadowAuditId: string;
   revealSelectedSessionContextRow: () => void;
   revealSelectedSessionContextInAgentTimeline: () => void;
   selectedSessionContext: SessionDrilldownSectionProps["selectedSessionContextCardProps"]["selectedSessionContext"];
@@ -120,6 +122,12 @@ type BuildSessionDrilldownSectionPropsArgs = {
   refreshAsyncTask: (task: ExecutionRuntimeAgentTaskRecord) => Promise<void>;
   waitForAsyncTaskSettlement: (task: ExecutionRuntimeAgentTaskRecord) => Promise<void>;
   cancelAsyncTask: (task: ExecutionRuntimeAgentTaskRecord) => Promise<void>;
+  resolveShadowAudit: NonNullable<
+    SessionDrilldownSectionProps["linkedDecisionsCardProps"]["onResolveShadowAudit"]
+  >;
+  inspectShadowAudit: NonNullable<
+    SessionDrilldownSectionProps["linkedDecisionsCardProps"]["onInspectShadowAudit"]
+  >;
 };
 
 export function buildSessionDrilldownSectionProps({
@@ -174,6 +182,7 @@ export function buildSessionDrilldownSectionProps({
   selectedSessionIssueId,
   selectedSessionToolPermissionRuntimeId,
   selectedSessionAsyncTaskId,
+  selectedSessionShadowAuditId,
   revealSelectedSessionContextRow,
   revealSelectedSessionContextInAgentTimeline,
   selectedSessionContext,
@@ -198,6 +207,8 @@ export function buildSessionDrilldownSectionProps({
   refreshAsyncTask,
   waitForAsyncTaskSettlement,
   cancelAsyncTask,
+  resolveShadowAudit,
+  inspectShadowAudit,
 }: BuildSessionDrilldownSectionPropsArgs): SessionDrilldownSectionProps {
   return {
     selectedSessionId,
@@ -260,6 +271,12 @@ export function buildSessionDrilldownSectionProps({
           onApplyRecommendation: (recommendation) => {
             void applyRecommendation(recommendation);
           },
+          onInspectShadowAudit: (audit) => {
+            inspectShadowAudit(audit);
+          },
+          onResolveShadowAudit: (audit) => {
+            return resolveShadowAudit(audit);
+          },
         }
       : null,
     activitySectionProps: selectedSession
@@ -314,6 +331,7 @@ export function buildSessionDrilldownSectionProps({
       selectedSessionIssueId,
       selectedSessionToolPermissionRuntimeId,
       selectedSessionAsyncTaskId,
+      selectedSessionShadowAuditId,
       busyActionKey,
       formatTimestamp,
       sessionContextRowDomId,
@@ -354,6 +372,23 @@ export function buildSessionDrilldownSectionProps({
           runtimeAgentId: task.runtime_agent_ids[0] || task.runtime_agent_id,
         });
       },
+      onInspectShadowAudit: (audit) => {
+        const linkedTask =
+          (selectedSession?.async_tasks || []).find(
+            (task) => task.id === audit.source_id || task.id === audit.blocked_artifact_owner_id
+          ) || null;
+        syncLinkedSelection({
+          shadowAuditId: audit.id,
+          asyncTaskId: linkedTask?.id,
+          runId: linkedTask?.agent_action_run_id,
+          approvalId: linkedTask?.approval_id,
+          issueId: linkedTask?.issue_id,
+          runtimeAgentId:
+            audit.runtime_agent_ids[0] ||
+            linkedTask?.runtime_agent_ids[0] ||
+            linkedTask?.runtime_agent_id,
+        });
+      },
       onRefreshAsyncTask: (task) => {
         void refreshAsyncTask(task);
       },
@@ -362,6 +397,9 @@ export function buildSessionDrilldownSectionProps({
       },
       onCancelAsyncTask: (task) => {
         void cancelAsyncTask(task);
+      },
+      onResolveShadowAudit: (audit) => {
+        return resolveShadowAudit(audit);
       },
       onApproveApproval: (approval) => {
         void approveApproval(approval);
@@ -425,6 +463,9 @@ export function buildSessionDrilldownSectionProps({
       },
       onDenyToolPermissionRuntime: (runtime) => {
         void resolveToolPermissionRuntime(runtime, "deny");
+      },
+      onResolveShadowAudit: (audit) => {
+        return resolveShadowAudit(audit);
       },
       onLoadAsyncTaskOutputArtifact: (task) => loadAsyncTaskOutputArtifact(task),
       onLoadAsyncTaskTranscriptArtifact: (task) => loadAsyncTaskTranscriptArtifact(task),

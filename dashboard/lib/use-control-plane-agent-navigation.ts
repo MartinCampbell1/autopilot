@@ -53,14 +53,21 @@ export function useControlPlaneAgentNavigation({
       syncLinkedSelection({
         runId:
           relatedRunLink?.run.id ||
+          entry.shadowAuditRunId ||
           toStringValue(entry.event?.agent_action_run_id) ||
           toStringValue(entry.event?.run_id),
         resultIndex: relatedRunLink?.resultIndex,
         approvalId:
           entry.approval?.id ||
           entry.issue?.approval_id ||
-          toStringValue(entry.event?.approval_id),
-        issueId: entry.issue?.id || toStringValue(entry.event?.issue_id),
+          toStringValue(entry.event?.approval_id) ||
+          toStringValue(entry.shadowAudit?.metadata?.approval_id),
+        issueId:
+          entry.issue?.id ||
+          toStringValue(entry.event?.issue_id) ||
+          toStringValue(entry.shadowAudit?.metadata?.issue_id),
+        asyncTaskId: entry.shadowAuditTaskId,
+        shadowAuditId: entry.shadowAudit?.id,
         runtimeAgentId: selectedAgent?.runtime_agent_id || selectedAgentId,
         event: entry.event || null,
       });

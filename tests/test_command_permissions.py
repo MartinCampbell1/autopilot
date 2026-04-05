@@ -81,6 +81,17 @@ def test_check_projected_command_permission_flags_pipe_to_shell() -> None:
     assert decision.pattern_id == "curl_pipe_shell"
 
 
+def test_check_projected_command_permission_denies_fail_closed_nested_shell() -> None:
+    decision = check_projected_command_permission(
+        _shell_tool(),
+        {"command": "bash -lc 'pytest -q'"},
+    )
+
+    assert decision is not None
+    assert decision.behavior == "deny"
+    assert decision.pattern_id == "command_safety_nested_shell"
+
+
 def test_check_projected_command_permission_flags_cloud_control() -> None:
     decision = check_projected_command_permission(
         _shell_tool(),

@@ -1,7 +1,9 @@
 "use client";
 
 import Link from "next/link";
+import { useCallback, useMemo } from "react";
 import { RuntimeAgentInspectorColumn } from "@/components/runtime-agent-inspector-column";
+import { ShadowAuditReviewSheet } from "@/components/shadow-audit-review-sheet";
 import {
   QueueAdvanceNotice,
   type QueueAdvanceFeedback,
@@ -18,24 +20,29 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { AGENT_PRIORITY_QUEUE_KEYS } from "@/lib/control-plane-models";
+import { useShadowAuditReviewController } from "@/lib/use-shadow-audit-review-controller";
 import type {
   AgentPriorityQueueKind,
   AgentTimelineEntry,
   LinkedSelectionContext,
   TriagePriority,
 } from "@/lib/control-plane-models";
-import {
-  approvalStatusClass,
-  passStatusClass,
-  triagePriorityClass,
-} from "@/lib/control-plane-ui";
+import { triagePriorityClass } from "@/lib/control-plane-ui";
+import { agentTimelineEntryStatusClass } from "@/lib/control-plane-triage";
 import type {
   ExecutionAgentActionRunRecord,
   ExecutionApprovalRecord,
   ExecutionIssueRecord,
+  ExecutionShadowAuditRecord,
   ExecutionRuntimeAgentDetail,
 } from "@/lib/types";
-type AgentTimelineFilter = "all" | "approvals" | "issues" | "events" | "attention";
+type AgentTimelineFilter =
+  | "all"
+  | "approvals"
+  | "issues"
+  | "events"
+  | "shadow_audits"
+  | "attention";
 
 type RelatedRunLink = {
   run: ExecutionAgentActionRunRecord;
@@ -91,6 +98,8 @@ type RuntimeAgentTimelineSectionProps = {
   latestAgentIssueEntry: AgentTimelineEntry | null;
   latestAgentApprovalEntry: AgentTimelineEntry | null;
   latestAgentEventEntry: AgentTimelineEntry | null;
+  latestAgentShadowAuditEntry: AgentTimelineEntry | null;
+  activeAgentShadowAuditCount: number;
   busyActionKey: string;
   formatTimestamp: (value?: string | null) => string;
   formatJson: (value: unknown) => string;
@@ -106,6 +115,7 @@ type RuntimeAgentTimelineSectionProps = {
   onRejectApproval: (approval: ExecutionApprovalRecord) => void;
   onApplyApproval: (approval: ExecutionApprovalRecord) => void;
   onResolveIssue: (issue: ExecutionIssueRecord) => void;
+  onResolveShadowAudit?: (audit: ExecutionShadowAuditRecord) => void;
   onAdvanceCurrentPriorityQueue: (entry: AgentTimelineEntry) => void;
   onSearchEntity: (value: string) => void;
   onFocusAgentTimeline: (filter: Exclude<AgentTimelineFilter, "all">, entry?: AgentTimelineEntry) => void;
@@ -122,6 +132,19 @@ type RuntimeAgentTimelineSectionProps = {
   agentTimelinePriority: (entry: AgentTimelineEntry) => TriagePriority;
   agentTimelineRowDomId: (runtimeAgentId: string, entryKey: string) => string;
 };
+
+function agentTimelineKindLabel(entry: AgentTimelineEntry): string {
+  switch (entry.kind) {
+    case "shadow_audit":
+      return "shadow audit";
+    case "approval":
+      return "approval";
+    case "issue":
+      return "issue";
+    default:
+      return "event";
+  }
+}
 
 export function RuntimeAgentTimelineSection({
   selectedAgent,
@@ -166,6 +189,8 @@ export function RuntimeAgentTimelineSection({
   latestAgentIssueEntry,
   latestAgentApprovalEntry,
   latestAgentEventEntry,
+  latestAgentShadowAuditEntry,
+  activeAgentShadowAuditCount,
   busyActionKey,
   formatTimestamp,
   formatJson,
@@ -181,6 +206,7 @@ export function RuntimeAgentTimelineSection({
   onRejectApproval,
   onApplyApproval,
   onResolveIssue,
+  onResolveShadowAudit,
   onAdvanceCurrentPriorityQueue,
   onSearchEntity,
   onFocusAgentTimeline,
@@ -194,6 +220,46 @@ export function RuntimeAgentTimelineSection({
   agentTimelinePriority,
   agentTimelineRowDomId,
 }: RuntimeAgentTimelineSectionProps) {
+  const agentTimelineShadowAuditEntries = useMemo(
+    () =>
+      activeAgentTimelineEntries.filter(
+        (entry): entry is AgentTimelineEntry & { shadowAudit: ExecutionShadowAuditRecord } =>
+          entry.kind === "shadow_audit" &&
+          Boolean(entry.shadowAudit) &&
+          (entry.status === "open" || Boolean(entry.shadowAudit?.open))
+      ),
+    [activeAgentTimelineEntries]
+  );
+  const {
+    queueAudits,
+    queueOpen,
+    setQueueOpen,
+    activeQueueAudit,
+    activeQueueAuditIndex,
+    reviewQueueLabel,
+    openReviewQueue: openAgentTimelineShadowAuditQueue,
+    handleSelectNextQueuedAudit,
+    handleSelectPreviousQueuedAudit,
+    handleResolveQueuedShadowAudit,
+  } = useShadowAuditReviewController({
+    audits: agentTimelineShadowAuditEntries.map((entry) => entry.shadowAudit),
+    onInspectShadowAudit: (audit) => {
+      const matchingEntry =
+        agentTimelineShadowAuditEntries.find((entry) => entry.shadowAudit.id === audit.id) || null;
+      if (matchingEntry) {
+        onInspectAgentTimelineEntry(matchingEntry);
+      }
+    },
+    onResolveShadowAudit,
+  });
+  const handleOpenInspectorShadowAuditQueue = useCallback(
+    (entry: AgentTimelineEntry) => {
+      if (!entry.shadowAudit?.id) return;
+      onInspectAgentTimelineEntry(entry);
+      openAgentTimelineShadowAuditQueue(entry.shadowAudit.id);
+    },
+    [onInspectAgentTimelineEntry, openAgentTimelineShadowAuditQueue]
+  );
   const priorityQueues = [
     {
       key: "critical" as const,
@@ -225,8 +291,8 @@ export function RuntimeAgentTimelineSection({
             Agent Timeline
           </p>
           <p className="mt-1 text-[13px] text-[#787774]">
-            Unified approvals, issues, and runtime events for this agent. Detailed history lives
-            here.
+            Unified approvals, issues, shadow audits, and runtime events for this agent. Detailed
+            history lives here.
           </p>
         </div>
         <Badge
@@ -242,7 +308,7 @@ export function RuntimeAgentTimelineSection({
         <Input
           value={agentTimelineSearch}
           onChange={(event) => onAgentTimelineSearchChange(event.target.value)}
-          placeholder="Search approvals, issues, and agent events..."
+          placeholder="Search approvals, issues, shadow audits, and agent events..."
           className="h-9 rounded-xl border-[#e5e5e3] bg-white text-[13px] text-[#37352f] placeholder:text-[#9b9a97]"
         />
         <div className="flex flex-wrap gap-2">
@@ -251,6 +317,7 @@ export function RuntimeAgentTimelineSection({
             { value: "approvals", label: "Approvals" },
             { value: "issues", label: "Issues" },
             { value: "events", label: "Events" },
+            { value: "shadow_audits", label: "Shadow audits" },
             { value: "attention", label: "Attention" },
           ].map((option) => {
             const selected = agentTimelineFilter === option.value;
@@ -473,7 +540,7 @@ export function RuntimeAgentTimelineSection({
                       <QueueItemCard
                         key={`agent-priority-${queue.key}-${agentTimelineEntryKey(entry)}`}
                         title={entry.title}
-                        subtitle={`${entry.kind} · ${entry.subtitle || "No scope metadata"}`}
+                        subtitle={`${agentTimelineKindLabel(entry)} · ${entry.subtitle || "No scope metadata"}`}
                         timestamp={formatTimestamp(entry.timestamp)}
                         selected={Boolean(selected)}
                         className="rounded-lg border p-2.5"
@@ -484,13 +551,7 @@ export function RuntimeAgentTimelineSection({
                         badges={
                           <Badge
                             variant="outline"
-                            className={`rounded-full px-2.5 py-1 text-[11px] font-semibold capitalize ${
-                              entry.kind === "approval"
-                                ? approvalStatusClass(entry.status)
-                                : entry.kind === "issue"
-                                  ? passStatusClass(entry.status === "open" ? "partial" : "ok")
-                                  : passStatusClass(entry.status)
-                            }`}
+                            className={`rounded-full px-2.5 py-1 text-[11px] font-semibold capitalize ${agentTimelineEntryStatusClass(entry)}`}
                           >
                             {entry.status}
                           </Badge>
@@ -511,6 +572,18 @@ export function RuntimeAgentTimelineSection({
                             >
                               {selected ? "Selected" : "Inspect"}
                             </Button>
+                            {entry.shadowAudit ? (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="h-7 rounded-lg border-[#f4e0c4] bg-[#fff6e8] px-2 text-[11px] text-[#9a6700] hover:bg-[#fff0d9]"
+                                onClick={() => {
+                                  openAgentTimelineShadowAuditQueue(entry.shadowAudit?.id);
+                                }}
+                              >
+                                {reviewQueueLabel}
+                              </Button>
+                            ) : null}
                             <Button
                               size="sm"
                               variant="outline"
@@ -611,7 +684,7 @@ export function RuntimeAgentTimelineSection({
                           variant="outline"
                           className="rounded-full border-[#e5e5e3] bg-[#fafaf9] px-2.5 py-1 text-[11px] font-medium capitalize text-[#37352f]"
                         >
-                          {entry.kind}
+                          {agentTimelineKindLabel(entry)}
                         </Badge>
                         <Badge
                           variant="outline"
@@ -624,13 +697,7 @@ export function RuntimeAgentTimelineSection({
                       <div className="flex flex-wrap items-center gap-2">
                         <Badge
                           variant="outline"
-                          className={`rounded-full px-2.5 py-1 text-[11px] font-semibold capitalize ${
-                            entry.kind === "approval"
-                              ? approvalStatusClass(entry.status)
-                              : entry.kind === "issue"
-                                ? passStatusClass(entry.status === "open" ? "partial" : "ok")
-                                : passStatusClass(entry.status)
-                          }`}
+                          className={`rounded-full px-2.5 py-1 text-[11px] font-semibold capitalize ${agentTimelineEntryStatusClass(entry)}`}
                         >
                           {entry.status}
                         </Badge>
@@ -714,13 +781,27 @@ export function RuntimeAgentTimelineSection({
                             : "Resolve"}
                         </Button>
                       )}
-                      {(entry.approval?.id || entry.issue?.id) && (
+                      {entry.shadowAudit ? (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-7 rounded-full border-[#f4e0c4] bg-[#fff6e8] px-2.5 text-[11px] text-[#9a6700] hover:bg-[#fff0d9]"
+                          onClick={() => {
+                            openAgentTimelineShadowAuditQueue(entry.shadowAudit?.id);
+                          }}
+                        >
+                          {reviewQueueLabel}
+                        </Button>
+                      ) : null}
+                      {(entry.approval?.id || entry.issue?.id || entry.shadowAudit?.id) && (
                         <Button
                           size="sm"
                           variant="outline"
                           className="h-7 rounded-full border-[#d3e5ef] bg-[#eef7fb] px-2.5 text-[11px] text-[#2a6690] hover:bg-[#e3f2f8]"
                           onClick={() => {
-                            onSearchEntity(entry.approval?.id || entry.issue?.id || "");
+                            onSearchEntity(
+                              entry.approval?.id || entry.issue?.id || entry.shadowAudit?.id || ""
+                            );
                           }}
                         >
                           Find in session
@@ -788,6 +869,24 @@ export function RuntimeAgentTimelineSection({
               })}
             </div>
 
+            {activeQueueAudit ? (
+              <ShadowAuditReviewSheet
+                audit={activeQueueAudit}
+                open={queueOpen}
+                onOpenChange={setQueueOpen}
+                hideTrigger
+                busyActionKey={busyActionKey}
+                formatTimestamp={formatTimestamp}
+                onResolveShadowAudit={handleResolveQueuedShadowAudit}
+                queueState={{
+                  currentIndex: Math.max(activeQueueAuditIndex, 0),
+                  totalCount: queueAudits.length,
+                  onSelectNext: handleSelectNextQueuedAudit,
+                  onSelectPrevious: handleSelectPreviousQueuedAudit,
+                }}
+              />
+            ) : null}
+
             <RuntimeAgentInspectorColumn
               selectedAgent={selectedAgent}
               selectedAgentTimelineEntry={selectedAgentTimelineEntry}
@@ -797,6 +896,8 @@ export function RuntimeAgentTimelineSection({
               latestAgentIssueEntry={latestAgentIssueEntry}
               latestAgentApprovalEntry={latestAgentApprovalEntry}
               latestAgentEventEntry={latestAgentEventEntry}
+              latestAgentShadowAuditEntry={latestAgentShadowAuditEntry}
+              activeAgentShadowAuditCount={activeAgentShadowAuditCount}
               busyActionKey={busyActionKey}
               formatTimestamp={formatTimestamp}
               formatJson={formatJson}
@@ -812,6 +913,7 @@ export function RuntimeAgentTimelineSection({
               onRejectApproval={onRejectApproval}
               onApplyApproval={onApplyApproval}
               onResolveIssue={onResolveIssue}
+              onOpenShadowAuditReviewQueue={handleOpenInspectorShadowAuditQueue}
               onAdvanceCurrentPriorityQueue={onAdvanceCurrentPriorityQueue}
               onSearchEntity={onSearchEntity}
               onFocusAgentTimeline={onFocusAgentTimeline}

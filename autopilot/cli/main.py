@@ -153,12 +153,21 @@ def review(
     project_path: str = typer.Argument(".", help="Project path to review locally."),
     project_id: str | None = typer.Option(None, "--project-id", help="Optional registered project id for same-repo disambiguation."),
     base_branch: str | None = typer.Option(None, "--base-branch", help="Override the detected review base branch."),
+    judge_pack: str | None = typer.Option("execution_claims", "--judge-pack", help="Judge pack to apply to the structured review."),
+    github_markdown: bool = typer.Option(False, "--github-markdown", help="Emit GitHub-ready markdown instead of rich terminal output."),
     json_output: bool = typer.Option(False, "--json", help="Emit the review payload as JSON."),
 ) -> None:
     """Run a structured local review against the current checkout."""
     from autopilot.cli.review import review as _review
 
-    _review(project_path, project_id=project_id, base_branch=base_branch, json_output=json_output)
+    _review(
+        project_path,
+        project_id=project_id,
+        base_branch=base_branch,
+        judge_pack=judge_pack,
+        github_markdown=github_markdown,
+        json_output=json_output,
+    )
 
 
 @app.command()
@@ -190,12 +199,61 @@ def trace(
     project_path: str = typer.Argument(".", help="Path to the project directory."),
     project_id: str | None = typer.Option(None, "--project-id", help="Stable project id from the dashboard."),
     limit: int = typer.Option(50, "--limit", help="Maximum number of trace entries to read."),
+    story_id: int | None = typer.Option(None, "--story-id", help="Filter replay to one story id."),
+    run_id: str | None = typer.Option(None, "--run-id", help="Filter replay to one traced run id."),
     json_output: bool = typer.Option(False, "--json", help="Emit the trace payload as JSON."),
 ) -> None:
     """Inspect the structured runtime trace for one project."""
     from autopilot.cli.trace import trace as _trace
 
-    _trace(project_path, project_id, limit, json_output)
+    _trace(
+        project_path,
+        project_id,
+        limit,
+        json_output,
+        story_id=story_id,
+        run_id=run_id,
+    )
+
+
+@app.command()
+def audit(
+    project_path: str = typer.Argument(".", help="Path to the project directory."),
+    project_id: str | None = typer.Option(None, "--project-id", help="Stable project id from the dashboard."),
+    limit: int = typer.Option(200, "--limit", help="Maximum number of audit entries to package."),
+    story_id: int | None = typer.Option(None, "--story-id", help="Filter export to one story id."),
+    run_id: str | None = typer.Option(None, "--run-id", help="Filter export to one traced run id."),
+    include_entries: bool = typer.Option(True, "--include-entries/--summary-only", help="Include packaged entries in the audit bundle."),
+    export_path: str | None = typer.Option(None, "--export", help="Write the audit bundle JSON to this path."),
+    events_log: bool = typer.Option(False, "--events-log", help="Audit the shared events log instead of one project trace."),
+    json_output: bool = typer.Option(False, "--json", help="Emit the audit payload as JSON."),
+) -> None:
+    """Inspect or export the append-only audit bundle for one project or the shared events log."""
+    from autopilot.cli.audit import audit as _audit
+
+    _audit(
+        project_path,
+        project_id,
+        limit,
+        json_output,
+        story_id=story_id,
+        run_id=run_id,
+        include_entries=include_entries,
+        export_path=export_path,
+        events_log=events_log,
+    )
+
+
+@app.command()
+def cost(
+    project_path: str = typer.Argument(".", help="Path to the project directory."),
+    project_id: str | None = typer.Option(None, "--project-id", help="Stable project id from the dashboard."),
+    json_output: bool = typer.Option(False, "--json", help="Emit the cost payload as JSON."),
+) -> None:
+    """Inspect project spend and token telemetry."""
+    from autopilot.cli.cost import cost as _cost
+
+    _cost(project_path, project_id, json_output)
 
 
 @app.command()

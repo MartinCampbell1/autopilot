@@ -44,6 +44,15 @@ def _diff_signature(diff: str) -> str:
     return hashlib.sha1(stripped.encode("utf-8")).hexdigest()
 
 
+def _prompt_type_for_attempt(*, adapter_requires_managed_profile: bool, strategy: str) -> str:
+    normalized = str(strategy or "").strip()
+    if normalized == "focused_retry":
+        return "retry_prompt"
+    if adapter_requires_managed_profile:
+        return "managed_ralph"
+    return "primary_prompt"
+
+
 class StoryOutcome(StrEnum):
     APPROVED = "approved"
     GATE_FAILED = "gate_failed"
@@ -112,6 +121,11 @@ class Orchestrator:
             console.print(f"  [blue]Worker[/blue] {profile.provider}/{profile.name} starting story #{story_id}...")
 
         adapter = get_adapter(profile.resolved_adapter_id)
+        prompt_type = _prompt_type_for_attempt(
+            adapter_requires_managed_profile=adapter.requires_managed_profile,
+            strategy=attempt_plan.strategy,
+        )
+        escalation_state = "escalated" if attempt_count > 1 and attempt_plan.attempt > 1 else "baseline"
         if attempt_plan.strategy == "focused_retry":
             success, output, rate_limited = run_retry_iteration(
                 self.project_path,
@@ -174,6 +188,12 @@ class Orchestrator:
                 elapsed_sec=round(time.time() - started_at, 2),
                 git_diff_empty=diff_empty,
                 worker_usage=worker_usage,
+                adapter_id=profile.resolved_adapter_id,
+                prompt_type=prompt_type,
+                attempt_strategy=attempt_plan.strategy,
+                attempt_number=attempt_plan.attempt,
+                attempt_count=attempt_count,
+                escalation_state=escalation_state,
             )
 
         diff_empty = check_git_diff_empty(self.project_path)
@@ -225,6 +245,12 @@ class Orchestrator:
                     git_diff_empty=diff_empty,
                     gate_results=gate_results,
                     worker_usage=worker_usage,
+                    adapter_id=profile.resolved_adapter_id,
+                    prompt_type=prompt_type,
+                    attempt_strategy=attempt_plan.strategy,
+                    attempt_number=attempt_plan.attempt,
+                    attempt_count=attempt_count,
+                    escalation_state=escalation_state,
                     quality_regression=quality_regression,
                     regression_summary=regression_summary,
                 )
@@ -265,10 +291,21 @@ class Orchestrator:
             gate_results=gate_results,
             worker_usage=worker_usage,
             critic_usage=critic_result.usage,
+            adapter_id=profile.resolved_adapter_id,
+            prompt_type=prompt_type,
+            attempt_strategy=attempt_plan.strategy,
+            attempt_number=attempt_plan.attempt,
+            attempt_count=attempt_count,
+            escalation_state=escalation_state,
             review_phases=critic_result.review_phases,
+            verification_checks=critic_result.verification_checks,
             review_results=critic_result.review_results,
             quality_regression=any(result.regression for result in gate_results if result.required),
             regression_summary=summarize_quality_regressions(gate_results),
+            judge_pack=critic_result.judge_pack,
+            judge_verdict=critic_result.judge_verdict,
+            judge_summary=critic_result.judge_summary,
+            judge_findings=critic_result.judge_findings,
         )
         if critic_result.approved:
             if verification_nudge_needed(critic_result):
@@ -371,6 +408,7 @@ class Orchestrator:
         ]
         selected_record.worker_usage = merge_usage_records(*merged_worker_usage) if merged_worker_usage else {}
         selected_record.critic_usage = merge_usage_records(*merged_critic_usage) if merged_critic_usage else {}
+        selected_record.selected_by_policy = len(attempt_records) > 1
 
         self.stuck_detector.record_iteration(selected_record)
         self.iteration_history.append(selected_record)

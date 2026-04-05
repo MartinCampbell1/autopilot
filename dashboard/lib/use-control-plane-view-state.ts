@@ -47,6 +47,7 @@ export type ControlPlaneViewSelection = {
   issueId?: string | null;
   toolPermissionRuntimeId?: string | null;
   asyncTaskId?: string | null;
+  shadowAuditId?: string | null;
   eventKey?: string | null;
 };
 
@@ -64,7 +65,8 @@ function normalizeSessionContextKind(value?: string | null): SessionContextKind 
     value === "issue" ||
     value === "event" ||
     value === "tool_permission_runtime" ||
-    value === "async_task"
+    value === "async_task" ||
+    value === "shadow_audit"
   ) {
     return value;
   }
@@ -86,6 +88,7 @@ export function useControlPlaneViewState(initialSelection?: ControlPlaneViewSele
     initialSelection?.toolPermissionRuntimeId
   );
   const initialAsyncTaskId = normalizeSelectionValue(initialSelection?.asyncTaskId);
+  const initialShadowAuditId = normalizeSelectionValue(initialSelection?.shadowAuditId);
   const initialEventKey = normalizeSelectionValue(initialSelection?.eventKey);
   const [health, setHealth] = useState<AccountHealth | null>(null);
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
@@ -135,6 +138,8 @@ export function useControlPlaneViewState(initialSelection?: ControlPlaneViewSele
     useState(initialToolPermissionRuntimeId);
   const [selectedSessionAsyncTaskId, setSelectedSessionAsyncTaskId] =
     useState(initialAsyncTaskId);
+  const [selectedSessionShadowAuditId, setSelectedSessionShadowAuditId] =
+    useState(initialShadowAuditId);
   const [selectedSessionEventKey, setSelectedSessionEventKey] = useState(initialEventKey);
   const [selectedSessionContextKind, setSelectedSessionContextKind] =
     useState<SessionContextKind>(initialSessionContextKind);
@@ -249,6 +254,8 @@ export function useControlPlaneViewState(initialSelection?: ControlPlaneViewSele
     setSelectedSessionToolPermissionRuntimeId,
     selectedSessionAsyncTaskId,
     setSelectedSessionAsyncTaskId,
+    selectedSessionShadowAuditId,
+    setSelectedSessionShadowAuditId,
     selectedSessionEventKey,
     setSelectedSessionEventKey,
     selectedSessionContextKind,

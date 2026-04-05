@@ -65,6 +65,7 @@ import { useControlPlaneSessionOverviewModel } from "@/lib/use-control-plane-ses
 import { useControlPlaneSessionLineageQueues } from "@/lib/use-control-plane-session-lineage-queues";
 import { useControlPlaneTriageInbox } from "@/lib/use-control-plane-triage-inbox";
 import { useProjectRuntimeControlClient } from "@/lib/use-project-runtime-control-client";
+import { compareShadowAuditsByRecency } from "@/lib/shadow-audit-queue";
 import {
   type ControlPlaneViewSelection,
   useControlPlaneViewState,
@@ -152,6 +153,8 @@ export function useControlPlanePageController(
     setSelectedSessionToolPermissionRuntimeId,
     selectedSessionAsyncTaskId,
     setSelectedSessionAsyncTaskId,
+    selectedSessionShadowAuditId,
+    setSelectedSessionShadowAuditId,
     selectedSessionEventKey,
     setSelectedSessionEventKey,
     selectedSessionContextKind,
@@ -529,6 +532,7 @@ export function useControlPlanePageController(
     applyApproval,
     resolveIssue,
     resolveToolPermissionRuntime,
+    resolveShadowAudit,
     applyPreviewRun,
     runAgentSuggestedCommand,
     applyControlPlan,
@@ -537,6 +541,11 @@ export function useControlPlanePageController(
     projects,
     selectedSessionId,
     selectedAgentId,
+    selectedSessionApprovalId,
+    selectedSessionIssueId,
+    selectedSessionToolPermissionRuntimeId,
+    selectedSessionShadowAuditId,
+    selectedSessionContextKind,
     selectedAgent,
     setRefreshing,
     setBusyActionKey,
@@ -545,6 +554,11 @@ export function useControlPlanePageController(
     setSelectedRunId,
     setSelectedRunResultIndex,
     setSelectedPassId,
+    setSelectedSessionApprovalId,
+    setSelectedSessionIssueId,
+    setSelectedSessionToolPermissionRuntimeId,
+    setSelectedSessionShadowAuditId,
+    setSelectedSessionContextKind,
     setEntitySearch,
     setPendingLineageAutoAdvance,
     setPendingAgentPriorityAutoAdvance,
@@ -606,6 +620,7 @@ export function useControlPlanePageController(
   const { focusRuntimeAgent } = useControlPlaneBootstrap({
     sessions,
     controlPasses,
+    overviewReady: Boolean(controlSummary && sessionSummary),
     selectedSessionId,
     selectedAgentId,
     selectedRunId,
@@ -624,6 +639,7 @@ export function useControlPlanePageController(
     setSelectedSessionIssueId,
     setSelectedSessionToolPermissionRuntimeId,
     setSelectedSessionAsyncTaskId,
+    setSelectedSessionShadowAuditId,
     setSelectedSessionEventKey,
     setSelectedSessionContextKind,
     setEntitySearch,
@@ -698,6 +714,7 @@ export function useControlPlanePageController(
         selectedSessionIssueId ||
         selectedSessionToolPermissionRuntimeId ||
         selectedSessionAsyncTaskId ||
+        selectedSessionShadowAuditId ||
         selectedSessionEventKey
     ),
     setSelectedRunId,
@@ -715,6 +732,13 @@ export function useControlPlanePageController(
       (selectedSession?.async_tasks || []).find((task) => task.id === selectedSessionAsyncTaskId) ??
       null,
     [selectedSession, selectedSessionAsyncTaskId]
+  );
+  const selectedSessionShadowAudit = useMemo(
+    () =>
+      (selectedSession?.shadow_audits || []).find(
+        (shadowAudit) => shadowAudit.id === selectedSessionShadowAuditId
+      ) ?? null,
+    [selectedSession, selectedSessionShadowAuditId]
   );
   const latestSessionPreviewRun = useMemo(() => {
     const previewRuns = linkedRuns.filter(
@@ -785,6 +809,7 @@ export function useControlPlanePageController(
     selectedRunResultIndex,
     selectedSessionToolPermissionRuntimeId,
     selectedSessionAsyncTaskId,
+    selectedSessionShadowAuditId,
     sessionLineageFilter,
     dismissedLineageQueueKeys,
     snoozedLineageQueueUntil,
@@ -807,6 +832,7 @@ export function useControlPlanePageController(
     selectedSessionApproval,
     selectedSessionIssue,
     selectedSessionToolPermissionRuntime,
+    selectedSessionShadowAudit,
     selectedSessionEvent,
     selectedSessionEventKey,
     selectedSessionContextKind,
@@ -817,6 +843,7 @@ export function useControlPlanePageController(
     setSelectedSessionIssueId,
     setSelectedSessionToolPermissionRuntimeId,
     setSelectedSessionAsyncTaskId,
+    setSelectedSessionShadowAuditId,
     setSelectedSessionEventKey,
     setSelectedSessionContextKind,
     setSelectedRunId,
@@ -845,6 +872,7 @@ export function useControlPlanePageController(
       issueId: selectedSessionIssueId || null,
       toolPermissionRuntimeId: selectedSessionToolPermissionRuntimeId || null,
       asyncTaskId: selectedSessionAsyncTaskId || null,
+      shadowAuditId: selectedSessionShadowAuditId || null,
       eventKey: selectedSessionEventKey || null,
     }),
     [
@@ -859,6 +887,7 @@ export function useControlPlanePageController(
       selectedSessionIssueId,
       selectedSessionToolPermissionRuntimeId,
       selectedSessionAsyncTaskId,
+      selectedSessionShadowAuditId,
     ]
   );
 
@@ -899,6 +928,7 @@ export function useControlPlanePageController(
       issueId: issueId || null,
       toolPermissionRuntimeId: null,
       asyncTaskId: null,
+      shadowAuditId: null,
       eventKey: matchedEvent?.key || null,
     };
   }, [
@@ -920,11 +950,23 @@ export function useControlPlanePageController(
         : null;
     const asyncTaskContext =
       selectedSessionContext.kind === "async_task" ? selectedSessionContext.task : null;
+    const shadowAuditContext =
+      selectedSessionContext.kind === "shadow_audit" ? selectedSessionContext.shadowAudit : null;
+    const linkedShadowAuditTask =
+      shadowAuditContext
+        ? (selectedSession?.async_tasks || []).find(
+            (task) =>
+              task.id === shadowAuditContext.source_id ||
+              task.id === shadowAuditContext.blocked_artifact_owner_id
+          ) || null
+        : null;
     const approvalId =
       selectedSessionContext.kind === "approval"
         ? selectedSessionContext.approval.id
         : selectedSessionContext.kind === "issue"
           ? selectedSessionContext.issue.approval_id
+          : selectedSessionContext.kind === "shadow_audit"
+            ? ""
           : selectedSessionContext.kind === "async_task"
             ? asyncTaskContext?.approval_id || ""
             : runtimeContext?.approval_id || toStringValue(eventContext?.approval_id);
@@ -933,6 +975,8 @@ export function useControlPlanePageController(
         ? selectedSessionContext.issue.id
         : selectedSessionContext.kind === "approval"
           ? selectedSessionContext.approval.issue_id
+          : selectedSessionContext.kind === "shadow_audit"
+            ? ""
           : selectedSessionContext.kind === "async_task"
             ? asyncTaskContext?.issue_id || ""
             : runtimeContext?.issue_id || toStringValue(eventContext?.issue_id);
@@ -943,9 +987,14 @@ export function useControlPlanePageController(
           ? selectedSessionContext.issue.runtime_agent_ids[0] ||
             selectedSessionContext.issue.runtime_agent_id
           : selectedSessionContext.kind === "tool_permission_runtime"
-            ? runtimeContext?.runtime_agent_ids[0] || ""
-            : selectedSessionContext.kind === "async_task"
+          ? runtimeContext?.runtime_agent_ids[0] || ""
+          : selectedSessionContext.kind === "async_task"
               ? asyncTaskContext?.runtime_agent_ids[0] || asyncTaskContext?.runtime_agent_id || ""
+            : selectedSessionContext.kind === "shadow_audit"
+              ? shadowAuditContext?.runtime_agent_ids[0] ||
+                linkedShadowAuditTask?.runtime_agent_ids[0] ||
+                linkedShadowAuditTask?.runtime_agent_id ||
+                ""
             : toStringValue(eventContext?.runtime_agent_id) ||
               toStringArray(eventContext?.runtime_agent_ids)[0];
     const directRunId =
@@ -953,7 +1002,11 @@ export function useControlPlanePageController(
         ? toStringValue(eventContext?.agent_action_run_id) || toStringValue(eventContext?.run_id)
         : selectedSessionContext.kind === "async_task"
           ? asyncTaskContext?.agent_action_run_id || ""
-        : "";
+          : selectedSessionContext.kind === "shadow_audit"
+            ? linkedShadowAuditTask?.agent_action_run_id ||
+              toStringValue(shadowAuditContext?.metadata?.agent_action_run_id) ||
+              toStringValue(shadowAuditContext?.metadata?.run_id)
+            : "";
     const relatedRunLink = resolveRunLinkFromContext(linkedRuns, {
       runId: directRunId,
       approvalId,
@@ -971,16 +1024,19 @@ export function useControlPlanePageController(
       sessionContextKind: selectedSessionContext.kind,
       approvalId:
         selectedSessionContext.kind === "tool_permission_runtime" ||
+        selectedSessionContext.kind === "shadow_audit" ||
         selectedSessionContext.kind === "async_task"
           ? null
           : approvalId || null,
       issueId:
         selectedSessionContext.kind === "tool_permission_runtime" ||
+        selectedSessionContext.kind === "shadow_audit" ||
         selectedSessionContext.kind === "async_task"
           ? null
           : issueId || null,
       toolPermissionRuntimeId: runtimeContext?.id || null,
       asyncTaskId: asyncTaskContext?.id || null,
+      shadowAuditId: shadowAuditContext?.id || null,
       eventKey:
         selectedSessionContext.kind === "event"
           ? selectedSessionEventKey || sessionEventKey(selectedSessionContext.event)
@@ -988,6 +1044,7 @@ export function useControlPlanePageController(
     };
   }, [
     linkedRuns,
+    selectedSession,
     selectedSessionContext,
     selectedSessionEventKey,
     selectedSessionId,
@@ -1007,6 +1064,7 @@ export function useControlPlanePageController(
       issueId: null,
       toolPermissionRuntimeId: null,
       asyncTaskId: null,
+      shadowAuditId: null,
       eventKey: null,
     };
   }, [selectedAgent, selectedAgentId, selectedSessionId]);
@@ -1071,6 +1129,7 @@ export function useControlPlanePageController(
     latestAgentApprovalEntry,
     latestAgentIssueEntry,
     latestAgentEventEntry,
+    latestAgentShadowAuditEntry,
     hiddenAgentTimelineEntryCount,
     persistedDismissedAgentTimelineCount,
     persistedSnoozedAgentTimelineCount,
@@ -1313,6 +1372,26 @@ export function useControlPlanePageController(
     onCancelSelectedRunAsyncSettlement: (run) => {
       void cancelRunAsyncFollowThrough(run);
     },
+    onInspectSelectedRunShadowAudit: (audit) => {
+      const linkedTask =
+        (selectedSession?.async_tasks || []).find(
+          (task) => task.id === audit.source_id || task.id === audit.blocked_artifact_owner_id
+        ) || null;
+      syncLinkedSelection({
+        shadowAuditId: audit.id,
+        asyncTaskId: linkedTask?.id,
+        runId: linkedTask?.agent_action_run_id,
+        approvalId: linkedTask?.approval_id,
+        issueId: linkedTask?.issue_id,
+        runtimeAgentId:
+          audit.runtime_agent_ids[0] ||
+          linkedTask?.runtime_agent_ids[0] ||
+          linkedTask?.runtime_agent_id,
+      });
+    },
+    onResolveSelectedRunShadowAudit: (audit) => {
+      void resolveShadowAudit(audit);
+    },
     formatScopeList,
     describeRunResult,
     toStringArray,
@@ -1396,6 +1475,9 @@ export function useControlPlanePageController(
     triageInboxItems,
     selectedTriageInboxItem,
     syncedTriageInboxItem,
+    selectedSessionShadowAudits: (selectedSession?.shadow_audits || [])
+      .filter((audit) => audit.open || audit.status === "open")
+      .sort((left, right) => compareShadowAuditsByRecency(left, right)),
     inspectTriageInboxItem,
     inspectAndAdvanceTriageInboxItem,
     advanceTriageInboxCursor,
@@ -1416,6 +1498,9 @@ export function useControlPlanePageController(
     openTriageInboxHistoryGroup,
     snoozeTriageInboxItem,
     dismissTriageInboxItem,
+    resolveShadowAudit: (audit) => {
+      return resolveShadowAudit(audit);
+    },
     runtimeAgentSectionProps: buildRuntimeAgentSectionProps({
       selectedAgentId,
       agentLoading,
@@ -1473,6 +1558,24 @@ export function useControlPlanePageController(
       refreshAsyncTask,
       waitForAsyncTaskSettlement,
       cancelAsyncTask,
+      inspectShadowAudit: (audit) => {
+        const linkedTask =
+          (selectedSession?.async_tasks || []).find(
+            (task) => task.id === audit.source_id || task.id === audit.blocked_artifact_owner_id
+          ) || null;
+        syncLinkedSelection({
+          shadowAuditId: audit.id,
+          asyncTaskId: linkedTask?.id,
+          runId: linkedTask?.agent_action_run_id,
+          approvalId: linkedTask?.approval_id,
+          issueId: linkedTask?.issue_id,
+          runtimeAgentId:
+            audit.runtime_agent_ids[0] ||
+            linkedTask?.runtime_agent_ids[0] ||
+            linkedTask?.runtime_agent_id,
+        });
+      },
+      resolveShadowAudit,
       onAllowToolPermissionRuntime: (runtime) => {
         void resolveToolPermissionRuntime(runtime, "allow");
       },
@@ -1497,6 +1600,7 @@ export function useControlPlanePageController(
         | "approvals"
         | "issues"
         | "events"
+        | "shadow_audits"
         | "attention",
       setAgentTimelineFilter: (value) => {
         setAgentTimelineFilter(value);
@@ -1536,6 +1640,10 @@ export function useControlPlanePageController(
       latestAgentIssueEntry,
       latestAgentApprovalEntry,
       latestAgentEventEntry,
+      latestAgentShadowAuditEntry,
+      activeAgentShadowAuditCount: activeAgentTimelineEntries.filter(
+        (entry) => entry.kind === "shadow_audit" && (entry.status === "open" || entry.shadowAudit?.open)
+      ).length,
       syncLinkedSelection,
       approveApproval,
       rejectApproval,
@@ -1563,7 +1671,28 @@ export function useControlPlanePageController(
     recentSessions,
     totalSessionCount: sessions.length,
     selectedSessionId,
+    selectedSession,
     sessionSummary,
+    inspectOverviewShadowAudit: (audit) => {
+      const linkedTask =
+        (selectedSession?.async_tasks || []).find(
+          (task) => task.id === audit.source_id || task.id === audit.blocked_artifact_owner_id
+        ) || null;
+      syncLinkedSelection({
+        shadowAuditId: audit.id,
+        asyncTaskId: linkedTask?.id,
+        runId: linkedTask?.agent_action_run_id,
+        approvalId: linkedTask?.approval_id,
+        issueId: linkedTask?.issue_id,
+        runtimeAgentId:
+          audit.runtime_agent_ids[0] ||
+          linkedTask?.runtime_agent_ids[0] ||
+          linkedTask?.runtime_agent_id,
+      });
+    },
+    resolveOverviewShadowAudit: (audit) => {
+      return resolveShadowAudit(audit);
+    },
   });
 
   const sessionDrilldownSectionProps = buildSessionDrilldownSectionProps({
@@ -1618,6 +1747,7 @@ export function useControlPlanePageController(
     selectedSessionIssueId,
     selectedSessionToolPermissionRuntimeId,
     selectedSessionAsyncTaskId,
+    selectedSessionShadowAuditId,
     revealSelectedSessionContextRow,
     revealSelectedSessionContextInAgentTimeline,
     selectedSessionContext,
@@ -1633,6 +1763,7 @@ export function useControlPlanePageController(
     applyApproval,
     resolveIssue,
     resolveToolPermissionRuntime,
+    resolveShadowAudit,
     onCopySessionLink: () => {
       void copyControlPlaneLink(
         {
@@ -1663,6 +1794,23 @@ export function useControlPlanePageController(
     refreshAsyncTask,
     waitForAsyncTaskSettlement,
     cancelAsyncTask,
+    inspectShadowAudit: (audit) => {
+      const linkedTask =
+        (selectedSession?.async_tasks || []).find(
+          (task) => task.id === audit.source_id || task.id === audit.blocked_artifact_owner_id
+        ) || null;
+      syncLinkedSelection({
+        shadowAuditId: audit.id,
+        asyncTaskId: linkedTask?.id,
+        runId: linkedTask?.agent_action_run_id,
+        approvalId: linkedTask?.approval_id,
+        issueId: linkedTask?.issue_id,
+        runtimeAgentId:
+          audit.runtime_agent_ids[0] ||
+          linkedTask?.runtime_agent_ids[0] ||
+          linkedTask?.runtime_agent_id,
+      });
+    },
   });
 
   const headerSectionProps = buildHeaderSectionProps({
@@ -1710,6 +1858,7 @@ export function useControlPlanePageController(
     selectedSessionIssueId,
     selectedSessionToolPermissionRuntimeId,
     selectedSessionAsyncTaskId,
+    selectedSessionShadowAuditId,
     selectedSessionEventKey,
     selectedSessionContextKind,
     headerSectionProps,

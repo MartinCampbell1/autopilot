@@ -10,6 +10,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from autopilot.core.atomic_io import atomic_write_json as _shared_atomic_write_json
 from autopilot.core.config import AutopilotConfig
 from autopilot.core.project_store import emit_project_event
 
@@ -30,10 +31,7 @@ def _utcnow_iso() -> str:
 
 
 def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temp_path = path.with_suffix(f"{path.suffix}.tmp")
-    temp_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False))
-    temp_path.replace(path)
+    _shared_atomic_write_json(path, payload)
 
 
 class OrchestratorSessionRecord(BaseModel):
@@ -52,7 +50,9 @@ class OrchestratorSessionRecord(BaseModel):
     linked_control_pass_ids: list[str] = Field(default_factory=list)
     linked_approval_ids: list[str] = Field(default_factory=list)
     linked_issue_ids: list[str] = Field(default_factory=list)
+    linked_shadow_audit_ids: list[str] = Field(default_factory=list)
     linked_runtime_agent_ids: list[str] = Field(default_factory=list)
+    linked_artifact_ids: list[str] = Field(default_factory=list)
     runtime_state: str = "idle"
     pending_action: dict[str, Any] | None = None
     created_at: str
@@ -277,7 +277,9 @@ def link_orchestrator_session_entities(
     linked_control_pass_ids: list[str] | None = None,
     linked_approval_ids: list[str] | None = None,
     linked_issue_ids: list[str] | None = None,
+    linked_shadow_audit_ids: list[str] | None = None,
     linked_runtime_agent_ids: list[str] | None = None,
+    linked_artifact_ids: list[str] | None = None,
 ) -> OrchestratorSessionRecord:
     """Merge linked entities into one orchestrator session."""
 
@@ -294,7 +296,13 @@ def link_orchestrator_session_entities(
         {*session.linked_approval_ids, *(str(item) for item in (linked_approval_ids or []) if str(item).strip())}
     )
     session.linked_issue_ids = sorted({*session.linked_issue_ids, *(str(item) for item in (linked_issue_ids or []) if str(item).strip())})
+    session.linked_shadow_audit_ids = sorted(
+        {*session.linked_shadow_audit_ids, *(str(item) for item in (linked_shadow_audit_ids or []) if str(item).strip())}
+    )
     session.linked_runtime_agent_ids = sorted(
         {*session.linked_runtime_agent_ids, *(str(item) for item in (linked_runtime_agent_ids or []) if str(item).strip())}
+    )
+    session.linked_artifact_ids = sorted(
+        {*session.linked_artifact_ids, *(str(item) for item in (linked_artifact_ids or []) if str(item).strip())}
     )
     return save_orchestrator_session(config, session)

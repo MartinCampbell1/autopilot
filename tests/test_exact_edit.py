@@ -5,7 +5,13 @@ from unittest.mock import patch
 
 from autopilot.core import exact_edit as exact_edit_module
 from autopilot.core.exact_edit import ExactEditError, append_with_fresh_snapshot, apply_exact_edit, find_actual_string
-from autopilot.core.file_snapshot_store import FileSnapshotStaleError, capture_file_snapshot
+from autopilot.core.file_snapshot_store import (
+    BOM_UTF8,
+    DEFAULT_SNAPSHOT_MAX_BYTES,
+    FileSnapshotStaleError,
+    FileSnapshotTooLargeError,
+    capture_file_snapshot,
+)
 from autopilot.core.secret_scan import SecretScanError
 
 
@@ -54,6 +60,18 @@ def test_apply_exact_edit_updates_file_when_snapshot_is_current(tmp_path: Path) 
     assert path.read_text() == "gamma\nbeta\n"
 
 
+def test_apply_exact_edit_preserves_utf8_bom(tmp_path: Path) -> None:
+    path = tmp_path / "demo.txt"
+    path.write_bytes(BOM_UTF8 + "alpha\n".encode("utf-8"))
+    snapshot = capture_file_snapshot(path)
+
+    updated = apply_exact_edit(path, snapshot, old_string="alpha\n", new_string="beta\n")
+
+    assert updated == "beta\n"
+    assert path.read_bytes().startswith(BOM_UTF8)
+    assert path.read_text(encoding="utf-8-sig") == "beta\n"
+
+
 def test_append_with_fresh_snapshot_retries_after_stale_write(tmp_path: Path) -> None:
     path = tmp_path / "demo.txt"
     path.write_text("alpha\n")
@@ -89,6 +107,19 @@ def test_append_with_fresh_snapshot_bootstraps_missing_file_with_initial_content
 
     assert updated == "# Header\n\n- item\n"
     assert path.read_text() == "# Header\n\n- item\n"
+
+
+def test_capture_file_snapshot_rejects_oversized_file(tmp_path: Path, monkeypatch) -> None:
+    path = tmp_path / "large.txt"
+    path.write_text("x" * 32)
+    monkeypatch.setattr("autopilot.core.file_snapshot_store.DEFAULT_SNAPSHOT_MAX_BYTES", 16)
+
+    try:
+        capture_file_snapshot(path)
+    except FileSnapshotTooLargeError as exc:
+        assert "exact-edit safety limit" in str(exc)
+        return
+    raise AssertionError(f"Expected oversized snapshot rejection for files over {DEFAULT_SNAPSHOT_MAX_BYTES} bytes.")
 
 
 def test_apply_exact_edit_rejects_obvious_secret_material(tmp_path: Path) -> None:

@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from autopilot.core.models import CriticResult, ReviewPhaseResult, VerificationCheck
+from autopilot.core.verification_agent import require_adversarial_probe
 
 VERIFICATION_NUDGE_FEEDBACK = (
     "Verification evidence is missing for task closure. Run concrete verification commands against the changed "
@@ -18,7 +19,11 @@ def _has_command_backed_evidence(checks: Sequence[VerificationCheck]) -> bool:
 
 
 def _result_is_verification_backed(verdict: str, checks: Sequence[VerificationCheck]) -> bool:
-    return str(verdict).strip().upper() == "PASS" and _has_command_backed_evidence(checks)
+    return (
+        str(verdict).strip().upper() == "PASS"
+        and _has_command_backed_evidence(checks)
+        and require_adversarial_probe(checks)
+    )
 
 
 def verification_nudge_needed(result: CriticResult) -> bool:

@@ -27,7 +27,8 @@ function parseSessionContextKind(
     value === "issue" ||
     value === "event" ||
     value === "tool_permission_runtime" ||
-    value === "async_task"
+    value === "async_task" ||
+    value === "shadow_audit"
   ) {
     return value;
   }
@@ -80,6 +81,9 @@ function ControlPlanePageInner({
       if (selection.asyncTaskId) next.set("async_task", selection.asyncTaskId);
       else next.delete("async_task");
 
+      if (selection.shadowAuditId) next.set("shadow_audit", selection.shadowAuditId);
+      else next.delete("shadow_audit");
+
       if (selection.eventKey) next.set("event", selection.eventKey);
       else next.delete("event");
 
@@ -103,6 +107,7 @@ function ControlPlanePageInner({
     selectedSessionIssueId,
     selectedSessionToolPermissionRuntimeId,
     selectedSessionAsyncTaskId,
+    selectedSessionShadowAuditId,
     selectedSessionEventKey,
     selectedSessionContextKind,
     headerSectionProps,
@@ -149,6 +154,9 @@ function ControlPlanePageInner({
     if (selectedSessionAsyncTaskId) next.set("async_task", selectedSessionAsyncTaskId);
     else next.delete("async_task");
 
+    if (selectedSessionShadowAuditId) next.set("shadow_audit", selectedSessionShadowAuditId);
+    else next.delete("shadow_audit");
+
     if (selectedSessionEventKey) next.set("event", selectedSessionEventKey);
     else next.delete("event");
 
@@ -169,6 +177,7 @@ function ControlPlanePageInner({
     selectedSessionIssueId,
     selectedSessionToolPermissionRuntimeId,
     selectedSessionAsyncTaskId,
+    selectedSessionShadowAuditId,
     selectedSessionId,
   ]);
 
@@ -206,6 +215,7 @@ function ControlPlanePageContent() {
       issueId: resolvedSearchParams.get("issue") ?? null,
       toolPermissionRuntimeId: resolvedSearchParams.get("tool_permission_runtime") ?? null,
       asyncTaskId: resolvedSearchParams.get("async_task") ?? null,
+      shadowAuditId: resolvedSearchParams.get("shadow_audit") ?? null,
       eventKey: resolvedSearchParams.get("event") ?? null,
     }),
     [resolvedSearchParams]
@@ -223,6 +233,7 @@ function ControlPlanePageContent() {
         initialSelection.issueId || "",
         initialSelection.toolPermissionRuntimeId || "",
         initialSelection.asyncTaskId || "",
+        initialSelection.shadowAuditId || "",
         initialSelection.eventKey || "",
       ].join("|"),
     [initialSelection]

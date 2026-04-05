@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import uuid
 from typing import Any
 
@@ -17,6 +18,7 @@ from autopilot.core.approval_runtime import (
     wait_for_approval_runtime_resolution,
 )
 from autopilot.core.structured_runtime import get_active_structured_io
+from autopilot.core.shadow_audit import compose_shadow_audit_decision, create_shadow_audit_record
 from autopilot.core.tool_contracts import (
     ToolDef,
     ToolPermissionContext,
@@ -52,6 +54,62 @@ class ToolRunResult(BaseModel):
     approval_runtime_id: str = ""
     tool_result: ToolResult | None = None
     hooks: list[HookExecutionRecord] = Field(default_factory=list)
+
+
+def _quarantine_tool_result_if_needed(
+    *,
+    tool: ToolDef,
+    tool_result: ToolResult,
+    use_context: ToolUseContext,
+    tool_use_id: str,
+) -> tuple[str, str, str]:
+    rendered_content = json.dumps(
+        {
+            "tool_name": tool.name,
+            "tool_use_id": tool_use_id,
+            "status": str(tool_result.status or "ok"),
+            "message": str(tool_result.message or ""),
+            "payload": dict(tool_result.payload or {}),
+            "metadata": dict(tool_result.metadata or {}),
+        },
+        indent=2,
+        ensure_ascii=False,
+    )
+    decision, content, metadata_updates = compose_shadow_audit_decision(
+        tool_result.metadata,
+        payload=dict(tool_result.payload or {}),
+        content=rendered_content,
+    )
+    if decision is None:
+        return "", "", ""
+
+    summary = str(decision.summary or "").strip() or f"Tool `{tool.name}` output was quarantined by shadow audit."
+    rendered_content = content or rendered_content
+
+    audit_record_id = ""
+    if use_context.config is not None:
+        audit_record = create_shadow_audit_record(
+            use_context.config,
+            project_id=str(use_context.project_id or "").strip(),
+            orchestrator_session_id=str(use_context.orchestrator_session_id or "").strip(),
+            runtime_agent_ids=list(use_context.runtime_agent_ids),
+            source_kind="tool_result",
+            source_name=tool.name,
+            source_id=tool_use_id,
+            action=decision.action,
+            summary=summary,
+            findings=list(decision.findings),
+            content=rendered_content,
+            metadata={
+                "tool_name": tool.name,
+                "tool_use_id": tool_use_id,
+                "tool_status": str(tool_result.status or "ok"),
+                **metadata_updates,
+            },
+        )
+        audit_record_id = audit_record.id
+
+    return summary, audit_record_id, decision.action
 
 
 def _coerce_optional_bool(value: Any) -> bool | None:
@@ -939,6 +997,29 @@ def run_tool_use(
         if output.message:
             tool_result.message = output.message
     tool_result = store_large_tool_result(tool.name, tool_result, use_context)
+    quarantine_message, shadow_audit_id, shadow_audit_action = _quarantine_tool_result_if_needed(
+        tool=tool,
+        tool_result=tool_result,
+        use_context=use_context,
+        tool_use_id=tool_use_id,
+    )
+    if quarantine_message:
+        blocked_result = None
+        if shadow_audit_id:
+            blocked_result = ToolResult(
+                status="quarantined",
+                message=quarantine_message,
+                metadata={"shadow_audit_id": shadow_audit_id, "shadow_audit_action": shadow_audit_action},
+            )
+        return ToolRunResult(
+            status="quarantined",
+            tool_name=tool.name,
+            message=quarantine_message,
+            input=normalized_input,
+            permission=permission_decision,
+            tool_result=blocked_result,
+            hooks=hook_records,
+        )
 
     return ToolRunResult(
         status=str(tool_result.status or "ok"),

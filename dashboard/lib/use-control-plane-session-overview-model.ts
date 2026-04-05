@@ -9,6 +9,10 @@ import {
   runMatchesSearch,
   sessionMatchesSearch,
 } from "@/lib/control-plane-data";
+import {
+  sortApprovalsBySessionOrder,
+  sortIssuesBySessionOrder,
+} from "@/lib/control-plane-decision-ordering";
 import { sessionEventKey, withSelectedItem } from "@/lib/control-plane-linking";
 import { matchesEventFilter, matchesRunFilter } from "@/lib/control-plane-triage";
 import type {
@@ -100,10 +104,7 @@ export function useControlPlaneSessionOverviewModel({
   }, [controlPasses, selectedPassId, selectedSession]);
 
   const linkedApprovals = useMemo<ExecutionApprovalRecord[]>(
-    () =>
-      [...(selectedSession?.approvals || [])].sort((left, right) =>
-        right.created_at.localeCompare(left.created_at)
-      ),
+    () => sortApprovalsBySessionOrder(selectedSession?.approvals || []),
     [selectedSession]
   );
 
@@ -121,10 +122,7 @@ export function useControlPlaneSessionOverviewModel({
   );
 
   const linkedIssues = useMemo<ExecutionIssueRecord[]>(
-    () =>
-      [...(selectedSession?.issues || [])].sort((left, right) =>
-        right.created_at.localeCompare(left.created_at)
-      ),
+    () => sortIssuesBySessionOrder(selectedSession?.issues || []),
     [selectedSession]
   );
 

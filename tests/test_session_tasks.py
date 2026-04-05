@@ -29,6 +29,25 @@ def test_verification_nudge_needed_accepts_pass_with_evidence() -> None:
     assert verification_nudge_needed(result) is False
 
 
+def test_verification_nudge_needed_rejects_pass_without_adversarial_probe() -> None:
+    result = CriticResult(
+        approved=True,
+        feedback="",
+        raw_output="VERDICT: PASS",
+        verdict="PASS",
+        verification_checks=[
+            VerificationCheck(
+                name="unit tests",
+                command="pytest -q",
+                output="3 passed",
+                status="PASS",
+            )
+        ],
+    )
+
+    assert verification_nudge_needed(result) is True
+
+
 def test_verification_nudge_needed_requires_evidence_for_approved_review_phases() -> None:
     result = CriticResult(
         approved=True,

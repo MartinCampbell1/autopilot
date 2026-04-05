@@ -143,9 +143,15 @@ export function useControlPlaneRevealFlows({
       const approvalId =
         entry.approval?.id ||
         entry.issue?.approval_id ||
-        toStringValue(entry.event?.approval_id);
-      const issueId = entry.issue?.id || toStringValue(entry.event?.issue_id);
+        toStringValue(entry.event?.approval_id) ||
+        toStringValue(entry.shadowAudit?.metadata?.approval_id);
+      const issueId =
+        entry.issue?.id ||
+        toStringValue(entry.event?.issue_id) ||
+        toStringValue(entry.shadowAudit?.metadata?.issue_id);
       const eventToken =
+        entry.shadowAudit?.id ||
+        entry.shadowAuditTaskId ||
         toStringValue(entry.event?.event) ||
         toStringValue(entry.event?.message) ||
         entry.id;

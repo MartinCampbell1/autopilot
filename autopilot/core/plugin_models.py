@@ -207,3 +207,10 @@ class PluginMcpServerDescriptor(BaseModel):
     missing_env_vars: list[str] = Field(default_factory=list)
     missing_option_keys: list[str] = Field(default_factory=list)
     sensitive_option_keys: list[str] = Field(default_factory=list)
+    policy_action: str = "allow"
+    policy_status: str = "ok"
+    policy_summary: str = ""
+    policy_flags: list[str] = Field(default_factory=list)
+    wrapper_mode: str = ""
+    recommended_runtime_profile: str = ""
+    runtime_active: bool = True

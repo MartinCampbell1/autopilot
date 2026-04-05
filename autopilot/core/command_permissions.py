@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import re
-import shlex
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
+from autopilot.core.bash_ast import BashParseError, parse_bash_command
+from autopilot.core.command_safety import validate_command_safety
 from autopilot.core.tool_contracts import ToolDef
 from autopilot.core.tool_contracts import ToolPermissionContext
 
@@ -30,7 +31,6 @@ DANGEROUS_ALLOW_TOOL_PATTERNS = (
     "python_exec*",
 )
 PERMISSION_RULE_COLON_PATTERN = re.compile(r"^(?P<tool>[A-Za-z0-9._*-]+)\s*:\s*(?P<content>.+)$")
-SHELL_ASSIGNMENT_PREFIX = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=.*$")
 SHELL_INTERPRETERS = {"bash", "sh", "zsh", "ksh"}
 INLINE_CODE_TOOLS = {"python", "python3", "node", "ruby", "perl"}
 REMOTE_ACCESS_TOOLS = {"ssh", "scp", "sftp"}
@@ -46,6 +46,45 @@ class ProjectedCommandPermission:
     pattern_id: str
     message: str
     reasons: tuple[str, ...] = ()
+
+
+def _normalize_projected_command_reason(reason: str) -> str:
+    normalized = " ".join(str(reason or "").strip().split())
+    if not normalized:
+        return "Projected shell command is not trusted."
+    if normalized.startswith("Gate command "):
+        return "Projected shell command " + normalized[len("Gate command ") :]
+    if normalized.startswith("Shell command "):
+        return "Projected shell command " + normalized[len("Shell command ") :]
+    return normalized
+
+
+def _check_fail_closed_command_safety(raw_command: str) -> ProjectedCommandPermission | None:
+    try:
+        ast = parse_bash_command(raw_command)
+    except BashParseError as exc:
+        message = _normalize_projected_command_reason(str(exc))
+        return ProjectedCommandPermission(
+            behavior="deny",
+            source="workspace_policy",
+            pattern_id="command_safety_parse_error",
+            message=message,
+            reasons=(message,),
+        )
+
+    violations = validate_command_safety(raw_command, ast=ast)
+    if not violations:
+        return None
+
+    first = violations[0]
+    message = _normalize_projected_command_reason(first.reason)
+    return ProjectedCommandPermission(
+        behavior="deny",
+        source="workspace_policy",
+        pattern_id=f"command_safety_{first.kind}",
+        message=message,
+        reasons=(message,),
+    )
 
 
 def normalize_permission_mode(mode: str) -> str:
@@ -121,17 +160,6 @@ def _command_candidates(tool: ToolDef, tool_input: dict[str, Any] | None) -> lis
     return [item for item in candidates if item]
 
 
-def _strip_env_prefix(tokens: list[str]) -> list[str]:
-    index = 0
-    while index < len(tokens) and SHELL_ASSIGNMENT_PREFIX.match(tokens[index]):
-        index += 1
-    if index < len(tokens) and Path(tokens[index]).name in {"env", "/usr/bin/env"}:
-        index += 1
-        while index < len(tokens) and SHELL_ASSIGNMENT_PREFIX.match(tokens[index]):
-            index += 1
-    return tokens[index:]
-
-
 def normalize_shell_command(command: str) -> str:
     """Return a normalized shell command string for exact/prefix matching."""
 
@@ -139,13 +167,12 @@ def normalize_shell_command(command: str) -> str:
     if not raw_value:
         return ""
     try:
-        tokens = shlex.split(raw_value, posix=True)
-    except ValueError:
+        ast = parse_bash_command(raw_value)
+    except BashParseError:
         return " ".join(raw_value.split())
-    normalized = _strip_env_prefix(tokens)
-    if not normalized:
+    if not ast.executable_argv:
         return ""
-    return " ".join(normalized)
+    return " ".join(ast.executable_argv)
 
 
 def normalize_rule_content(rule_content: str | None) -> str:
@@ -239,12 +266,11 @@ def check_projected_command_permission(
         return None
     raw_command = candidates[0]
     normalized_command = normalize_shell_command(raw_command)
-    if not normalized_command:
-        return None
 
     try:
-        tokens = _strip_env_prefix(shlex.split(raw_command, posix=True))
-    except ValueError:
+        ast = parse_bash_command(raw_command)
+        tokens = list(ast.executable_argv)
+    except BashParseError:
         tokens = normalized_command.split()
     if not tokens:
         return None
@@ -263,6 +289,13 @@ def check_projected_command_permission(
             message=message,
             reasons=(message,),
         )
+
+    safety_decision = _check_fail_closed_command_safety(raw_command)
+    if safety_decision is not None:
+        return safety_decision
+
+    if not normalized_command:
+        return None
 
     if command_name in SHELL_INTERPRETERS and any(arg in {"-c", "-lc"} for arg in args):
         message = "Projected shell command delegates execution to a nested shell interpreter."

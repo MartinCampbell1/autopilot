@@ -2,6 +2,7 @@ import type {
   ExecutionApprovalRecord,
   ExecutionAgentActionRunRecord,
   ExecutionIssueRecord,
+  ExecutionShadowAuditRecord,
 } from "@/lib/types";
 
 export type SessionContextKind =
@@ -10,7 +11,8 @@ export type SessionContextKind =
   | "issue"
   | "event"
   | "tool_permission_runtime"
-  | "async_task";
+  | "async_task"
+  | "shadow_audit";
 export type LineageQueueKind = "attention" | "decisions";
 export type TriagePriority = "critical" | "high" | "normal";
 export type AgentPriorityQueueKind = "critical" | "high";
@@ -27,7 +29,7 @@ export type AgentScopedOutcome = {
 };
 
 export type AgentTimelineEntry = {
-  kind: "approval" | "issue" | "event";
+  kind: "approval" | "issue" | "event" | "shadow_audit";
   id: string;
   timestamp: string;
   status: string;
@@ -37,6 +39,9 @@ export type AgentTimelineEntry = {
   approval?: ExecutionApprovalRecord;
   issue?: ExecutionIssueRecord;
   event?: Record<string, unknown>;
+  shadowAudit?: ExecutionShadowAuditRecord;
+  shadowAuditTaskId?: string;
+  shadowAuditRunId?: string;
 };
 
 export type PendingAgentTimelineTarget = {
@@ -44,6 +49,7 @@ export type PendingAgentTimelineTarget = {
   runId: string;
   approvalId: string;
   issueId: string;
+  shadowAuditId?: string;
 };
 
 export type LinkedSelectionContext = {
@@ -53,6 +59,7 @@ export type LinkedSelectionContext = {
   issueId?: string;
   toolPermissionRuntimeId?: string;
   asyncTaskId?: string;
+  shadowAuditId?: string;
   runtimeAgentId?: string;
   event?: Record<string, unknown> | null;
 };
@@ -83,6 +90,8 @@ export type SessionLineageEntry = {
   asyncTaskId: string;
   asyncTaskStatus: string;
   asyncTaskCommand: string;
+  shadowAuditId: string;
+  openShadowAuditCount: number;
 };
 
 export type SessionLineageTrait = {
@@ -102,6 +111,8 @@ export type TriageInboxItem = {
   statusClassName: string;
   priority: TriagePriority;
   syncedWithSelection: boolean;
+  shadowAuditId?: string;
+  shadowAuditCount?: number;
   onInspect: () => void;
   onSnooze: () => void;
   onDismiss: () => void;

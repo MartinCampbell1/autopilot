@@ -24,6 +24,7 @@ import type {
   ExecutionApprovalRecord,
   ExecutionIssueRecord,
   ExecutionRuntimeAgentTaskRecord,
+  ExecutionShadowAuditRecord,
   OrchestratorSessionDetail,
   ToolPermissionRuntimeRecord,
 } from "@/lib/types";
@@ -33,6 +34,7 @@ export type SelectedSessionContextValue =
   | { kind: "issue"; issue: ExecutionIssueRecord }
   | { kind: "tool_permission_runtime"; runtime: ToolPermissionRuntimeRecord }
   | { kind: "async_task"; task: ExecutionRuntimeAgentTaskRecord }
+  | { kind: "shadow_audit"; shadowAudit: ExecutionShadowAuditRecord }
   | { kind: "event"; event: Record<string, unknown> };
 
 type UseControlPlaneLinkedSelectionArgs = {
@@ -42,6 +44,7 @@ type UseControlPlaneLinkedSelectionArgs = {
   selectedSessionIssue: ExecutionIssueRecord | null;
   selectedSessionToolPermissionRuntime: ToolPermissionRuntimeRecord | null;
   selectedSessionAsyncTask: ExecutionRuntimeAgentTaskRecord | null;
+  selectedSessionShadowAudit: ExecutionShadowAuditRecord | null;
   selectedSessionEvent: Record<string, unknown> | null;
   selectedSessionEventKey: string;
   selectedSessionContextKind: SessionContextKind;
@@ -51,6 +54,7 @@ type UseControlPlaneLinkedSelectionArgs = {
   setSelectedSessionIssueId: Dispatch<SetStateAction<string>>;
   setSelectedSessionToolPermissionRuntimeId: Dispatch<SetStateAction<string>>;
   setSelectedSessionAsyncTaskId: Dispatch<SetStateAction<string>>;
+  setSelectedSessionShadowAuditId: Dispatch<SetStateAction<string>>;
   setSelectedSessionEventKey: Dispatch<SetStateAction<string>>;
   setSelectedSessionContextKind: Dispatch<SetStateAction<SessionContextKind>>;
   setSelectedRunId: Dispatch<SetStateAction<string>>;
@@ -74,6 +78,7 @@ export function useControlPlaneLinkedSelection({
   selectedSessionIssue,
   selectedSessionToolPermissionRuntime,
   selectedSessionAsyncTask,
+  selectedSessionShadowAudit,
   selectedSessionEvent,
   selectedSessionEventKey,
   selectedSessionContextKind,
@@ -83,6 +88,7 @@ export function useControlPlaneLinkedSelection({
   setSelectedSessionIssueId,
   setSelectedSessionToolPermissionRuntimeId,
   setSelectedSessionAsyncTaskId,
+  setSelectedSessionShadowAuditId,
   setSelectedSessionEventKey,
   setSelectedSessionContextKind,
   setSelectedRunId,
@@ -104,6 +110,7 @@ export function useControlPlaneLinkedSelection({
       const issueId = toStringValue(context.issueId);
       const toolPermissionRuntimeId = toStringValue(context.toolPermissionRuntimeId);
       const asyncTaskId = toStringValue(context.asyncTaskId);
+      const shadowAuditId = toStringValue(context.shadowAuditId);
       const resolvedRunLink = resolveRunLinkFromContext(linkedRuns, context);
       const runId = resolvedRunLink?.run.id || toStringValue(context.runId);
       const resultIndex =
@@ -126,11 +133,20 @@ export function useControlPlaneLinkedSelection({
         runtimeAgentId,
       });
 
-      if (toolPermissionRuntimeId) {
+      if (shadowAuditId) {
+        setSelectedSessionApprovalId("");
+        setSelectedSessionIssueId("");
+        setSelectedSessionToolPermissionRuntimeId("");
+        setSelectedSessionAsyncTaskId("");
+        setSelectedSessionShadowAuditId(shadowAuditId);
+        setSelectedSessionEventKey("");
+        setSelectedSessionContextKind("shadow_audit");
+      } else if (toolPermissionRuntimeId) {
         setSelectedSessionApprovalId("");
         setSelectedSessionIssueId("");
         setSelectedSessionToolPermissionRuntimeId(toolPermissionRuntimeId);
         setSelectedSessionAsyncTaskId("");
+        setSelectedSessionShadowAuditId("");
         setSelectedSessionEventKey("");
         setSelectedSessionContextKind("tool_permission_runtime");
       } else if (asyncTaskId) {
@@ -138,6 +154,7 @@ export function useControlPlaneLinkedSelection({
         setSelectedSessionIssueId("");
         setSelectedSessionToolPermissionRuntimeId("");
         setSelectedSessionAsyncTaskId(asyncTaskId);
+        setSelectedSessionShadowAuditId("");
         setSelectedSessionEventKey("");
         setSelectedSessionContextKind("async_task");
       } else {
@@ -145,6 +162,7 @@ export function useControlPlaneLinkedSelection({
         setSelectedSessionIssueId(issueId);
         setSelectedSessionToolPermissionRuntimeId("");
         setSelectedSessionAsyncTaskId("");
+        setSelectedSessionShadowAuditId("");
         setSelectedSessionEventKey(matchedEvent?.key || "");
         setSelectedSessionContextKind(
           context.event
@@ -174,6 +192,7 @@ export function useControlPlaneLinkedSelection({
           runId,
           approvalId,
           issueId,
+          shadowAuditId,
         });
       }
     },
@@ -192,6 +211,7 @@ export function useControlPlaneLinkedSelection({
       setSelectedSessionEventKey,
       setSelectedSessionIssueId,
       setSelectedSessionAsyncTaskId,
+      setSelectedSessionShadowAuditId,
       setSelectedSessionToolPermissionRuntimeId,
     ]
   );
@@ -205,6 +225,7 @@ export function useControlPlaneLinkedSelection({
         issueId: entry.issueId,
         toolPermissionRuntimeId: entry.toolPermissionRuntimeId,
         asyncTaskId: entry.asyncTaskId,
+        shadowAuditId: entry.shadowAuditId,
         runtimeAgentId: entry.runtimeAgentId,
         event: entry.event,
       });
@@ -258,6 +279,9 @@ export function useControlPlaneLinkedSelection({
           (selectedSessionAsyncTask.issue_id &&
             selectedSessionAsyncTask.issue_id === issueId))
     );
+    const preservesSelectedShadowAudit = Boolean(
+      selectedSessionShadowAudit && selectedSessionContextKind === "shadow_audit"
+    );
 
     setSelectedSessionApprovalId(approvalId);
     setSelectedSessionIssueId(issueId);
@@ -265,8 +289,12 @@ export function useControlPlaneLinkedSelection({
       preservesSelectedToolPermissionRuntime ? current : ""
     );
     setSelectedSessionAsyncTaskId((current) => (preservesSelectedAsyncTask ? current : ""));
+    setSelectedSessionShadowAuditId((current) => (preservesSelectedShadowAudit ? current : ""));
     setSelectedSessionEventKey(matchedEvent?.key || "");
     setSelectedSessionContextKind((current) => {
+      if (preservesSelectedShadowAudit && selectedSessionShadowAudit) {
+        return "shadow_audit";
+      }
       if (preservesSelectedToolPermissionRuntime && selectedSessionToolPermissionRuntime) {
         return "tool_permission_runtime";
       }
@@ -288,6 +316,7 @@ export function useControlPlaneLinkedSelection({
         runId: selectedRun.id,
         approvalId,
         issueId,
+        shadowAuditId: preservesSelectedShadowAudit ? selectedSessionShadowAudit?.id : "",
       });
     }
   }, [
@@ -300,8 +329,11 @@ export function useControlPlaneLinkedSelection({
     setSelectedSessionEventKey,
     setSelectedSessionIssueId,
     setSelectedSessionAsyncTaskId,
+    setSelectedSessionShadowAuditId,
     setSelectedSessionToolPermissionRuntimeId,
     selectedSessionAsyncTask,
+    selectedSessionContextKind,
+    selectedSessionShadowAudit,
     selectedSessionToolPermissionRuntime,
   ]);
 
@@ -352,8 +384,14 @@ export function useControlPlaneLinkedSelection({
     if (selectedSessionContextKind === "async_task" && selectedSessionAsyncTask) {
       return { kind: "async_task", task: selectedSessionAsyncTask };
     }
+    if (selectedSessionContextKind === "shadow_audit" && selectedSessionShadowAudit) {
+      return { kind: "shadow_audit", shadowAudit: selectedSessionShadowAudit };
+    }
     if (selectedSessionContextKind === "event" && selectedSessionEvent) {
       return { kind: "event", event: selectedSessionEvent };
+    }
+    if (selectedSessionShadowAudit) {
+      return { kind: "shadow_audit", shadowAudit: selectedSessionShadowAudit };
     }
     if (selectedSessionIssue) {
       return { kind: "issue", issue: selectedSessionIssue };
@@ -377,6 +415,7 @@ export function useControlPlaneLinkedSelection({
     selectedSessionEvent,
     selectedSessionIssue,
     selectedSessionAsyncTask,
+    selectedSessionShadowAudit,
     selectedSessionToolPermissionRuntime,
   ]);
 
@@ -409,6 +448,12 @@ export function useControlPlaneLinkedSelection({
       setPendingSessionRowDomId(sessionContextRowDomId("async_task", selectedSessionContext.task.id));
       return;
     }
+    if (selectedSessionContext.kind === "shadow_audit") {
+      setPendingSessionRowDomId(
+        sessionContextRowDomId("shadow_audit", selectedSessionContext.shadowAudit.id)
+      );
+      return;
+    }
     setPendingSessionRowDomId(sessionContextRowDomId("issue", selectedSessionContext.issue.id));
   }, [
     selectedSessionContext,
@@ -420,6 +465,14 @@ export function useControlPlaneLinkedSelection({
 
   const revealSelectedSessionContextInAgentTimeline = useCallback(() => {
     if (!selectedSessionContext) return;
+    const linkedShadowAuditTask =
+      selectedSessionContext.kind === "shadow_audit"
+        ? (selectedSession?.async_tasks || []).find(
+            (task) =>
+              task.id === selectedSessionContext.shadowAudit.source_id ||
+              task.id === selectedSessionContext.shadowAudit.blocked_artifact_owner_id
+          ) || null
+        : null;
     const approvalId =
       selectedSessionContext.kind === "approval"
         ? selectedSessionContext.approval.id
@@ -427,6 +480,9 @@ export function useControlPlaneLinkedSelection({
           ? selectedSessionContext.runtime.approval_id
           : selectedSessionContext.kind === "async_task"
             ? selectedSessionContext.task.approval_id
+        : selectedSessionContext.kind === "shadow_audit"
+          ? linkedShadowAuditTask?.approval_id ||
+            toStringValue(selectedSessionContext.shadowAudit.metadata?.approval_id)
         : selectedSessionContext.kind === "issue"
           ? selectedSessionContext.issue.approval_id
           : toStringValue(selectedSessionContext.event.approval_id);
@@ -439,6 +495,9 @@ export function useControlPlaneLinkedSelection({
           ? selectedSessionContext.approval.issue_id
           : selectedSessionContext.kind === "async_task"
             ? selectedSessionContext.task.issue_id
+          : selectedSessionContext.kind === "shadow_audit"
+            ? linkedShadowAuditTask?.issue_id ||
+              toStringValue(selectedSessionContext.shadowAudit.metadata?.issue_id)
           : toStringValue(selectedSessionContext.event.issue_id);
     const runtimeAgentId =
       selectedSessionContext.kind === "approval"
@@ -448,6 +507,12 @@ export function useControlPlaneLinkedSelection({
           : selectedSessionContext.kind === "async_task"
             ? selectedSessionContext.task.runtime_agent_ids[0] ||
               selectedSessionContext.task.runtime_agent_id
+        : selectedSessionContext.kind === "shadow_audit"
+          ? selectedSessionContext.shadowAudit.runtime_agent_ids[0] ||
+            linkedShadowAuditTask?.runtime_agent_ids[0] ||
+            linkedShadowAuditTask?.runtime_agent_id ||
+            toStringValue(selectedSessionContext.shadowAudit.metadata?.runtime_agent_id) ||
+            toStringArray(selectedSessionContext.shadowAudit.metadata?.runtime_agent_ids)[0]
         : selectedSessionContext.kind === "issue"
           ? selectedSessionContext.issue.runtime_agent_ids[0] ||
             selectedSessionContext.issue.runtime_agent_id
@@ -468,6 +533,10 @@ export function useControlPlaneLinkedSelection({
           ? selectedSessionContext.runtime.id
           : "",
       asyncTaskId: selectedSessionContext.kind === "async_task" ? selectedSessionContext.task.id : "",
+      shadowAuditId:
+        selectedSessionContext.kind === "shadow_audit"
+          ? selectedSessionContext.shadowAudit.id
+          : "",
       runtimeAgentId,
       runId:
         selectedSessionContext.kind === "event"
@@ -475,10 +544,14 @@ export function useControlPlaneLinkedSelection({
             toStringValue(selectedSessionContext.event.run_id)
           : selectedSessionContext.kind === "async_task"
             ? selectedSessionContext.task.agent_action_run_id
+          : selectedSessionContext.kind === "shadow_audit"
+            ? linkedShadowAuditTask?.agent_action_run_id ||
+              toStringValue(selectedSessionContext.shadowAudit.metadata?.agent_action_run_id) ||
+              toStringValue(selectedSessionContext.shadowAudit.metadata?.run_id)
           : "",
       event: selectedSessionContext.kind === "event" ? selectedSessionContext.event : null,
     });
-  }, [selectedSessionContext, setErrorMessage, syncLinkedSelection]);
+  }, [selectedSession, selectedSessionContext, setErrorMessage, syncLinkedSelection]);
 
   return {
     syncLinkedSelection,

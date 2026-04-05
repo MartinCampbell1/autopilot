@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 import time
@@ -10,10 +11,13 @@ import uuid
 from pathlib import Path
 from typing import Callable
 
-from autopilot.core.adapters import AdapterExecutionRequest, AdapterMode, get_adapter
+from autopilot.core.context_manager import build_compacted_prompt, render_bounded_feedback
 from autopilot.core.exact_edit import ExactEditError, append_with_fresh_snapshot, apply_exact_edit
 from autopilot.core.file_snapshot_store import FileSnapshotError, capture_file_snapshot
+from autopilot.core.knowledge_distiller import distill_session_memory
 from autopilot.core.models import GateResult, Profile, is_rate_limited
+from autopilot.core.session_memory import append_working_log
+from autopilot.core.streaming_orchestrator import StreamingExecutionSpec, run_streaming_execution
 
 IGNORED_PREFIXES = (".agents/", ".ralph/")
 TEMPLATE_DIR = Path(__file__).parent.parent / "templates"
@@ -59,6 +63,48 @@ PROMPT_BUILD=".agents/ralph/PROMPT_build.md"
 """
 DEFAULT_PROGRESS_INTERVAL_SEC = 15
 QUALITY_RATCHET_PATH = ".ralph/quality-ratchet.json"
+
+
+def _story_id_from_prompt(prompt: str) -> int | None:
+    match = re.search(r"Selected story #(\d+)", str(prompt or ""))
+    if match is None:
+        return None
+    try:
+        return int(match.group(1))
+    except ValueError:
+        return None
+
+
+def _record_iteration_memory(
+    project_path: Path,
+    *,
+    prompt: str,
+    output: str,
+    success: bool,
+    rate_limited: bool,
+    source: str,
+) -> None:
+    story_id = _story_id_from_prompt(prompt)
+    prompt_summary = " ".join(str(prompt or "").split())[:240].strip()
+    append_working_log(
+        project_path,
+        kind="prompt_dispatched",
+        summary=prompt_summary or "Prompt dispatched.",
+        source=source,
+        story_id=story_id,
+    )
+    outcome_kind = "verified_fix" if success and "<promise>COMPLETE</promise>" in str(output or "") else (
+        "prompt_succeeded" if success else "failure"
+    )
+    append_working_log(
+        project_path,
+        kind=outcome_kind,
+        summary=(str(output or "").strip() or ("rate limited" if rate_limited else "No output returned."))[:800],
+        source=source,
+        story_id=story_id,
+        metadata={"rate_limited": rate_limited},
+    )
+    distill_session_memory(project_path)
 
 
 def check_ralph_installed() -> bool:
@@ -234,26 +280,6 @@ def _run_command_with_progress(
     rate_limited = is_rate_limited(output)
     return success, output, rate_limited
 
-
-def _infer_runtime_profile(provider: str, env: dict[str, str], profile: Profile | None = None) -> Profile:
-    if profile is not None:
-        return profile
-
-    adapter = get_adapter(provider)
-    if adapter.provider_family == "codex":
-        runtime_path = env.get("CODEX_HOME", "")
-    else:
-        runtime_home = env.get("HOME", "")
-        runtime_path = str(Path(runtime_home).parent) if runtime_home else ""
-
-    return Profile(
-        name="runtime",
-        provider=adapter.provider_family,
-        adapter_id=adapter.adapter_id,
-        path=runtime_path or ".",
-    )
-
-
 def run_ralph_iteration(
     project_path: Path,
     env: dict[str, str],
@@ -301,6 +327,7 @@ def build_retry_prompt(
     story_title: str,
     story_description: str,
     template_path: Path | None = None,
+    project_path: Path | None = None,
 ) -> str:
     """Build a focused retry prompt for follow-up iterations."""
     resolved_template = template_path or RETRY_TEMPLATE_PATH
@@ -312,11 +339,14 @@ def build_retry_prompt(
         "Treat .ralph/team-messages.json as the explicit teammate channel; do not assume arbitrary notes files are shared.\n"
         "Fix only the outstanding issues from the previous attempt.\n"
     )
-    return template.format(
+    prompt = template.format(
         story_id=story_id,
         story_title=story_title,
         story_description=story_description,
     )
+    if project_path is not None:
+        return build_compacted_prompt(project_path, prompt)
+    return prompt
 
 
 def build_primary_prompt(
@@ -325,10 +355,11 @@ def build_primary_prompt(
     story_description: str,
     *,
     prd_path: str | None = None,
+    project_path: Path | None = None,
 ) -> str:
     """Build a provider-agnostic primary implementation prompt for one story."""
     resolved_prd_path = prd_path or ".agents/tasks/prd.json"
-    return (
+    prompt = (
         "You are an autonomous coding agent. Complete exactly one story in the current repository.\n\n"
         f"Selected story #{story_id}: {story_title}\n"
         f"Story description: {story_description}\n"
@@ -356,6 +387,9 @@ def build_primary_prompt(
         "When the story is fully complete and verified, output <promise>COMPLETE</promise>.\n"
         "Otherwise explain the concrete blocker or remaining work."
     )
+    if project_path is not None:
+        return build_compacted_prompt(project_path, prompt)
+    return prompt
 
 
 def run_retry_iteration(
@@ -371,24 +405,29 @@ def run_retry_iteration(
     profile: Profile | None = None,
 ) -> tuple[bool, str, bool]:
     """Run a focused retry prompt after a failed or rejected iteration."""
-    prompt = build_retry_prompt(story_id, story_title, story_description)
-    runtime_profile = _infer_runtime_profile(provider, env, profile)
-    adapter = get_adapter(runtime_profile.resolved_adapter_id)
-    result = adapter.execute(
-        AdapterExecutionRequest(
-            profile=runtime_profile,
-            prompt=prompt,
-            workdir=project_path,
+    prompt = build_retry_prompt(story_id, story_title, story_description, project_path=project_path)
+    outcome = run_streaming_execution(
+        StreamingExecutionSpec(
+            project_path=project_path,
             env=env,
+            provider=provider,
+            prompt=prompt,
             timeout=timeout,
-            mode=AdapterMode.EXEC,
             on_progress=on_progress,
             progress_interval=progress_interval,
             progress_message=lambda: _latest_worker_activity(project_path),
-        )
+            profile=profile,
+        ),
     )
-    parsed = adapter.parse_output(result)
-    return result.success, parsed.text, parsed.rate_limited
+    _record_iteration_memory(
+        project_path,
+        prompt=prompt,
+        output=outcome.text,
+        success=outcome.success,
+        rate_limited=outcome.rate_limited,
+        source="retry_iteration",
+    )
+    return outcome.success, outcome.text, outcome.rate_limited
 
 
 def run_prompt_iteration(
@@ -402,23 +441,29 @@ def run_prompt_iteration(
     profile: Profile | None = None,
 ) -> tuple[bool, str, bool]:
     """Run one generic provider prompt without invoking Ralph build mode."""
-    runtime_profile = _infer_runtime_profile(provider, env, profile)
-    adapter = get_adapter(runtime_profile.resolved_adapter_id)
-    result = adapter.execute(
-        AdapterExecutionRequest(
-            profile=runtime_profile,
-            prompt=prompt,
-            workdir=project_path,
+    compacted_prompt = build_compacted_prompt(project_path, prompt)
+    outcome = run_streaming_execution(
+        StreamingExecutionSpec(
+            project_path=project_path,
             env=env,
+            provider=provider,
+            prompt=compacted_prompt,
             timeout=timeout,
-            mode=AdapterMode.EXEC,
             on_progress=on_progress,
             progress_interval=progress_interval,
             progress_message=lambda: _latest_worker_activity(project_path),
-        )
+            profile=profile,
+        ),
     )
-    parsed = adapter.parse_output(result)
-    return result.success, parsed.text, parsed.rate_limited
+    _record_iteration_memory(
+        project_path,
+        prompt=compacted_prompt,
+        output=outcome.text,
+        success=outcome.success,
+        rate_limited=outcome.rate_limited,
+        source="prompt_iteration",
+    )
+    return outcome.success, outcome.text, outcome.rate_limited
 
 
 def read_progress(project_path: Path) -> str:
@@ -434,7 +479,14 @@ def write_critic_feedback(project_path: Path, feedback: str) -> None:
     ralph_dir = project_path / ".ralph"
     ralph_dir.mkdir(exist_ok=True)
     feedback_file = ralph_dir / "critic-feedback.md"
-    feedback_file.write_text(feedback)
+    feedback_file.write_text(render_bounded_feedback(project_path, feedback))
+    append_working_log(
+        project_path,
+        kind="critic_feedback",
+        summary=feedback,
+        source="critic",
+    )
+    distill_session_memory(project_path)
 
 
 def read_quality_ratchet(project_path: Path) -> dict[str, bool]:
@@ -492,6 +544,13 @@ def append_guardrail(project_path: Path, guardrail: str) -> None:
         initial_content=DEFAULT_STATE_FILES["guardrails.md"],
         build_suffix=lambda existing: _build_bullet_suffix(existing, f"- {guardrail}"),
     )
+    append_working_log(
+        project_path,
+        kind="guardrail",
+        summary=guardrail,
+        source="loop_runner",
+    )
+    distill_session_memory(project_path)
 
 
 def _run_capture(project_path: Path, args: list[str], timeout: int = 30) -> tuple[int, str]:

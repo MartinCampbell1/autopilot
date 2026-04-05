@@ -10,6 +10,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
+from autopilot.core.atomic_io import atomic_write_json as _shared_atomic_write_json
 from autopilot.core.command_permissions import (
     check_projected_command_permission,
     command_rule_matches,
@@ -387,10 +388,7 @@ def _load_persisted_state(config: AutopilotConfig) -> PersistedToolPermissionSta
 
 def _save_persisted_state(config: AutopilotConfig, state: PersistedToolPermissionState) -> PersistedToolPermissionState:
     path = permission_state_path(config)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temp_path = path.with_suffix(f"{path.suffix}.tmp")
-    temp_path.write_text(json.dumps(state.model_dump(), indent=2, ensure_ascii=False))
-    temp_path.replace(path)
+    _shared_atomic_write_json(path, state.model_dump())
     return state
 
 
@@ -409,10 +407,7 @@ def _save_permission_denials(
     state: PersistedPermissionDenialState,
 ) -> PersistedPermissionDenialState:
     path = permission_denial_state_path(config)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temp_path = path.with_suffix(f"{path.suffix}.tmp")
-    temp_path.write_text(json.dumps(state.model_dump(), indent=2, ensure_ascii=False))
-    temp_path.replace(path)
+    _shared_atomic_write_json(path, state.model_dump())
     return state
 
 

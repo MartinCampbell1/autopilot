@@ -10,7 +10,10 @@ from fastapi.testclient import TestClient
 from autopilot.api.routes import projects as projects_routes
 from autopilot.core.approval_runtime import annotate_approval_runtime, create_or_reuse_approval_runtime
 from autopilot.core.config import AutopilotConfig
+from autopilot.core.intake import IntakeSession
+from autopilot.core.intake_sessions import get_intake_session, save_intake_session
 from autopilot.core.project_store import load_project_state
+from autopilot.core.run_trace import append_trace_entry
 
 
 class _FakeManager:
@@ -28,6 +31,36 @@ def _build_client(config: AutopilotConfig, monkeypatch) -> TestClient:
     app = FastAPI()
     app.include_router(projects_routes.router, prefix="/api/projects")
     return TestClient(app)
+
+
+def _shared_brief_payload() -> dict[str, object]:
+    return {
+        "brief_id": "brief_projects_api_1",
+        "idea_id": "idea_projects_api_1",
+        "title": "Shared Projects API Brief",
+        "prd_summary": "Create projects from shared Quorum briefs.",
+        "acceptance_criteria": ["Shared brief is persisted", "Project metadata keeps brief_id"],
+        "risks": [
+            {
+                "category": "technical",
+                "description": "Contract mismatch",
+                "level": "medium",
+            }
+        ],
+        "recommended_tech_stack": ["python", "fastapi"],
+        "first_stories": [
+            {
+                "title": "Add shared ingest route",
+                "description": "Add project creation path for shared briefs",
+                "acceptance_criteria": ["HTTP route accepts shared brief"],
+                "effort": "small",
+            }
+        ],
+        "confidence": "high",
+        "effort": "small",
+        "urgency": "this_week",
+        "budget_tier": "low",
+    }
 
 
 def test_create_list_detail_and_pause_project(tmp_path: Path, monkeypatch) -> None:
@@ -81,6 +114,116 @@ def test_create_list_detail_and_pause_project(tmp_path: Path, monkeypatch) -> No
     assert pause_response.status_code == 200
     assert pause_response.json()["status"] == "ok"
     assert load_project_state(config, project_id)["status"] == "paused"
+
+
+def test_project_cost_and_trace_routes_surface_observability_payloads(tmp_path: Path, monkeypatch) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    client = _build_client(config, monkeypatch)
+
+    create_response = client.post(
+        "/api/projects/",
+        json={
+            "project_name": "Observability Project",
+            "project_path": str(tmp_path / "observability-project"),
+            "prd": {
+                "title": "Observability Project",
+                "stories": [{"id": 1, "title": "Bootstrap", "description": "Start"}],
+            },
+        },
+    )
+    project_id = create_response.json()["project_id"]
+    state = load_project_state(config, project_id)
+    state["cost_usage"]["project"]["estimated_cost_usd"] = 0.05
+    state["cost_usage"]["project"]["total_tokens"] = 500
+    state["cost_usage"]["run"]["estimated_cost_usd"] = 0.02
+    state["cost_usage"]["run"]["total_tokens"] = 200
+    (config.runtime_state_dir / f"{project_id}.json").write_text(json.dumps(state))
+    append_trace_entry(config, project_id, {"kind": "project_event", "event": "run_started", "run_id": "sess_obs"})
+    append_trace_entry(
+        config,
+        project_id,
+        {
+            "kind": "iteration_record",
+            "run_id": "sess_obs",
+            "story_id": 1,
+            "status": "critic_rejected",
+            "iteration_usage": {"estimated_cost_usd": 0.02, "total_tokens": 200},
+            "critic_feedback": "- add test",
+            "critic_approved": False,
+        },
+    )
+    append_trace_entry(config, project_id, {"kind": "project_event", "event": "run_failed", "run_id": "sess_obs"})
+
+    cost_response = client.get(f"/api/projects/{project_id}/cost")
+    assert cost_response.status_code == 200
+    cost_payload = cost_response.json()
+    assert cost_payload["cost_usage"]["project"]["estimated_cost_usd"] == 0.05
+    assert "benchmarks" in cost_payload["monitoring"]
+
+    trace_response = client.get(f"/api/projects/{project_id}/trace?run_id=sess_obs")
+    assert trace_response.status_code == 200
+    trace_payload = trace_response.json()["trace"]
+    assert trace_payload["summary"]["entry_count"] >= 3
+    assert trace_payload["replay"]["entries"][-1]["run_id"] == "sess_obs"
+    assert trace_payload["monitoring"]["runs"][-1]["run_id"] == "sess_obs"
+
+    audit_response = client.get(f"/api/projects/{project_id}/audit?run_id=sess_obs")
+    assert audit_response.status_code == 200
+    audit_payload = audit_response.json()["audit"]
+    assert audit_payload["audit_chain"]["verification"]["verified"] is True
+    assert audit_payload["audit_chain"]["source_verification"]["verified"] is True
+    assert audit_payload["entries"][-1]["source_audit"]["chain_kind"] == "trace"
+
+
+def test_project_detail_surfaces_operator_shell_contract(tmp_path: Path, monkeypatch) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    client = _build_client(config, monkeypatch)
+
+    create_response = client.post(
+        "/api/projects/",
+        json={
+            "project_name": "Operator Surface Project",
+            "project_path": str(tmp_path / "operator-surface-project"),
+            "prd": {
+                "title": "Operator Surface Project",
+                "stories": [{"id": 1, "title": "Bootstrap", "description": "Start"}],
+            },
+        },
+    )
+    project_id = create_response.json()["project_id"]
+    bootstrap_payload = {
+        "verification": {
+            "artifact_exists": True,
+            "artifact_path": str(tmp_path / "operator-surface-project" / ".agents" / "verification" / "bootstrap.json"),
+            "check_count": 3,
+        },
+        "github": {
+            "workflow_exists": True,
+            "workflow_path": str(tmp_path / "operator-surface-project" / ".github" / "workflows" / "autopilot.yml"),
+            "github_repo": "FounderOS/autopilot",
+            "compare_url": "https://github.com/FounderOS/autopilot/compare/main...feature",
+        },
+    }
+    diagnostics_payload = {
+        "summary": {"error_count": 0, "warning_count": 0, "info_count": 1},
+        "diagnostics": [],
+    }
+
+    with patch(
+        "autopilot.core.bootstrap_visibility.build_bootstrap_status",
+        return_value=bootstrap_payload,
+    ), patch(
+        "autopilot.core.runtime_diagnostics.build_runtime_diagnostics",
+        return_value=diagnostics_payload,
+    ):
+        response = client.get(f"/api/projects/{project_id}")
+
+    assert response.status_code == 200
+    detail = response.json()
+    assert detail["bootstrap"] == bootstrap_payload
+    assert detail["runtime_diagnostics"] == diagnostics_payload
+    assert detail["company"]["status"]["runtime_wall_enforced"] is True
+    assert detail["company"]["channels"]["items"][0]["id"] == "dashboard"
 
 
 def test_skip_guidance_and_archive_routes(tmp_path: Path, monkeypatch) -> None:
@@ -183,6 +326,7 @@ def test_runtime_control_route_returns_workspace_policy(tmp_path: Path, monkeypa
     assert "leases" in payload
     assert payload["runtime_session_id"] == ""
     assert payload["runtime_control_available"] is False
+    assert payload["company"]["status"]["runtime_wall_enforced"] is True
 
 
 def test_runtime_control_request_route_queues_control_request(tmp_path: Path, monkeypatch) -> None:
@@ -363,6 +507,55 @@ def test_create_project_route_accepts_task_source_contract(tmp_path: Path, monke
     assert detail["task_source"]["repo"] == "martin/autopilot"
 
 
+def test_create_project_route_links_intake_session(tmp_path: Path, monkeypatch) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    save_intake_session(
+        config,
+        IntakeSession(
+            session_id="intake123",
+            messages=[
+                {"role": "user", "content": "Build a durable intake flow"},
+                {"role": "assistant", "content": "Which repo should this use?"},
+            ],
+            spec_bootstrap={
+                "title": "Durable intake",
+                "summary": "Persist intake sessions and link them to projects.",
+                "open_questions": ["Which repo should this use?"],
+                "rendered_spec": "Durable intake spec",
+            },
+        ),
+    )
+    client = _build_client(config, monkeypatch)
+
+    create_response = client.post(
+        "/api/projects/",
+        json={
+            "project_name": "Intake Linked Project",
+            "project_path": str(tmp_path / "intake-linked-project"),
+            "intake_session_id": "intake123",
+            "prd": {
+                "title": "Intake Linked Project",
+                "stories": [{"id": 1, "title": "Bootstrap", "description": "Start"}],
+            },
+        },
+    )
+
+    assert create_response.status_code == 200
+    payload = create_response.json()
+    assert payload["intake_session_id"] == "intake123"
+    project_id = payload["project_id"]
+
+    detail = client.get(f"/api/projects/{project_id}").json()
+    assert detail["task_source"]["source_kind"] == "intake_session"
+    assert detail["task_source"]["external_id"] == "intake123"
+    assert detail["task_source"]["branch_policy"] == "isolated_worktree"
+
+    linked_session = get_intake_session(config, "intake123")
+    assert linked_session is not None
+    assert linked_session.linked_project_id == project_id
+    assert linked_session.linked_project_name == "Intake Linked Project"
+
+
 def test_recover_checkout_route_clears_story_checkout(tmp_path: Path, monkeypatch) -> None:
     config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
     client = _build_client(config, monkeypatch)
@@ -538,6 +731,19 @@ def test_execution_brief_schema_route_exposes_json_schema(tmp_path: Path, monkey
     assert "founder" in payload["properties"]
 
 
+def test_shared_execution_brief_schema_route_exposes_json_schema(tmp_path: Path, monkeypatch) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    client = _build_client(config, monkeypatch)
+
+    response = client.get("/api/projects/shared-execution-brief/schema")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["title"] == "ExecutionBrief"
+    assert "brief_id" in payload["properties"]
+    assert "first_stories" in payload["properties"]
+
+
 @patch("autopilot.core.execution_plane.generate_prd_from_spec")
 @patch("autopilot.core.project_store.launch_project_run")
 def test_create_project_from_execution_brief(
@@ -624,3 +830,44 @@ def test_create_project_from_execution_brief(
 
     state = load_project_state(config, payload["project_id"])
     assert state["launch_profile"]["preset"] == "fast"
+
+
+@patch("autopilot.core.execution_plane.generate_prd_from_spec")
+def test_create_project_from_shared_execution_brief(
+    mock_generate_prd_from_spec,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    monkeypatch.setattr(projects_routes, "get_account_manager", lambda: _FakeManager())
+    client = _build_client(config, monkeypatch)
+
+    mock_generate_prd_from_spec.return_value = {
+        "title": "Shared Projects API Brief",
+        "description": "Project created from shared brief.",
+        "stories": [{"id": 1, "title": "Bootstrap", "description": "Set up the bridge"}],
+    }
+
+    response = client.post(
+        "/api/projects/from-shared-execution-brief",
+        json={
+            "brief": _shared_brief_payload(),
+            "project_path": str(tmp_path / "shared-brief-project"),
+            "priority": "high",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "ok"
+    assert payload["brief_id"] == "brief_projects_api_1"
+    assert payload["idea_id"] == "idea_projects_api_1"
+    assert payload["shared_execution_brief_path"].endswith(".agents/tasks/shared-execution-brief.json")
+    assert Path(payload["shared_execution_brief_path"]).exists()
+    assert payload["project"]["source_kind"] == "execution_brief"
+    assert payload["project"]["task_source"]["source_kind"] == "execution_brief"
+    assert "Core Thesis" in mock_generate_prd_from_spec.call_args.args[0]
+
+    persisted = json.loads(Path(payload["shared_execution_brief_path"]).read_text())
+    assert persisted["brief_id"] == "brief_projects_api_1"
+    assert persisted["idea_id"] == "idea_projects_api_1"

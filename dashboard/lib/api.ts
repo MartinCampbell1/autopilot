@@ -10,9 +10,12 @@ import type {
   ExecutionAgentActionExecuteResult,
   ExecutionAgentActionRunCancelResponse,
   ExecutionAgentActionRunRecord,
+  ExecutionPlaneProjectDetail,
   ExecutionRuntimeAgentTaskCancelResponse,
   ExecutionRuntimeAgentTaskOutputArtifact,
   ExecutionRuntimeAgentTaskTranscriptArtifact,
+  ExecutionShadowAuditDetail,
+  ExecutionShadowAuditRecord,
   IssueResolutionResult,
   IntakeSession,
   SpecBootstrap,
@@ -95,6 +98,47 @@ export async function fetchProjectRuntimeControl(
     `${API_BASE}/projects/${encodeURIComponent(projectId)}/runtime-control?stale_after_sec=${staleAfterSec}`
   );
   return jsonOrThrow<ProjectRuntimeControl>(res, `Failed to fetch runtime control state: ${res.status}`);
+}
+
+export async function fetchExecutionPlaneProject(
+  projectId: string
+): Promise<ExecutionPlaneProjectDetail> {
+  const res = await fetch(`${API_BASE}/execution-plane/projects/${encodeURIComponent(projectId)}`);
+  return jsonOrThrow<ExecutionPlaneProjectDetail>(
+    res,
+    `Failed to fetch execution-plane project detail: ${res.status}`
+  );
+}
+
+export async function fetchExecutionPlaneAgentActionRuns(
+  filters?: {
+    runKind?: string;
+    orchestratorSessionId?: string;
+    projectId?: string;
+    initiativeId?: string;
+    orchestrator?: string;
+    actor?: string;
+    dryRun?: boolean;
+    status?: string;
+    idempotencyKey?: string;
+  }
+): Promise<{ runs: ExecutionAgentActionRunRecord[] }> {
+  const query = buildQuery({
+    run_kind: filters?.runKind,
+    orchestrator_session_id: filters?.orchestratorSessionId,
+    project_id: filters?.projectId,
+    initiative_id: filters?.initiativeId,
+    orchestrator: filters?.orchestrator,
+    actor: filters?.actor,
+    dry_run: filters?.dryRun,
+    status: filters?.status,
+    idempotency_key: filters?.idempotencyKey,
+  });
+  const res = await fetch(`${API_BASE}/execution-plane/agents/action-runs${query}`);
+  return jsonOrThrow<{ runs: ExecutionAgentActionRunRecord[] }>(
+    res,
+    `Failed to fetch runtime agent action runs: ${res.status}`
+  );
 }
 
 export async function requestProjectRuntimeControl(
@@ -262,6 +306,40 @@ export async function fetchExecutionPlaneRuntimeAgentTaskTranscript(
   return jsonOrThrow<ExecutionRuntimeAgentTaskTranscriptArtifact>(
     res,
     `Failed to fetch runtime agent task transcript: ${res.status}`
+  );
+}
+
+export async function fetchExecutionPlaneShadowAudit(
+  auditId: string
+): Promise<ExecutionShadowAuditDetail> {
+  const res = await fetch(
+    `${API_BASE}/execution-plane/shadow-audits/${encodeURIComponent(auditId)}`
+  );
+  return jsonOrThrow<ExecutionShadowAuditDetail>(
+    res,
+    `Failed to fetch shadow audit: ${res.status}`
+  );
+}
+
+export async function resolveExecutionPlaneShadowAudit(
+  auditId: string,
+  options?: { actor?: string | null; note?: string | null; outcome?: string | null }
+): Promise<{ status: string; shadow_audit: ExecutionShadowAuditRecord }> {
+  const res = await fetch(
+    `${API_BASE}/execution-plane/shadow-audits/${encodeURIComponent(auditId)}/resolve`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        actor: options?.actor ?? "dashboard-control-plane",
+        note: options?.note ?? "",
+        outcome: options?.outcome ?? "released",
+      }),
+    }
+  );
+  return jsonOrThrow<{ status: string; shadow_audit: ExecutionShadowAuditRecord }>(
+    res,
+    `Failed to resolve shadow audit: ${res.status}`
   );
 }
 
