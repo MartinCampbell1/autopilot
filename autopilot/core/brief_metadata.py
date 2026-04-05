@@ -78,3 +78,12 @@ def raise_if_founder_approval_missing_for_project(project: dict[str, Any]) -> No
             "Brief must be approved by founder before launch. "
             f"Current status: {approval_status or 'unknown'}"
         )
+
+
+def raise_if_founder_approval_missing_for_command(project: dict[str, Any], command: str) -> None:
+    """Block execution-plane launch and resume commands before founder approval."""
+
+    normalized = str(command or "").strip().lower()
+    if normalized not in {"launch", "resume"}:
+        return
+    raise_if_founder_approval_missing_for_project(project)

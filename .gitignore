@@ -5,6 +5,7 @@ __pycache__/
 dist/
 .pytest_cache/
 .ruff_cache/
+._*
 node_modules/
 .next/
 state.db

@@ -315,6 +315,181 @@ def test_resume_route_blocks_pending_v2_project(monkeypatch, tmp_path):
     assert "approved" in resume.json().get("detail", "").lower()
 
 
+def test_execution_plane_command_launch_blocks_pending_v2_project(monkeypatch, tmp_path):
+    """Pending V2 projects cannot launch through the execution-plane command route."""
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    manager = _FakeManager(profile=object())
+    client = _build_client(config, manager, monkeypatch)
+    monkeypatch.setattr(
+        "autopilot.core.execution_plane.generate_prd_from_spec",
+        lambda *args, **kwargs: {
+            "title": "Gate test initiative",
+            "description": "Created for command gate regression coverage.",
+            "stories": [{"id": 1, "title": "Verify gate", "description": "Keep command route blocked"}],
+        },
+    )
+    monkeypatch.setattr(
+        "autopilot.core.execution_plane.launch_project_run",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("execution-plane launch command should block before launch_project_run")
+        ),
+    )
+
+    create = client.post(
+        "/api/projects/from-brief-v2",
+        json={
+            "brief": _v2_brief_payload(approval_status="pending"),
+            "launch": False,
+            "project_path": str(tmp_path / "pending-command-launch-project"),
+        },
+    )
+    assert create.status_code == 200, create.text
+    project_id = create.json()["project"]["project_id"]
+
+    command = client.post(f"/api/execution-plane/projects/{project_id}/commands/launch", json={})
+    assert command.status_code == 409
+    assert "approved" in command.json().get("detail", "").lower()
+
+
+def test_execution_plane_command_resume_blocks_pending_v2_project(monkeypatch, tmp_path):
+    """Pending V2 projects cannot resume through the execution-plane command route."""
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    manager = _FakeManager(profile=object())
+    client = _build_client(config, manager, monkeypatch)
+    monkeypatch.setattr(
+        "autopilot.core.execution_plane.generate_prd_from_spec",
+        lambda *args, **kwargs: {
+            "title": "Gate test initiative",
+            "description": "Created for resume command gate regression coverage.",
+            "stories": [{"id": 1, "title": "Verify gate", "description": "Keep resume command blocked"}],
+        },
+    )
+    monkeypatch.setattr(
+        "autopilot.core.execution_plane.resume_project_run",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("execution-plane resume command should block before resume_project_run")
+        ),
+    )
+
+    create = client.post(
+        "/api/projects/from-brief-v2",
+        json={
+            "brief": _v2_brief_payload(approval_status="pending"),
+            "launch": False,
+            "project_path": str(tmp_path / "pending-command-resume-project"),
+        },
+    )
+    assert create.status_code == 200, create.text
+    project_id = create.json()["project"]["project_id"]
+
+    command = client.post(f"/api/execution-plane/projects/{project_id}/commands/resume", json={})
+    assert command.status_code == 409
+    assert "approved" in command.json().get("detail", "").lower()
+
+
+def test_execution_plane_approval_apply_blocks_pending_v2_project(monkeypatch, tmp_path):
+    """Applying a pre-created launch approval still cannot bypass founder approval."""
+    from autopilot.core.approvals import decide_approval
+    from autopilot.core.execution_plane import create_execution_command_approval
+
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    manager = _FakeManager(profile=object())
+    client = _build_client(config, manager, monkeypatch)
+    monkeypatch.setattr(
+        "autopilot.core.execution_plane.generate_prd_from_spec",
+        lambda *args, **kwargs: {
+            "title": "Gate test initiative",
+            "description": "Created for approval-apply regression coverage.",
+            "stories": [{"id": 1, "title": "Verify gate", "description": "Block approval apply"}],
+        },
+    )
+    monkeypatch.setattr(
+        "autopilot.core.execution_plane.launch_project_run",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("approval apply should block before launch_project_run")
+        ),
+    )
+
+    create = client.post(
+        "/api/projects/from-brief-v2",
+        json={
+            "brief": _v2_brief_payload(approval_status="pending"),
+            "launch": False,
+            "project_path": str(tmp_path / "pending-approval-apply-project"),
+        },
+    )
+    assert create.status_code == 200, create.text
+    project_id = create.json()["project"]["project_id"]
+
+    approval = create_execution_command_approval(
+        config,
+        project_id=project_id,
+        command="launch",
+        payload={},
+        requested_by="founderos",
+        reason="Ensure apply path still respects founder gate.",
+    )
+    approval_id = approval["id"]
+    decide_approval(config, approval_id, decision="approved", actor="founder")
+
+    apply_response = client.post(
+        f"/api/execution-plane/approvals/{approval_id}/apply",
+        json={"actor": "founderos-control"},
+    )
+    assert apply_response.status_code == 409
+    assert "approved" in apply_response.json().get("detail", "").lower()
+
+
+def test_existing_pending_v2_project_becomes_launchable_after_sync(monkeypatch, tmp_path):
+    """Syncing an approved V2 brief refreshes the existing project instead of requiring a new one."""
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    manager = _FakeManager(profile=object())
+    client = _build_client(config, manager, monkeypatch)
+    monkeypatch.setattr(
+        "autopilot.core.execution_plane.generate_prd_from_spec",
+        lambda *args, **kwargs: {
+            "title": "Gate test initiative",
+            "description": "Created for approval sync coverage.",
+            "stories": [{"id": 1, "title": "Verify sync", "description": "Allow launch after sync"}],
+        },
+    )
+    monkeypatch.setattr(
+        projects,
+        "launch_project_run",
+        lambda *args, **kwargs: (True, None, "Project launched."),
+    )
+
+    pending = _v2_brief_payload(approval_status="pending")
+    pending["brief_id"] = "brief-sync-test"
+    pending["initiative_id"] = "init-sync-test"
+
+    create = client.post(
+        "/api/projects/from-brief-v2",
+        json={
+            "brief": pending,
+            "launch": False,
+            "project_path": str(tmp_path / "pending-sync-project"),
+        },
+    )
+    assert create.status_code == 200, create.text
+    project_id = create.json()["project"]["project_id"]
+
+    approved = dict(pending)
+    approved["brief_approval_status"] = "approved"
+    approved["approved_by"] = "founder"
+
+    sync = client.post(
+        "/api/projects/briefs/brief-sync-test/sync-v2",
+        json={"brief": approved},
+    )
+    assert sync.status_code == 200, sync.text
+    assert sync.json()["brief_approval_status"] == "approved"
+
+    launch = client.post(f"/api/projects/{project_id}/launch", json={})
+    assert launch.status_code == 200, launch.text
+    assert launch.json()["launched"] is True
+
+
 def test_legacy_shared_brief_route_blocks_launch(monkeypatch, tmp_path):
     """Legacy /from-shared-brief returns 409 when launch=True (containment fix)."""
     config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
