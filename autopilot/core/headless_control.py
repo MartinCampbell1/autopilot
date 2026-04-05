@@ -37,8 +37,9 @@ from autopilot.core.execution_plane import (
     wait_for_execution_plane_agent_action_run_async_settlement,
 )
 from autopilot.core.runtime_agent_tasks import wait_for_runtime_agent_task_mailbox_resolution
-from autopilot.core.plugin_loader import clear_plugin_cache
 from autopilot.core.plugin_mcp import list_plugin_mcp_servers
+from autopilot.core.plugin_refresh import refresh_plugin_runtime_scan
+from autopilot.core.plugin_scan import build_plugin_runtime_scan
 from autopilot.core.plugins import resolve_loaded_plugins
 from autopilot.core.plugin_storage import get_plugin_option_state
 from autopilot.core.project_store import build_project_summary
@@ -472,6 +473,7 @@ class HeadlessControlSession:
         """Return live plugin/MCP runtime state for structured control clients."""
 
         plugins = resolve_loaded_plugins(self.config)
+        plugin_scan = build_plugin_runtime_scan(self.config)
         option_states = {
             plugin.plugin_id: get_plugin_option_state(self.config, plugin)
             for plugin in plugins
@@ -524,19 +526,26 @@ class HeadlessControlSession:
                 "mcp_server_count": len(mcp_servers),
                 "invalid_mcp_server_count": invalid_server_count,
                 "managed_connector_count": len(connector_payloads),
+                "blocked_plugin_count": plugin_scan.summary.blocked_plugin_count,
+                "blocked_mcp_server_count": plugin_scan.summary.blocked_mcp_server_count,
+                "wrapped_surface_count": plugin_scan.summary.wrapped_surface_count,
+                "sandboxed_surface_count": plugin_scan.summary.sandboxed_surface_count,
+                "recommended_runtime_profile": plugin_scan.summary.recommended_runtime_profile,
             },
             "plugins": plugin_payloads,
             "mcp_servers": [server.model_dump() for server in mcp_servers],
             "managed_connectors": connector_payloads,
+            "scan": plugin_scan.model_dump(),
         }
 
     def reload_plugins_payload(self) -> dict[str, Any]:
         """Force one plugin rescan and return refreshed runtime state."""
 
-        clear_plugin_cache()
+        scan = refresh_plugin_runtime_scan(self.config)
         return {
             "reloaded_at": _utcnow_iso(),
             **self.mcp_status_payload(),
+            "scan": scan.model_dump(),
         }
 
     def list_tool_permission_runtimes_payload(self, request: Any) -> dict[str, Any]:

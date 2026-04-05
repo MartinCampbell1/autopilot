@@ -16,6 +16,9 @@ function triageLabelForSessionLineageEntry(
   entry: SessionLineageEntry,
   fallback: string
 ): string {
+  if (entry.shadowAuditId) {
+    return "Session Quarantine Review";
+  }
   if (entry.asyncTaskId) {
     return "Session Async Follow-Through";
   }
@@ -29,6 +32,10 @@ function triageQueueDetailForSessionLineageEntry(
   entry: SessionLineageEntry,
   queuedCount: number
 ): string {
+  if (entry.shadowAuditId) {
+    const count = entry.openShadowAuditCount || 1;
+    return `${queuedCount} queued · ${count} shadow audit${count === 1 ? "" : "s"} open`;
+  }
   if (entry.asyncTaskId) {
     return `${queuedCount} queued · ${entry.asyncTaskStatus || entry.status}`;
   }
@@ -39,6 +46,10 @@ function triageQueueDetailForSessionLineageEntry(
 }
 
 function triageSubtitleForSessionLineageEntry(entry: SessionLineageEntry): string {
+  if (entry.shadowAuditId) {
+    const command = entry.asyncTaskCommand || "handoff";
+    return `review blocked · ${command}`;
+  }
   if (entry.asyncTaskId) {
     return `${entry.asyncTaskStatus || entry.status} · ${entry.asyncTaskCommand || "task"}`;
   }
@@ -137,6 +148,8 @@ export function useControlPlaneTriageInbox({
               priority: sessionLineagePriority(nextAttentionSessionLineageEntry),
               syncedWithSelection:
                 selectedSessionLineageEntry?.key === nextAttentionSessionLineageEntry.key,
+              shadowAuditId: nextAttentionSessionLineageEntry.shadowAuditId || undefined,
+              shadowAuditCount: nextAttentionSessionLineageEntry.openShadowAuditCount || 0,
               onInspect: () => {
                 focusSessionLineageEntry(nextAttentionSessionLineageEntry, "attention");
               },
@@ -167,6 +180,8 @@ export function useControlPlaneTriageInbox({
               priority: sessionLineagePriority(nextDecisionSessionLineageEntry),
               syncedWithSelection:
                 selectedSessionLineageEntry?.key === nextDecisionSessionLineageEntry.key,
+              shadowAuditId: nextDecisionSessionLineageEntry.shadowAuditId || undefined,
+              shadowAuditCount: nextDecisionSessionLineageEntry.openShadowAuditCount || 0,
               onInspect: () => {
                 focusSessionLineageEntry(nextDecisionSessionLineageEntry, "decisions");
               },

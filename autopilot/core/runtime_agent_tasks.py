@@ -11,14 +11,17 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from autopilot.core.atomic_io import atomic_write_json as _shared_atomic_write_json
 from autopilot.core.agent_mailbox import poll_agent_mailbox_messages, publish_agent_mailbox_messages
 from autopilot.core.config import AutopilotConfig
+from autopilot.core.orchestrator_sessions import link_orchestrator_session_entities
 from autopilot.core.project_store import (
     emit_project_event,
     ensure_project_state,
     get_project_entry,
     load_project_state,
 )
+from autopilot.core.shadow_audit import compose_shadow_audit_decision, create_shadow_audit_record
 from autopilot.core.task_output import load_text_from_source, persist_task_output
 from autopilot.core.task_transcript import persist_task_transcript, task_transcript_id
 
@@ -42,10 +45,7 @@ def _utcnow_iso() -> str:
 
 
 def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temp_path = path.with_suffix(f"{path.suffix}.tmp")
-    temp_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False))
-    temp_path.replace(path)
+    _shared_atomic_write_json(path, payload)
 
 
 def _parse_iso(value: str | None) -> datetime | None:
@@ -147,6 +147,19 @@ def save_runtime_agent_task(
     task.updated_at = _utcnow_iso()
     _atomic_write_json(runtime_agent_task_path(config, task.id), task.model_dump())
     _persist_runtime_agent_task_transcript(config, task)
+    if task.orchestrator_session_id:
+        linked_artifact_ids = [task_transcript_id("runtime_agent_task", task.id)]
+        if str(task.output_artifact_id or "").strip():
+            linked_artifact_ids.append(str(task.output_artifact_id))
+        try:
+            link_orchestrator_session_entities(
+                config,
+                task.orchestrator_session_id,
+                linked_runtime_agent_ids=list(task.runtime_agent_ids),
+                linked_artifact_ids=linked_artifact_ids,
+            )
+        except KeyError:
+            pass
     return task
 
 
@@ -683,6 +696,11 @@ def _terminal_task_update(
             f"Log path: {output_source_path}",
         ]
     ).strip()
+    output_shadow_audit_metadata = {
+        key: value
+        for key, value in dict(task.metadata or {}).items()
+        if key in {"shadow_audit", "shadow_audit_action", "shadow_audit_feedback", "shadow_audit_findings"}
+    }
     output_record = persist_task_output(
         config,
         owner_kind="runtime_agent_task",
@@ -703,8 +721,37 @@ def _terminal_task_update(
             "settlement_reason": settlement_reason,
             "settlement_state_status": settlement_state_status,
             "settlement_state_timestamp": settlement_state_timestamp,
+            **output_shadow_audit_metadata,
         },
     )
+    shadow_audit, shadow_audit_content, shadow_audit_metadata = compose_shadow_audit_decision(
+        output_shadow_audit_metadata,
+        content=source_output or fallback_output,
+    )
+    shadow_audit_record = None
+    if shadow_audit is not None:
+        shadow_audit_record = create_shadow_audit_record(
+            config,
+            project_id=task.project_id,
+            orchestrator_session_id=task.orchestrator_session_id,
+            runtime_agent_ids=task.runtime_agent_ids,
+            source_kind="runtime_agent_task_output",
+            source_name=task.command,
+            source_id=task.id,
+            action=shadow_audit.action,
+            summary=shadow_audit.summary or "Runtime-agent task output was quarantined before downstream handoff.",
+            findings=list(shadow_audit.findings),
+            content=shadow_audit_content,
+            blocked_artifact_id=output_record.id,
+            blocked_artifact_owner_kind="runtime_agent_task",
+            blocked_artifact_owner_id=task.id,
+            metadata={
+                "output_artifact_id": output_record.id,
+                "command": task.command,
+                "project_status": str(project_state.get("status") or ""),
+                **shadow_audit_metadata,
+            },
+        )
 
     task.status = status
     task.placeholder_result = ""
@@ -725,6 +772,8 @@ def _terminal_task_update(
         "settlement_reason": settlement_reason,
         "settlement_state_status": settlement_state_status,
         "settlement_state_timestamp": settlement_state_timestamp,
+        "output_quarantined": shadow_audit_record is not None,
+        "shadow_audit_id": shadow_audit_record.id if shadow_audit_record is not None else "",
     }
     task.output_artifact_id = output_record.id
     task.output_origin = output_origin
@@ -750,6 +799,8 @@ def _terminal_task_update(
             "settlement_reason": settlement_reason,
             "settlement_state_status": settlement_state_status,
             "settlement_state_timestamp": settlement_state_timestamp,
+            "shadow_audit_id": shadow_audit_record.id if shadow_audit_record is not None else "",
+            "output_quarantined": shadow_audit_record is not None,
         },
     )
     return task

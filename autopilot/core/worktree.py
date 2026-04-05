@@ -16,6 +16,9 @@ from autopilot.core.path_permissions import assert_story_worktree_path
 
 DEFAULT_WORKTREE_STALE_AFTER_SEC = 3600
 WORKTREE_METADATA_FILENAME = ".autopilot-worktree.json"
+WORKTREE_COLLABORATION_SCHEMA_VERSION = 1
+WORKTREE_COLLABORATION_DIRNAME = ".autopilot-artifacts"
+WORKTREE_COLLABORATION_MANIFEST_FILENAME = "manifest.json"
 
 
 def _utcnow_iso() -> str:
@@ -59,6 +62,18 @@ class WorktreeMetadata(BaseModel):
     runtime_pid: int | None = None
 
 
+class WorktreeCollaborationManifest(BaseModel):
+    """Shared artifact manifest for one isolated story worktree."""
+
+    schema_version: int = WORKTREE_COLLABORATION_SCHEMA_VERSION
+    project_path: str
+    worktree_path: str
+    story_id: int
+    branch_name: str
+    artifact_dir: str
+    created_at: str
+
+
 def resolve_story_worktree_owner(project_path: Path) -> tuple[Path, Path] | None:
     """Return owning project path and worktree root when inside an Autopilot story worktree."""
 
@@ -88,6 +103,18 @@ def worktree_metadata_path(wt_path: Path) -> Path:
     return wt_path / WORKTREE_METADATA_FILENAME
 
 
+def worktree_collaboration_dir(wt_path: Path) -> Path:
+    """Return the shared collaboration artifact directory for one worktree."""
+
+    return wt_path / WORKTREE_COLLABORATION_DIRNAME
+
+
+def worktree_collaboration_manifest_path(wt_path: Path) -> Path:
+    """Return the shared collaboration manifest path for one worktree."""
+
+    return worktree_collaboration_dir(wt_path) / WORKTREE_COLLABORATION_MANIFEST_FILENAME
+
+
 def read_worktree_metadata(wt_path: Path) -> WorktreeMetadata | None:
     """Load metadata for one worktree if available."""
 
@@ -96,6 +123,18 @@ def read_worktree_metadata(wt_path: Path) -> WorktreeMetadata | None:
         return None
     try:
         return WorktreeMetadata.model_validate(json.loads(path.read_text(encoding="utf-8")))
+    except Exception:
+        return None
+
+
+def read_worktree_collaboration_manifest(wt_path: Path) -> WorktreeCollaborationManifest | None:
+    """Load the shared collaboration manifest for one worktree if available."""
+
+    path = worktree_collaboration_manifest_path(wt_path)
+    if not path.exists():
+        return None
+    try:
+        return WorktreeCollaborationManifest.model_validate(json.loads(path.read_text(encoding="utf-8")))
     except Exception:
         return None
 
@@ -150,6 +189,28 @@ def _write_worktree_metadata(project_path: Path, wt_path: Path, *, story_id: int
     )
 
 
+def _write_worktree_collaboration_manifest(
+    project_path: Path,
+    wt_path: Path,
+    *,
+    story_id: int,
+    branch_name: str,
+) -> None:
+    collaboration_dir = worktree_collaboration_dir(wt_path)
+    collaboration_dir.mkdir(parents=True, exist_ok=True)
+    _atomic_write_json(
+        worktree_collaboration_manifest_path(wt_path),
+        WorktreeCollaborationManifest(
+            project_path=str(project_path),
+            worktree_path=str(wt_path),
+            story_id=story_id,
+            branch_name=str(branch_name or "").strip(),
+            artifact_dir=str(collaboration_dir),
+            created_at=_utcnow_iso(),
+        ).model_dump(),
+    )
+
+
 def gc_stale_worktrees(
     project_path: Path,
     *,
@@ -198,6 +259,7 @@ def create_worktree(project_path: Path, story_id: int, *, branch_name: str | Non
     wt_path.mkdir(parents=True, exist_ok=True)
     _neutralize_worktree_hooks(wt_path)
     _write_worktree_metadata(project_path, wt_path, story_id=story_id, branch_name=branch)
+    _write_worktree_collaboration_manifest(project_path, wt_path, story_id=story_id, branch_name=branch)
     return wt_path
 
 

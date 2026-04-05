@@ -37,9 +37,12 @@ def extract_strict_verdict(raw_output: str) -> tuple[str, str]:
 def require_adversarial_probe(checks: Sequence[VerificationCheck], raw_output: str = "") -> bool:
     """Return whether verifier output includes an explicitly labeled adversarial probe."""
 
-    if any(ADVERSARIAL_PROBE_PATTERN.search(str(check.name or "")) for check in checks):
-        return True
-    return bool(ADVERSARIAL_PROBE_PATTERN.search(raw_output))
+    return any(
+        ADVERSARIAL_PROBE_PATTERN.search(str(check.name or ""))
+        and str(check.command or "").strip()
+        and str(check.output or "").strip()
+        for check in checks
+    )
 
 
 def validate_verifier_output(raw_output: str, checks: Sequence[VerificationCheck]) -> tuple[str, str]:

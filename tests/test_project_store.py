@@ -2,12 +2,14 @@
 
 import json
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 import yaml
 
+import autopilot.core.atomic_io as atomic_io
 from autopilot.core.approval_runtime import annotate_approval_runtime, create_or_reuse_approval_runtime, save_approval_runtime
 from autopilot.core.config import AutopilotConfig, ProviderConfig
 from autopilot.core.models import StoryDependencyError
@@ -137,6 +139,60 @@ def test_load_project_state_after_register_and_save(tmp_path: Path) -> None:
     assert loaded["story_state"]["1"]["checkout"] is None
     assert loaded["budget_policy"]["project_max_worker_iterations"] == 200
     assert loaded["budget_usage"]["project"]["worker_iterations"] == 0
+
+
+def test_save_project_state_uses_unique_temp_files_for_concurrent_writes(tmp_path: Path, monkeypatch) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    project_id = "runtime-team-smoke-dd4e380e"
+    created_temp_files: list[str] = []
+    original_mkstemp = atomic_io.tempfile.mkstemp
+
+    def instrumented_mkstemp(*args, **kwargs):
+        fd, temp_name = original_mkstemp(*args, **kwargs)
+        created_temp_files.append(Path(temp_name).name)
+        return fd, temp_name
+
+    monkeypatch.setattr(atomic_io.tempfile, "mkstemp", instrumented_mkstemp)
+
+    def writer(status: str) -> None:
+        save_project_state(config, project_id, {"status": status})
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [
+            executor.submit(writer, "running"),
+            executor.submit(writer, "paused"),
+        ]
+        for future in futures:
+            future.result()
+
+    assert len(created_temp_files) == 2
+    assert len(set(created_temp_files)) == 2
+    assert all(name.startswith(f".{project_id}.json.") and name.endswith(".tmp") for name in created_temp_files)
+    assert load_project_state(config, project_id)["status"] in {"running", "paused"}
+
+
+def test_ensure_project_state_persists_memory_summary_for_completed_stories(tmp_path: Path) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    project_dir = tmp_path / "memory-project"
+    project_dir.mkdir(parents=True)
+
+    project = register_project(config, name="Memory Project", project_path=project_dir)
+    prd = normalize_prd(
+        {
+            "title": "Memory Project",
+            "stories": [
+                {"id": 1, "title": "Bootstrap callback hardening", "description": "Ship allowlist validation", "status": "done"}
+            ],
+        },
+        seed_mode="migrate",
+    )
+    save_project_prd(project, prd)
+
+    state = ensure_project_state(config, project, seed_mode="migrate")
+
+    assert state["memory"]["skill_count"] == 1
+    assert state["memory"]["memory_count"] >= 1
+    assert state["memory"]["graph_node_count"] >= 2
 
 
 def test_register_project_persists_task_source_contract(tmp_path: Path) -> None:
@@ -734,6 +790,66 @@ def test_build_project_detail_resolves_local_provider_contract(tmp_path: Path) -
     assert detail["stories"][0]["team_members"][0]["provider"] == "ollama"
 
 
+def test_build_project_detail_includes_operator_shell_contract(tmp_path: Path) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    project_dir = tmp_path / "operator-shell-project"
+    project_dir.mkdir(parents=True)
+
+    project = register_project(config, name="Operator Shell Project", project_path=project_dir)
+    prd = normalize_prd(
+        {
+            "title": "Operator Shell Project",
+            "stories": [{"id": 1, "title": "Bootstrap", "description": "Start"}],
+        }
+    )
+    save_project_prd(project, prd)
+    ensure_project_state(config, project, seed_mode="new")
+    bootstrap_payload = {
+        "verification": {
+            "artifact_exists": True,
+            "artifact_path": str(project_dir / ".agents" / "verification" / "bootstrap.json"),
+            "check_count": 4,
+        },
+        "github": {
+            "workflow_exists": True,
+            "workflow_path": str(project_dir / ".github" / "workflows" / "autopilot.yml"),
+            "github_repo": "FounderOS/autopilot",
+            "compare_url": "https://github.com/FounderOS/autopilot/compare/main...feature",
+        },
+    }
+    diagnostics_payload = {
+        "summary": {"error_count": 0, "warning_count": 1, "info_count": 2},
+        "diagnostics": [
+            {
+                "code": "github_cli_missing",
+                "severity": "warning",
+                "scope": "ship",
+                "message": "GitHub CLI `gh` is not installed.",
+                "fix": "Install GitHub CLI before ship.",
+                "metadata": {},
+            }
+        ],
+    }
+
+    with patch(
+        "autopilot.core.bootstrap_visibility.build_bootstrap_status",
+        return_value=bootstrap_payload,
+    ) as mock_bootstrap, patch(
+        "autopilot.core.runtime_diagnostics.build_runtime_diagnostics",
+        return_value=diagnostics_payload,
+    ) as mock_diagnostics:
+        detail = build_project_detail(config, project["id"])
+
+    assert detail["bootstrap"] == bootstrap_payload
+    assert detail["runtime_diagnostics"] == diagnostics_payload
+    assert detail["company"]["status"]["runtime_wall_enforced"] is True
+    assert detail["company"]["goals"]["items"][0]["stories_total"] == 1
+    assert any(item["id"] == "run_loop" for item in detail["company"]["routines"]["items"])
+    assert mock_bootstrap.call_args.kwargs["project_path"] == project["path"]
+    assert Path(mock_diagnostics.call_args.kwargs["project_path"]).resolve() == project_dir.resolve()
+    assert mock_diagnostics.call_args.kwargs["config_path"] == config.autopilot_home / "config.yaml"
+
+
 def test_discoveries_are_recorded_and_shared_in_story_context(tmp_path: Path) -> None:
     config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
     project_dir = tmp_path / "discovery-project"
@@ -809,6 +925,7 @@ def test_build_project_detail_includes_story_ownership_and_checkout(tmp_path: Pa
     assert "budget_policy" in detail
     assert "budget_usage" in detail
     assert "cost_usage" in detail
+    assert "monitoring" in detail
     assert detail["stories"][0]["cost"]["invocations"] == 0
 
 

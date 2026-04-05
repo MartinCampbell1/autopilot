@@ -9,7 +9,7 @@ import type {
   TriageInboxFeedbackGroup,
   TriageInboxItem,
 } from "@/lib/control-plane-models";
-import type { OrchestratorControlPassRecord } from "@/lib/types";
+import type { ExecutionShadowAuditRecord, OrchestratorControlPassRecord } from "@/lib/types";
 
 type WorkspaceSectionProps = ComponentProps<typeof ControlPlaneWorkspaceSection>;
 type HeaderSectionProps = ComponentProps<typeof ControlPlaneHeaderSections>;
@@ -41,6 +41,12 @@ type BuildWorkspaceSectionPropsArgs = {
   onCancelSelectedRunAsyncSettlement: (
     run: NonNullable<WorkspaceSectionProps["selectedActionRunCardProps"]["selectedRun"]>
   ) => void;
+  onInspectSelectedRunShadowAudit: NonNullable<
+    WorkspaceSectionProps["selectedActionRunCardProps"]["onInspectShadowAudit"]
+  >;
+  onResolveSelectedRunShadowAudit: NonNullable<
+    WorkspaceSectionProps["selectedActionRunCardProps"]["onResolveShadowAudit"]
+  >;
   formatScopeList: WorkspaceSectionProps["selectedActionRunCardProps"]["formatScopeList"];
   describeRunResult: WorkspaceSectionProps["selectedActionRunCardProps"]["describeRunResult"];
   toStringArray: WorkspaceSectionProps["selectedActionRunCardProps"]["toStringArray"];
@@ -118,6 +124,7 @@ type BuildWorkspaceSectionPropsArgs = {
   triageInboxItems: TriageInboxItem[];
   selectedTriageInboxItem: WorkspaceSectionProps["triageInboxSectionProps"]["selectedTriageInboxItem"];
   syncedTriageInboxItem: WorkspaceSectionProps["triageInboxSectionProps"]["syncedTriageInboxItem"];
+  selectedSessionShadowAudits: ExecutionShadowAuditRecord[];
   inspectTriageInboxItem: WorkspaceSectionProps["triageInboxSectionProps"]["onInspectTriageInboxItem"];
   inspectAndAdvanceTriageInboxItem: WorkspaceSectionProps["triageInboxSectionProps"]["onInspectAndAdvanceTriageInboxItem"];
   advanceTriageInboxCursor: WorkspaceSectionProps["triageInboxSectionProps"]["onAdvanceTriageInboxCursor"];
@@ -138,12 +145,22 @@ type BuildWorkspaceSectionPropsArgs = {
   openTriageInboxHistoryGroup: (groupKey: string) => void;
   snoozeTriageInboxItem: (item: TriageInboxItem) => void;
   dismissTriageInboxItem: (item: TriageInboxItem) => void;
+  resolveShadowAudit: NonNullable<
+    WorkspaceSectionProps["triageInboxSectionProps"]["onResolveShadowAudit"]
+  >;
   runtimeAgentSectionProps: WorkspaceSectionProps["runtimeAgentSectionProps"];
   controlSummary: WorkspaceSectionProps["controlPlaneOverviewSectionsProps"]["controlSummary"];
   recentSessions: WorkspaceSectionProps["controlPlaneOverviewSectionsProps"]["recentSessions"];
   totalSessionCount: number;
   selectedSessionId: string;
+  selectedSession: WorkspaceSectionProps["controlPlaneOverviewSectionsProps"]["selectedSession"];
   sessionSummary: WorkspaceSectionProps["controlPlaneOverviewSectionsProps"]["sessionSummary"];
+  inspectOverviewShadowAudit: NonNullable<
+    WorkspaceSectionProps["controlPlaneOverviewSectionsProps"]["onInspectShadowAudit"]
+  >;
+  resolveOverviewShadowAudit: NonNullable<
+    WorkspaceSectionProps["controlPlaneOverviewSectionsProps"]["onResolveShadowAudit"]
+  >;
 };
 
 type BuildHeaderSectionPropsArgs = {
@@ -184,6 +201,8 @@ export function buildWorkspaceSectionProps({
   onApplySelectedPreviewRun,
   onWaitSelectedRunAsyncSettlement,
   onCancelSelectedRunAsyncSettlement,
+  onInspectSelectedRunShadowAudit,
+  onResolveSelectedRunShadowAudit,
   formatScopeList,
   describeRunResult,
   toStringArray,
@@ -261,6 +280,7 @@ export function buildWorkspaceSectionProps({
   triageInboxItems,
   selectedTriageInboxItem,
   syncedTriageInboxItem,
+  selectedSessionShadowAudits,
   inspectTriageInboxItem,
   inspectAndAdvanceTriageInboxItem,
   advanceTriageInboxCursor,
@@ -281,12 +301,16 @@ export function buildWorkspaceSectionProps({
   openTriageInboxHistoryGroup,
   snoozeTriageInboxItem,
   dismissTriageInboxItem,
+  resolveShadowAudit,
   runtimeAgentSectionProps,
   controlSummary,
   recentSessions,
   totalSessionCount,
   selectedSessionId,
+  selectedSession,
   sessionSummary,
+  inspectOverviewShadowAudit,
+  resolveOverviewShadowAudit,
 }: BuildWorkspaceSectionPropsArgs): WorkspaceSectionProps {
   return {
     recentControlPasses,
@@ -318,6 +342,12 @@ export function buildWorkspaceSectionProps({
       onCancelAsyncSettlement: (run) => {
         if (!run) return;
         onCancelSelectedRunAsyncSettlement(run);
+      },
+      onInspectShadowAudit: (audit) => {
+        onInspectSelectedRunShadowAudit(audit);
+      },
+      onResolveShadowAudit: (audit) => {
+        onResolveSelectedRunShadowAudit(audit);
       },
       formatTimestamp,
       formatScopeList,
@@ -430,6 +460,8 @@ export function buildWorkspaceSectionProps({
       triageInboxItems,
       selectedTriageInboxItem,
       syncedTriageInboxItem,
+      availableShadowAudits: selectedSessionShadowAudits,
+      busyActionKey,
       formatTimestamp,
       onInspectTriageInboxItem: inspectTriageInboxItem,
       onInspectAndAdvanceTriageInboxItem: inspectAndAdvanceTriageInboxItem,
@@ -451,6 +483,9 @@ export function buildWorkspaceSectionProps({
       onOpenTriageInboxHistoryGroup: openTriageInboxHistoryGroup,
       onSnoozeTriageInboxItem: snoozeTriageInboxItem,
       onDismissTriageInboxItem: dismissTriageInboxItem,
+      onResolveShadowAudit: (audit) => {
+        return resolveShadowAudit(audit);
+      },
     },
     runtimeAgentSectionProps,
     controlPlaneOverviewSectionsProps: {
@@ -458,7 +493,16 @@ export function buildWorkspaceSectionProps({
       recentSessions,
       totalSessionCount,
       selectedSessionId,
+      selectedSession,
+      busyActionKey,
+      formatTimestamp,
       onSelectSession: setSelectedSessionId,
+      onInspectShadowAudit: (audit) => {
+        inspectOverviewShadowAudit(audit);
+      },
+      onResolveShadowAudit: (audit) => {
+        return resolveOverviewShadowAudit(audit);
+      },
       sessionSummary,
     },
   };

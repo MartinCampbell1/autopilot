@@ -56,6 +56,13 @@ def test_validate_gate_shell_command_rejects_shell_expansion_in_path() -> None:
     assert "shell expansion" in result.reason.lower()
 
 
+def test_validate_gate_shell_command_rejects_shell_expansion_in_env_assignment() -> None:
+    result = validate_gate_shell_command("FOO=$BAR pytest -q")
+
+    assert result.allowed is False
+    assert "environment assignment" in result.reason.lower()
+
+
 def test_validate_gate_shell_command_rejects_destructive_find_operator() -> None:
     result = validate_gate_shell_command("find . -name '*.py' -delete")
 
@@ -117,6 +124,13 @@ def test_validate_gate_shell_command_rejects_inline_python_eval() -> None:
 
     assert result.allowed is False
     assert "inline python" in result.reason.lower()
+
+
+def test_validate_gate_shell_command_rejects_nested_shell_interpreter() -> None:
+    result = validate_gate_shell_command("bash -lc 'pytest -q'")
+
+    assert result.allowed is False
+    assert "nested shell" in result.reason.lower()
 
 
 def test_validate_gate_shell_command_rejects_unknown_package_script() -> None:

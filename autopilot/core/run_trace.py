@@ -8,7 +8,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from autopilot.core.audit_chain import append_jsonl_audit_record, build_audit_bundle
 from autopilot.core.config import AutopilotConfig
+from autopilot.core.monitoring.traces import annotate_trace_entries, build_trace_replay
 
 
 def _utcnow_iso() -> str:
@@ -32,10 +34,7 @@ def append_trace_entry(
         **entry,
     }
     path = trace_path(config, project_id)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(record, ensure_ascii=False) + "\n")
-    return record
+    return append_jsonl_audit_record(path, record, chain_kind="trace", config=config)
 
 
 def read_trace_entries(
@@ -58,7 +57,30 @@ def read_trace_entries(
     return entries
 
 
-def build_trace_summary(entries: list[dict[str, Any]]) -> dict[str, Any]:
+def _filter_trace_entries(
+    entries: list[dict[str, Any]],
+    *,
+    story_id: int | None = None,
+    run_id: str | None = None,
+    limit: int | None = None,
+) -> list[dict[str, Any]]:
+    annotated = annotate_trace_entries(entries)
+    filtered = [
+        dict(entry)
+        for entry, annotated_entry in zip(entries, annotated, strict=False)
+        if (story_id is None or int(annotated_entry.get("story_id") or 0) == int(story_id))
+        and (run_id is None or str(annotated_entry.get("run_id") or "") == str(run_id))
+    ]
+    if limit is not None and limit > 0:
+        filtered = filtered[-limit:]
+    return filtered
+
+
+def build_trace_summary(
+    entries: list[dict[str, Any]],
+    *,
+    verification: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Build a replay-friendly summary from trace entries."""
     kinds = Counter(str(entry.get("kind") or "unknown") for entry in entries)
     by_story: dict[str, dict[str, Any]] = {}
@@ -91,4 +113,49 @@ def build_trace_summary(entries: list[dict[str, Any]]) -> dict[str, Any]:
         "stories": list(by_story.values()),
         "first_timestamp": entries[0]["timestamp"] if entries else None,
         "last_timestamp": entries[-1]["timestamp"] if entries else None,
+        "verified": bool((verification or verify_trace_chain(entries))["verified"]) if entries else True,
+        "latest_hash": (
+            str((verification or verify_trace_chain(entries)).get("latest_hash") or "")
+            if entries
+            else ""
+        ),
     }
+
+
+def verify_trace_chain(entries: list[dict[str, Any]], *, config: AutopilotConfig | None = None) -> dict[str, Any]:
+    from autopilot.core.audit_chain import verify_audit_chain
+
+    return verify_audit_chain(entries, chain_kind="trace", config=config)
+
+
+def build_trace_audit_bundle(
+    config: AutopilotConfig,
+    project_id: str,
+    *,
+    story_id: int | None = None,
+    run_id: str | None = None,
+    limit: int | None = None,
+    include_entries: bool = True,
+) -> dict[str, Any]:
+    entries = read_trace_entries(config, project_id)
+    source_verification = verify_trace_chain(entries, config=config)
+    selected_entries = _filter_trace_entries(entries, story_id=story_id, run_id=run_id, limit=limit)
+    replay = build_trace_replay(entries, story_id=story_id, run_id=run_id, limit=limit)
+    bundle = build_audit_bundle(
+        selected_entries,
+        chain_kind="trace",
+        project_id=project_id,
+        run_id=str(run_id or ""),
+        story_id=story_id,
+        config=config,
+        include_entries=include_entries,
+        source_verification=source_verification,
+        source_entry_count=len(entries),
+    )
+    bundle["summary"] = build_trace_summary(
+        selected_entries,
+        verification=dict((bundle.get("audit_chain") or {}).get("verification") or {}),
+    )
+    bundle["source_summary"] = build_trace_summary(entries, verification=source_verification)
+    bundle["replay"] = replay
+    return bundle

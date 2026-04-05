@@ -10,11 +10,13 @@ from pathlib import Path
 from typing import Any
 
 from autopilot.core.config import AutopilotConfig
+from autopilot.core.audit_chain import append_jsonl_audit_record
 from autopilot.core.control_messages import (
     BoundedMessageIdSet,
     ControlRequestEnvelope,
     ControlResponseEnvelope,
     parse_control_request_message,
+    parse_control_response_message,
 )
 from autopilot.core.headless_control import HeadlessControlSession
 
@@ -27,10 +29,7 @@ def append_event_log_message(config: AutopilotConfig, payload: dict[str, Any]) -
     """Append one raw structured message to the shared event log."""
 
     path = config.events_log_path
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(payload, ensure_ascii=False) + "\n")
-    return payload
+    return append_jsonl_audit_record(path, payload, chain_kind="events", config=config)
 
 
 @dataclass(slots=True)
@@ -55,6 +54,14 @@ class HeadlessEventLogControlBridge:
             return None
         if not isinstance(payload, dict):
             return None
+        return self._parse_matching_request(payload, mark_seen=True)
+
+    def _parse_matching_request(
+        self,
+        payload: dict[str, Any],
+        *,
+        mark_seen: bool,
+    ) -> ControlRequestEnvelope | None:
         request = parse_control_request_message(payload)
         if request is None:
             return None
@@ -62,7 +69,8 @@ class HeadlessEventLogControlBridge:
             return None
         if self._seen_request_ids.has(request.request_id):
             return None
-        self._seen_request_ids.add(request.request_id)
+        if mark_seen:
+            self._seen_request_ids.add(request.request_id)
         return request
 
     def _emit_response(self, response: ControlResponseEnvelope) -> None:
@@ -77,10 +85,41 @@ class HeadlessEventLogControlBridge:
             },
         )
 
+    def _replay_pending_requests(self, path: Path) -> None:
+        pending_by_request_id: dict[str, ControlRequestEnvelope] = {}
+        responded_request_ids: set[str] = set()
+        with path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                try:
+                    payload = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(payload, dict):
+                    continue
+                request = self._parse_matching_request(payload, mark_seen=False)
+                if request is not None:
+                    pending_by_request_id[request.request_id] = request
+                    continue
+                response = parse_control_response_message(payload)
+                if response is None:
+                    continue
+                if str(response.session_id or "").strip() != self.session.session_id:
+                    continue
+                responded_request_ids.add(response.response.request_id)
+                self._seen_request_ids.add(response.response.request_id)
+
+        for request_id, request in pending_by_request_id.items():
+            if request_id in responded_request_ids or self._seen_request_ids.has(request_id):
+                continue
+            self._seen_request_ids.add(request_id)
+            response = self.session.handle_request(request)
+            self._emit_response(response)
+
     def _loop(self) -> None:
         path = self._event_log_path()
         path.parent.mkdir(parents=True, exist_ok=True)
         path.touch(exist_ok=True)
+        self._replay_pending_requests(path)
 
         with path.open("r", encoding="utf-8") as handle:
             handle.seek(0, 2)

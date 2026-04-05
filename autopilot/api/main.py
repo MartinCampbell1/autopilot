@@ -3,7 +3,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from autopilot.api.routes import accounts, capabilities, events, execution_plane, intake, integrations, projects
+from autopilot.api.routes import accounts, capabilities, events, execution_outcomes, execution_plane, initiatives, intake, integrations, projects
 
 app = FastAPI(title="Autopilot API", version="0.1.0")
 
@@ -21,8 +21,10 @@ app.include_router(execution_plane.router, prefix="/api/execution-plane", tags=[
 app.include_router(accounts.router, prefix="/api/accounts", tags=["accounts"])
 app.include_router(capabilities.router, prefix="/api/capabilities", tags=["capabilities"])
 app.include_router(events.router, prefix="/api/events", tags=["events"])
+app.include_router(execution_outcomes.router, prefix="/api/execution-outcomes", tags=["execution-outcomes"])
 app.include_router(intake.router, prefix="/api/intake", tags=["intake"])
 app.include_router(integrations.router, prefix="/api/integrations", tags=["integrations"])
+app.include_router(initiatives.router, prefix="/api/founderos/initiatives", tags=["initiatives"])
 
 
 @app.get("/api/health")

@@ -4,11 +4,14 @@ from __future__ import annotations
 
 from autopilot.core.control_messages import (
     BoundedMessageIdSet,
+    build_sse_replay_id,
     build_structured_event_envelope,
     make_control_error_response,
     make_control_success_response,
     normalize_control_message_keys,
     parse_control_message,
+    parse_sse_replay_sequence,
+    resolve_control_event_id,
 )
 
 
@@ -245,6 +248,40 @@ def test_build_structured_event_envelope_uses_sequence_when_no_explicit_id() -> 
     assert envelope.event_id == "evt_7"
     assert envelope.sequence == 7
     assert envelope.data["project_id"] == "proj_1"
+
+
+def test_resolve_control_event_id_distinguishes_request_and_response() -> None:
+    request_id = resolve_control_event_id(
+        {
+            "type": "control_request",
+            "request_id": "req_control_1",
+            "request": {"subtype": "interrupt"},
+        },
+        1,
+    )
+    response_id = resolve_control_event_id(
+        {
+            "type": "control_response",
+            "response": {
+                "subtype": "success",
+                "request_id": "req_control_1",
+                "response": {"accepted": True},
+            },
+        },
+        2,
+    )
+
+    assert request_id == "req_control_1:request"
+    assert response_id == "req_control_1:response"
+
+
+def test_sse_replay_id_round_trips_sequence() -> None:
+    replay_id = build_sse_replay_id(42)
+
+    assert replay_id == "evt_42"
+    assert parse_sse_replay_sequence(replay_id) == 42
+    assert parse_sse_replay_sequence("42") == 42
+    assert parse_sse_replay_sequence("req_control_1:response") is None
 
 
 def test_normalize_control_message_keys_handles_nested_lists() -> None:

@@ -6,6 +6,7 @@ from pathlib import Path
 
 from autopilot.cli.doctor import _doctor_report
 from autopilot.core.onboarding import ProjectToolingReport
+from autopilot.core.plugin_scan import PluginRuntimeScan, PluginRuntimeScanSummary
 
 
 def test_doctor_report_includes_runtime_diagnostics_and_dedupes_recommendations(monkeypatch, tmp_path: Path) -> None:
@@ -90,6 +91,26 @@ def test_doctor_report_includes_runtime_diagnostics_and_dedupes_recommendations(
             "summary": {"error_count": 0, "warning_count": 2, "info_count": 1},
         },
     )
+    monkeypatch.setattr(
+        "autopilot.cli.doctor.build_plugin_runtime_scan",
+        lambda config: PluginRuntimeScan(
+            summary=PluginRuntimeScanSummary(
+                plugin_count=1,
+                enabled_plugin_count=1,
+                invalid_plugin_count=0,
+                blocked_plugin_count=0,
+                mcp_server_count=2,
+                active_mcp_server_count=2,
+                blocked_mcp_server_count=0,
+                wrapped_surface_count=1,
+                sandboxed_surface_count=1,
+                recommended_runtime_profile="hybrid",
+            ),
+            recommendations=[
+                "Keep remote plugin MCP surfaces behind wrapper mode and review their headers/options before enabling them in production."
+            ],
+        ),
+    )
 
     report = _doctor_report(
         config_path=tmp_path / "config.yaml",
@@ -99,9 +120,15 @@ def test_doctor_report_includes_runtime_diagnostics_and_dedupes_recommendations(
 
     assert report["runtime_diagnostics"]["summary"]["warning_count"] == 2
     assert report["bootstrap"]["verification"]["artifact_exists"] is False
+    assert report["plugin_runtime"]["summary"]["wrapped_surface_count"] == 1
+    assert report["plugin_runtime"]["summary"]["recommended_runtime_profile"] == "hybrid"
     assert "Install or repair the codex CLI." in report["recommendations"]
     assert "Run `autopilot init` to create a starter PRD and register the project." in report["recommendations"]
     assert "Run `autopilot init-verifiers` to persist generated verifier checks for this repo." in report["recommendations"]
     assert "Resume or pause this project to reconcile state before relying on its runtime status." in report["recommendations"]
     assert "Install GitHub CLI and run `gh auth login` before relying on `autopilot ship`." in report["recommendations"]
+    assert (
+        "Keep remote plugin MCP surfaces behind wrapper mode and review their headers/options before enabling them in production."
+        in report["recommendations"]
+    )
     assert len(report["recommendations"]) == len(set(report["recommendations"]))

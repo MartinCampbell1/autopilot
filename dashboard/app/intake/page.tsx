@@ -13,6 +13,7 @@ import {
   fetchProjects,
   launchProject as launchProjectRun,
 } from "@/lib/api";
+import { useProjectRuntimeHandoffSignals } from "@/lib/use-project-runtime-handoff-signals";
 import type { LaunchPreset, PRD, ProjectSummary, ProviderConfig, RuntimeProfile, TaskSource } from "@/lib/types";
 
 const FALLBACK_PRESETS: LaunchPreset[] = [
@@ -134,6 +135,10 @@ export default function IntakePage() {
   const [taskSourceRepo, setTaskSourceRepo] = useState("");
   const [taskSourceBranchPolicy, setTaskSourceBranchPolicy] = useState("isolated_worktree");
   const [taskSourceBriefRef, setTaskSourceBriefRef] = useState(".agents/tasks/prd.json");
+  const {
+    signals: projectRuntimeHandoffSignals,
+    refresh: refreshProjectRuntimeHandoffSignals,
+  } = useProjectRuntimeHandoffSignals(projects);
 
   const activeLaunchPreset =
     launchPresets.find((preset) => preset.id === launchPresetId) ||
@@ -281,7 +286,12 @@ export default function IntakePage() {
 
   return (
     <div className="flex min-h-screen bg-[#fafaf9]">
-      <AppSidebar health={health} projects={projects} />
+      <AppSidebar
+        health={health}
+        projects={projects}
+        projectRuntimeHandoffSignals={projectRuntimeHandoffSignals}
+        onRefreshProjectRuntimeHandoffSignals={refreshProjectRuntimeHandoffSignals}
+      />
 
       <main className="flex-1 pl-[260px]">
         <header className="sticky top-0 z-30 flex h-[52px] items-center justify-between border-b border-[#e5e5e3] bg-white px-6">

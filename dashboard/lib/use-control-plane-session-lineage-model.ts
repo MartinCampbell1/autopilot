@@ -55,6 +55,7 @@ type UseControlPlaneSessionLineageModelArgs = {
   selectedRunResultIndex: number;
   selectedSessionToolPermissionRuntimeId: string;
   selectedSessionAsyncTaskId: string;
+  selectedSessionShadowAuditId: string;
   sessionLineageFilter: string;
   dismissedLineageQueueKeys: Record<LineageQueueKind, string[]>;
   snoozedLineageQueueUntil: Record<LineageQueueKind, Record<string, number>>;
@@ -103,6 +104,7 @@ export function useControlPlaneSessionLineageModel({
   selectedRunResultIndex,
   selectedSessionToolPermissionRuntimeId,
   selectedSessionAsyncTaskId,
+  selectedSessionShadowAuditId,
   sessionLineageFilter,
   dismissedLineageQueueKeys,
   snoozedLineageQueueUntil,
@@ -114,6 +116,9 @@ export function useControlPlaneSessionLineageModel({
   const sessionLineageEntries = useMemo(() => {
     const entries: SessionLineageEntry[] = [];
     linkedRuns.forEach((run) => {
+      const openRunShadowAudits = (run.shadow_audits || []).filter(
+        (audit) => audit.open || audit.status === "open"
+      );
       run.results.forEach((result, resultIndex) => {
         const approvalId = toStringValue(asRecord(result.approval)?.id);
         const issueId = toStringValue(asRecord(result.issue)?.id);
@@ -167,6 +172,8 @@ export function useControlPlaneSessionLineageModel({
           asyncTaskId: "",
           asyncTaskStatus: "",
           asyncTaskCommand: "",
+          shadowAuditId: openRunShadowAudits[0]?.id || "",
+          openShadowAuditCount: openRunShadowAudits.length,
         });
       });
     });
@@ -224,9 +231,17 @@ export function useControlPlaneSessionLineageModel({
         asyncTaskId: "",
         asyncTaskStatus: "",
         asyncTaskCommand: "",
+        shadowAuditId: "",
+        openShadowAuditCount: 0,
       });
     });
     (selectedSession?.async_tasks || []).forEach((task) => {
+      const openTaskShadowAudits = (task.shadow_audits || [])
+        .filter((audit) => audit.open || audit.status === "open")
+        .sort(
+          (left, right) =>
+            right.updated_at.localeCompare(left.updated_at) || right.id.localeCompare(left.id)
+        );
       const runtimeAgentId = task.runtime_agent_ids[0] || task.runtime_agent_id || "";
       const relatedRunLink = resolveRunLinkFromContext(linkedRuns, {
         runId: task.agent_action_run_id,
@@ -283,6 +298,8 @@ export function useControlPlaneSessionLineageModel({
         asyncTaskId: task.id,
         asyncTaskStatus: toStringValue(task.status),
         asyncTaskCommand: toStringValue(task.command),
+        shadowAuditId: openTaskShadowAudits[0]?.id || "",
+        openShadowAuditCount: openTaskShadowAudits.length,
       });
     });
     return entries.sort(
@@ -300,6 +317,7 @@ export function useControlPlaneSessionLineageModel({
     selectedRunResultIndex,
     selectedSessionToolPermissionRuntimeId,
     selectedSessionAsyncTaskId,
+    selectedSessionShadowAuditId,
     sessionLineageEntries,
     sessionLineageFilter,
     selectedSessionLineageEntryRef,
@@ -360,7 +378,11 @@ export function useControlPlaneSessionLineageModel({
   const sessionLineageDecisionCount = useMemo(
     () =>
       sessionLineageEntries.filter(
-        (entry) => entry.approvalId || entry.issueId || entry.toolPermissionRuntimeId
+        (entry) =>
+          entry.approvalId ||
+          entry.issueId ||
+          entry.toolPermissionRuntimeId ||
+          entry.shadowAuditId
       ).length,
     [sessionLineageEntries]
   );

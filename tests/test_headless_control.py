@@ -397,9 +397,14 @@ def test_headless_control_mcp_status_surfaces_plugin_runtime_state(tmp_path: Pat
     payload = response.response.response
     assert payload["summary"]["plugin_count"] == 1
     assert payload["summary"]["mcp_server_count"] == 1
+    assert payload["summary"]["wrapped_surface_count"] == 0
+    assert payload["summary"]["sandboxed_surface_count"] == 1
+    assert payload["summary"]["recommended_runtime_profile"] == "local"
     assert payload["plugins"][0]["plugin_id"] == "ops"
     assert payload["mcp_servers"][0]["connector_id"] == "plugin-ops-review"
+    assert payload["mcp_servers"][0]["policy_action"] == "sandbox"
     assert payload["managed_connectors"][0]["origin_plugin_id"] == "ops"
+    assert payload["scan"]["summary"]["sandboxed_surface_count"] == 1
 
 
 def test_headless_control_reload_plugins_rediscovers_filesystem_changes(tmp_path: Path) -> None:
@@ -494,6 +499,39 @@ def test_headless_control_dangerous_shell_command_denies_in_dont_ask_mode(tmp_pa
     assert payload["behavior"] == "deny"
     assert payload["rule_source"] == "workspace_policy"
     assert "dangerous_pattern:curl_pipe_shell" in str(payload["matched_rule"])
+
+
+def test_headless_control_fail_closed_shell_safety_denies_even_in_approved_mode(tmp_path: Path) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    project = _create_project(config, tmp_path / "project")
+    session = create_headless_control_session(config, project_entry=project, session_id="sess_headless")
+    session.handle_request(
+        {
+            "type": "control_request",
+            "request_id": "req_permission_mode",
+            "request": {"subtype": "set_permission_mode", "mode": "approved"},
+            "session_id": "sess_headless",
+        }
+    )
+
+    response = session.handle_request(
+        {
+            "type": "control_request",
+            "request_id": "req_can_use_tool_shell_fail_closed",
+            "request": {
+                "subtype": "can_use_tool",
+                "tool_name": "shell_exec",
+                "input": {"command": "bash -lc 'pytest -q'"},
+                "tool_use_id": "toolu_shell_fail_closed",
+            },
+            "session_id": "sess_headless",
+        }
+    )
+
+    payload = response.response.response
+    assert payload["behavior"] == "deny"
+    assert payload["rule_source"] == "workspace_policy"
+    assert "dangerous_pattern:command_safety_nested_shell" in str(payload["matched_rule"])
 
 
 def test_headless_control_classifier_fails_closed_in_dont_ask_mode(tmp_path: Path) -> None:
@@ -875,6 +913,61 @@ def test_headless_control_can_get_runtime_agent_task_and_artifacts(tmp_path: Pat
     assert "Runtime Agent Task Transcript" in transcript_response.response.response["transcript"]["content"]
 
 
+def test_headless_control_blocks_quarantined_runtime_agent_task_output(tmp_path: Path) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    project = _create_project(config, tmp_path / "project")
+    log_path = config.autopilot_home / "logs" / "headless-task-shadow.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path.write_text("launch started\nlaunch finished cleanly\n", encoding="utf-8")
+
+    task = create_or_reuse_runtime_agent_task(
+        config,
+        project_id=str(project["id"]),
+        command="launch",
+        actor="founderos",
+        reason="Launch background work.",
+        orchestrator_session_id="sess_headless",
+        runtime_agent_ids=["proj_headless_runtime:1:worker:a"],
+        output_path=str(log_path),
+        metadata={
+            "shadow_audit": {
+                "action": "quarantine",
+                "summary": "Background task output requires explicit review before handoff.",
+                "findings": ["unverified_subagent_output"],
+            }
+        },
+    )
+    save_project_state(
+        config,
+        str(project["id"]),
+        {
+            "status": "completed",
+            "paused": False,
+            "finished_at": "2026-04-02T00:00:00+00:00",
+            "log_path": str(log_path),
+        },
+    )
+    refresh_runtime_agent_task(config, task.id)
+    session = create_headless_control_session(config, project_entry=project, session_id="sess_headless")
+
+    output_response = session.handle_request(
+        {
+            "type": "control_request",
+            "request_id": "req_get_runtime_agent_task_output_shadow",
+            "request": {"subtype": "get_runtime_agent_task_output", "task_id": task.id},
+            "session_id": "sess_headless",
+        }
+    )
+
+    assert output_response.response.subtype == "success"
+    payload = output_response.response.response["output"]
+    assert payload["status"] == "quarantined"
+    assert payload["content"] == ""
+    assert payload["content_blocked"] is True
+    assert payload["quarantined"] is True
+    assert payload["shadow_audits"][0]["source_kind"] == "runtime_agent_task_output"
+
+
 def test_headless_control_can_cancel_runtime_agent_task(tmp_path: Path) -> None:
     config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
     project = _create_project(config, tmp_path / "project")
@@ -1101,6 +1194,74 @@ def test_headless_control_can_get_runtime_agent_action_run_and_wait_for_async_se
     assert settled_response.response.response["run"]["completion_state"] == "completed"
     assert settled_response.response.response["run"]["active_async_task_count"] == 0
     assert settled_response.response.response["run"]["async_tasks"][0]["id"] == task.id
+
+
+def test_headless_control_surfaces_quarantined_runtime_agent_action_run_handoff(tmp_path: Path) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    project = _create_project(config, tmp_path / "project")
+    log_path = config.autopilot_home / "logs" / "headless-action-run-shadow.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path.write_text("launch started\nlaunch finished cleanly\n", encoding="utf-8")
+
+    task = create_or_reuse_runtime_agent_task(
+        config,
+        project_id=str(project["id"]),
+        command="launch",
+        actor="founderos",
+        reason="Launch background work.",
+        orchestrator_session_id="sess_headless",
+        runtime_agent_ids=["proj_headless_runtime:1:worker:a"],
+        output_path=str(log_path),
+        metadata={
+            "shadow_audit": {
+                "action": "quarantine",
+                "summary": "Background task output requires explicit review before action-run handoff.",
+                "findings": ["unverified_subagent_output"],
+            }
+        },
+    )
+    run = create_agent_action_batch_run(
+        config,
+        run_kind="single_action",
+        orchestrator_session_id="sess_headless",
+        actor="founderos",
+        mode="auto",
+        selection={"mode": "single_action", "project_id": str(project["id"])},
+        summary={"selected_count": 1, "processed_count": 1, "status_counts": {"ok": 1}},
+        results=[{"status": "ok", "command_result": {"command": "launch"}, "async_task": {"id": task.id}}],
+        status="ok",
+        project_ids=[str(project["id"])],
+        runtime_agent_ids=["proj_headless_runtime:1:worker:a"],
+    )
+    link_runtime_agent_task_run(config, task.id, agent_action_run_id=run.id)
+    save_project_state(
+        config,
+        str(project["id"]),
+        {
+            "status": "completed",
+            "paused": False,
+            "finished_at": "2026-04-02T00:05:00+00:00",
+            "log_path": str(log_path),
+        },
+    )
+    session = create_headless_control_session(config, project_entry=project, session_id="sess_headless")
+
+    response = session.handle_request(
+        {
+            "type": "control_request",
+            "request_id": "req_get_runtime_agent_action_run_shadow",
+            "request": {"subtype": "get_runtime_agent_action_run", "run_id": run.id},
+            "session_id": "sess_headless",
+        }
+    )
+
+    assert response.response.subtype == "success"
+    payload = response.response.response["run"]
+    assert payload["completion_state"] == "quarantined"
+    assert payload["handoff_state"] == "quarantined"
+    assert payload["handoff_blocked"] is True
+    assert payload["open_shadow_audit_count"] == 1
+    assert payload["shadow_audits"][0]["source_kind"] == "runtime_agent_task_output"
 
 
 def test_headless_control_can_cancel_runtime_agent_action_run_async_follow_through(tmp_path: Path) -> None:

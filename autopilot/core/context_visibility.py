@@ -151,5 +151,7 @@ def build_context_snapshot(
             "summary": dict(detail.get("trace_summary") or {}),
             "path": str(detail.get("trace_path") or ""),
         },
+        "monitoring": dict(detail.get("monitoring") or {}),
+        "audit": dict(detail.get("audit") or {}),
         "microcompact": _build_microcompact(detail, repo_key=repo_key, github_repo=github_repo),
     }

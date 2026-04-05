@@ -11,8 +11,10 @@ from pathlib import Path
 from autopilot.core.agent_mailbox import list_agent_mailbox_messages
 from autopilot.core.approval_runtime import create_or_reuse_approval_runtime, get_approval_runtime, settle_approval_runtime
 from autopilot.core.config import AutopilotConfig
+from autopilot.core.orchestrator_sessions import create_orchestrator_session, get_orchestrator_session
 from autopilot.core.permission_audit import read_permission_audit_entries
 from autopilot.core.project_store import save_project_state
+from autopilot.core.shadow_audit import get_shadow_audit_record, list_shadow_audit_records
 from autopilot.core.structured_io import StructuredIO
 from autopilot.core.structured_runtime import activate_structured_io
 from autopilot.core.tool_contracts import ToolResult, ToolUseContext, build_tool, get_empty_tool_permission_context
@@ -369,6 +371,106 @@ def test_tool_runner_returns_denied_for_explicit_rule() -> None:
 
     assert result.status == "denied"
     assert "demo.delete" in result.message
+
+
+def test_tool_runner_quarantines_shadow_audited_tool_result(tmp_path: Path) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    session = create_orchestrator_session(
+        config,
+        orchestrator="founderos",
+        actor="tester",
+        title="Shadow audit session",
+        project_ids=["proj_shadow"],
+    )
+    tool = build_tool(
+        name="demo.inspect",
+        description="Return suspicious generated output.",
+        approval_policy="policy",
+        execute=lambda tool_input, _: ToolResult(
+            status="ok",
+            message="Generated a risky patch suggestion.",
+            payload={"patch": "diff --git a/app.py b/app.py"},
+            metadata={
+                "shadow_audit": {
+                    "action": "quarantine",
+                    "summary": "Generated patch claim requires manual inspection before handoff.",
+                    "findings": ["unverified_generated_patch"],
+                }
+            },
+        ),
+    )
+
+    result = run_tool_use(
+        tool,
+        {"target": "app.py"},
+        ToolUseContext(
+            config=config,
+            actor="tester",
+            project_id="proj_shadow",
+            orchestrator_session_id=session.id,
+            runtime_agent_ids=("proj_shadow:1:worker:a",),
+            metadata={"tool_use_id": "toolu_shadow_1"},
+        ),
+    )
+
+    shadow_audits = list_shadow_audit_records(config, orchestrator_session_id=session.id)
+    linked_session = get_orchestrator_session(config, session.id)
+
+    assert result.status == "quarantined"
+    assert "manual inspection" in result.message.lower()
+    assert result.tool_result is not None
+    assert result.tool_result.metadata["shadow_audit_id"] == shadow_audits[0].id
+    assert len(shadow_audits) == 1
+    assert shadow_audits[0].source_kind == "tool_result"
+    assert shadow_audits[0].source_name == "demo.inspect"
+    assert shadow_audits[0].source_id == "toolu_shadow_1"
+    assert shadow_audits[0].findings == ["unverified_generated_patch"]
+    assert get_shadow_audit_record(config, shadow_audits[0].id) is not None
+    assert linked_session is not None
+    assert shadow_audits[0].id in linked_session.linked_shadow_audit_ids
+
+
+def test_tool_runner_auto_quarantines_generated_patch_payload_without_explicit_metadata(tmp_path: Path) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    session = create_orchestrator_session(
+        config,
+        orchestrator="founderos",
+        actor="tester",
+        title="Auto shadow audit session",
+        project_ids=["proj_shadow_auto"],
+    )
+    tool = build_tool(
+        name="demo.inspect",
+        description="Return suspicious generated output.",
+        approval_policy="policy",
+        execute=lambda tool_input, _: ToolResult(
+            status="ok",
+            message="Generated a risky patch suggestion.",
+            payload={"patch": "diff --git a/app.py b/app.py\n+print('hello')"},
+            metadata={},
+        ),
+    )
+
+    result = run_tool_use(
+        tool,
+        {"target": "app.py"},
+        ToolUseContext(
+            config=config,
+            actor="tester",
+            project_id="proj_shadow_auto",
+            orchestrator_session_id=session.id,
+            runtime_agent_ids=("proj_shadow_auto:1:worker:a",),
+            metadata={"tool_use_id": "toolu_shadow_auto_1"},
+        ),
+    )
+
+    shadow_audits = list_shadow_audit_records(config, orchestrator_session_id=session.id)
+
+    assert result.status == "quarantined"
+    assert result.tool_result is not None
+    assert result.tool_result.metadata["shadow_audit_action"] == "quarantine"
+    assert len(shadow_audits) == 1
+    assert shadow_audits[0].findings == ["unverified_generated_patch"]
 
 
 def test_tool_runner_permission_classifier_can_auto_allow_safe_explicit_request() -> None:
@@ -1571,6 +1673,35 @@ def test_dangerous_shell_pattern_requires_approval_even_with_allow_rule() -> Non
     assert decision.behavior == "ask"
     assert decision.rule_source == "workspace_policy"
     assert "dangerous_pattern:curl_pipe_shell" in str(decision.matched_rule)
+
+
+def test_fail_closed_shell_safety_denies_even_with_allow_rule() -> None:
+    tool = build_tool(
+        name="shell_exec",
+        description="Run shell commands in the workspace.",
+        approval_policy="policy",
+        execute=lambda tool_input, _: ToolResult(status="ok", payload=tool_input),
+    )
+    permission_context = apply_permission_update(
+        get_empty_tool_permission_context(),
+        PermissionUpdate(
+            type="add_rules",
+            destination="session",
+            behavior="allow",
+            rules=[PermissionRuleValue(tool_name="shell_exec")],
+        ),
+    )
+
+    decision = resolve_tool_permission_decision(
+        tool,
+        {"command": "FOO=$BAR pytest -q"},
+        permission_context,
+        record_denial=False,
+    )
+
+    assert decision.behavior == "deny"
+    assert decision.rule_source == "workspace_policy"
+    assert "dangerous_pattern:command_safety_env_assignment_expansion" in str(decision.matched_rule)
 
 
 def test_permission_decision_is_audited(tmp_path: Path) -> None:

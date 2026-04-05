@@ -355,6 +355,253 @@ export interface ProjectDetail extends ProjectSummary {
   active_connectors: Record<string, ConnectorActivation[]>;
   active_tools: Record<string, ToolActivation[]>;
   activation_errors: Record<string, string[]>;
+  cost_usage?: Record<string, unknown>;
+  trace_summary?: Record<string, unknown>;
+  trace_path?: string;
+  monitoring?: ProjectMonitoringSnapshot;
+  audit?: ProjectAuditChainSummary;
+  bootstrap?: ProjectBootstrapStatus;
+  runtime_diagnostics?: ProjectRuntimeDiagnosticsReport;
+  company?: ProjectCompanyShell;
+}
+
+export interface ProjectAuditVerificationSummary {
+  verified?: boolean;
+  latest_hash?: string;
+  entry_count?: number;
+  errors?: Array<Record<string, unknown>>;
+}
+
+export interface ProjectAuditChainSummary {
+  schema_version?: number;
+  chain_kind?: string;
+  package_chain_kind?: string;
+  project_id?: string;
+  run_id?: string;
+  story_id?: number | null;
+  entry_count?: number;
+  source_entry_count?: number;
+  verification?: ProjectAuditVerificationSummary;
+  source_verification?: ProjectAuditVerificationSummary;
+}
+
+export interface ProjectBootstrapVerificationStatus {
+  configured?: boolean;
+  artifact_relpath?: string;
+  artifact_path?: string;
+  artifact_exists?: boolean;
+  updated_at?: string;
+  gate_count?: number;
+  check_count?: number;
+}
+
+export interface ProjectBootstrapGithubStatus {
+  configured?: boolean;
+  workflow_relpath?: string;
+  workflow_path?: string;
+  workflow_exists?: boolean;
+  updated_at?: string;
+  github_repo?: string;
+  current_branch?: string;
+  default_branch?: string;
+  compare_url?: string;
+  gh_authenticated?: boolean;
+}
+
+export interface ProjectBootstrapStatus {
+  verification?: ProjectBootstrapVerificationStatus;
+  github?: ProjectBootstrapGithubStatus;
+}
+
+export interface ProjectRuntimeDiagnostic {
+  code: string;
+  severity: string;
+  scope: string;
+  message: string;
+  fix: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface ProjectRuntimeDiagnosticsReport {
+  diagnostics: ProjectRuntimeDiagnostic[];
+  summary?: {
+    error_count?: number;
+    warning_count?: number;
+    info_count?: number;
+    [key: string]: unknown;
+  };
+}
+
+export interface ProjectCompanyGoal {
+  id: string;
+  title: string;
+  goal?: string;
+  status: string;
+  progress_pct?: number;
+  stories_total?: number;
+  stories_done?: number;
+  stories_active?: number;
+  stories_blocked?: number;
+  stories_queued?: number;
+  current_story_id?: number | null;
+  current_story_title?: string | null;
+}
+
+export interface ProjectCompanyRoutineAction {
+  action_id: string;
+  label: string;
+  project_id?: string;
+  url?: string;
+  command?: string;
+}
+
+export interface ProjectCompanyRoutine {
+  id: string;
+  title: string;
+  cadence: string;
+  status: string;
+  description: string;
+  guardrail: string;
+  blocked_by?: string[];
+  recommended_action?: ProjectCompanyRoutineAction;
+}
+
+export interface ProjectCompanyChannel {
+  id: string;
+  name: string;
+  kind: string;
+  enabled: boolean;
+  ready: boolean;
+  status: string;
+  target?: string;
+  events?: string[];
+  capabilities?: string[];
+  approval_capable?: boolean;
+  wall_enforced?: boolean;
+  message_count?: number;
+  note?: string;
+}
+
+export interface ProjectCompanySecret {
+  id: string;
+  channel_name: string;
+  kind: string;
+  ready: boolean;
+  status: string;
+  required_keys: string[];
+  resolved_keys: string[];
+  missing_keys: string[];
+}
+
+export interface ProjectCompanyLiveEvent {
+  id: string;
+  kind: string;
+  timestamp?: string;
+  headline: string;
+  detail: string;
+  source: string;
+  story_id?: number | null;
+  session_id?: string;
+}
+
+export interface ProjectCompanyShell {
+  status?: {
+    always_on_ready?: boolean;
+    runtime_wall_enforced?: boolean;
+    runtime_control_available?: boolean;
+    goal_count?: number;
+    active_routine_count?: number;
+    ready_channel_count?: number;
+    missing_secret_count?: number;
+    live_event_count?: number;
+  };
+  goals?: {
+    items: ProjectCompanyGoal[];
+    summary?: Record<string, unknown>;
+  };
+  routines?: {
+    items: ProjectCompanyRoutine[];
+    summary?: Record<string, unknown>;
+  };
+  channels?: {
+    items: ProjectCompanyChannel[];
+    summary?: Record<string, unknown>;
+  };
+  secrets?: {
+    items: ProjectCompanySecret[];
+    summary?: Record<string, unknown>;
+  };
+  live_events?: {
+    items: ProjectCompanyLiveEvent[];
+    summary?: Record<string, unknown>;
+  };
+}
+
+export interface ProjectMonitoringCostBucket {
+  invocations?: number;
+  tracked_invocations?: number;
+  priced_invocations?: number;
+  input_tokens?: number;
+  output_tokens?: number;
+  cached_tokens?: number;
+  total_tokens?: number;
+  estimated_cost_usd?: number;
+  started_at?: string | null;
+  story_id?: string | number;
+  agent_label?: string;
+}
+
+export interface ProjectMonitoringRunSummary {
+  run_id: string;
+  run_sequence?: number;
+  started_at?: string | null;
+  finished_at?: string | null;
+  last_timestamp?: string | null;
+  status: string;
+  entry_count?: number;
+  iteration_count?: number;
+  failure_count?: number;
+  critic_rejection_count?: number;
+  quality_regression_count?: number;
+  story_ids?: Array<number | string>;
+  judge_outcomes?: Record<string, number>;
+  cost?: ProjectMonitoringCostBucket;
+}
+
+export interface ProjectMonitoringSnapshot {
+  cost: {
+    project: ProjectMonitoringCostBucket;
+    run: ProjectMonitoringCostBucket;
+    pricing_source?: string;
+    top_stories: ProjectMonitoringCostBucket[];
+    top_agents: ProjectMonitoringCostBucket[];
+  };
+  trace: {
+    runs: ProjectMonitoringRunSummary[];
+    recent_failures: Array<Record<string, unknown>>;
+    comparison: Record<string, unknown>;
+  };
+  feedback: {
+    count: number;
+    blocking_count: number;
+    approved_count: number;
+    by_kind: Record<string, number>;
+    judge_outcomes: Record<string, number>;
+    phases: Record<string, number>;
+    recent: Array<Record<string, unknown>>;
+  };
+  benchmarks: {
+    count: number;
+    latest?: ProjectMonitoringRunSummary | null;
+    previous?: ProjectMonitoringRunSummary | null;
+    comparison: Record<string, unknown>;
+    history: ProjectMonitoringRunSummary[];
+  };
+  latest_run?: ProjectMonitoringRunSummary | null;
+  regressions: {
+    cost: boolean;
+    reliability: boolean;
+  };
 }
 
 export interface RuntimeBudgetPolicy {
@@ -431,6 +678,51 @@ export interface ProjectRuntimeControl {
   orphaned_worktrees: OrphanedWorktree[];
   runtime_session_id?: string;
   runtime_control_available?: boolean;
+  company?: ProjectCompanyShell;
+}
+
+export interface ExecutionPlaneProjectRuntimeAgentRecord {
+  agent_id: string;
+  role: string;
+  label: string;
+  provider?: string | null;
+  profile_name?: string | null;
+  member_id?: string | null;
+  role_id?: string | null;
+  specialist?: boolean;
+  status: string;
+  pipeline_stage?: string | null;
+  pipeline_order?: number | null;
+  pipeline_status?: string | null;
+  story_id?: number | null;
+  story_title?: string | null;
+  story_status?: string | null;
+  ownership?: Record<string, unknown> | null;
+  checkout?: Record<string, unknown> | null;
+  skill_packs?: string[];
+  planned_connectors?: string[];
+  active_connectors?: Array<Record<string, unknown>>;
+  open_issue_count: number;
+  pending_approval_count: number;
+  tool_permission_runtime_count?: number;
+  pending_tool_permission_runtime_count?: number;
+  active_async_task_count?: number;
+  pending_async_run_count?: number;
+  budget?: ExecutionRuntimeAgentBudgetSummary;
+  attention?: ExecutionRuntimeAgentAttentionSummary;
+  recommendations?: Array<Record<string, unknown>>;
+  suggested_commands?: Array<Record<string, unknown>>;
+}
+
+export interface ExecutionPlaneProjectDetail {
+  project_id: string;
+  runtime_agents: ExecutionPlaneProjectRuntimeAgentRecord[];
+  monitoring?: ProjectMonitoringSnapshot;
+  trace?: {
+    summary?: Record<string, unknown>;
+    path?: string;
+    monitoring?: Record<string, unknown>;
+  };
 }
 
 export interface ToolPermissionRuntimeRecord {
@@ -773,6 +1065,58 @@ export interface ExecutionRuntimeAgentTaskResumeContract {
   transcript_artifact_ref?: string;
   active: boolean;
   terminal: boolean;
+  output_quarantined?: boolean;
+  output_was_quarantined?: boolean;
+  open_shadow_audit_count?: number;
+  shadow_audit_id?: string;
+}
+
+export interface ExecutionArtifactRecord {
+  id: string;
+  owner_kind: string;
+  owner_id: string;
+  source_path: string;
+  content_path: string;
+  content_bytes: number;
+  truncated: boolean;
+  preview: string;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+  artifact_ref?: string;
+  content: string;
+}
+
+export interface ExecutionShadowAuditRecord {
+  id: string;
+  project_id: string;
+  orchestrator_session_id: string;
+  runtime_agent_ids: string[];
+  source_kind: string;
+  source_name: string;
+  source_id: string;
+  action: string;
+  summary: string;
+  findings: string[];
+  artifact_id: string;
+  blocked_artifact_id: string;
+  blocked_artifact_owner_kind: string;
+  blocked_artifact_owner_id: string;
+  status: string;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+  resolved_at?: string | null;
+  resolution: Record<string, unknown>;
+  artifact_ref: string;
+  resolve_ref: string;
+  blocked_artifact_ref: string;
+  open: boolean;
+}
+
+export interface ExecutionShadowAuditDetail extends ExecutionShadowAuditRecord {
+  audit_artifact?: ExecutionArtifactRecord | null;
+  blocked_artifact?: ExecutionArtifactRecord | null;
 }
 
 export interface ExecutionRuntimeAgentTaskRecord {
@@ -815,6 +1159,10 @@ export interface ExecutionRuntimeAgentTaskRecord {
   active?: boolean;
   terminal?: boolean;
   resume_contract?: ExecutionRuntimeAgentTaskResumeContract | null;
+  shadow_audits?: ExecutionShadowAuditRecord[];
+  open_shadow_audit_count?: number;
+  output_quarantined?: boolean;
+  output_was_quarantined?: boolean;
 }
 
 export interface ExecutionRuntimeAgentTaskCancelResponse {
@@ -832,21 +1180,13 @@ export interface ExecutionAgentActionRunCancelResponse {
   message: string;
 }
 
-export interface ExecutionRuntimeAgentTaskOutputArtifact {
-  id: string;
-  owner_kind: string;
-  owner_id: string;
-  source_path: string;
-  content_path: string;
-  content_bytes: number;
-  truncated: boolean;
-  preview: string;
-  metadata: Record<string, unknown>;
-  created_at: string;
-  updated_at: string;
+export interface ExecutionRuntimeAgentTaskOutputArtifact extends ExecutionArtifactRecord {
   task_id: string;
-  artifact_ref: string;
-  content: string;
+  status?: string;
+  message?: string;
+  content_blocked?: boolean;
+  quarantined?: boolean;
+  shadow_audits?: ExecutionShadowAuditRecord[];
 }
 
 export interface ExecutionRuntimeAgentTaskTranscriptArtifact {
@@ -898,6 +1238,10 @@ export interface ExecutionAgentActionRunRecord {
   async_tasks?: ExecutionRuntimeAgentTaskRecord[];
   resume_contracts?: ExecutionRuntimeAgentTaskResumeContract[];
   resume_contract?: ExecutionRuntimeAgentTaskResumeContract | null;
+  shadow_audits?: ExecutionShadowAuditRecord[];
+  open_shadow_audit_count?: number;
+  handoff_state?: string;
+  handoff_blocked?: boolean;
   results: Array<Record<string, unknown>>;
   status: string;
   project_ids: string[];
@@ -1045,6 +1389,7 @@ export interface OrchestratorSessionDetail extends OrchestratorSessionRecord {
   issues: ExecutionIssueRecord[];
   tool_permission_runtimes?: ToolPermissionRuntimeRecord[];
   async_tasks?: ExecutionRuntimeAgentTaskRecord[];
+  shadow_audits?: ExecutionShadowAuditRecord[];
   events: ExecutionPlaneEvent[];
   control: OrchestratorSessionControl;
   summary: {
@@ -1058,6 +1403,8 @@ export interface OrchestratorSessionDetail extends OrchestratorSessionRecord {
     pending_tool_permission_runtime_count?: number;
     async_task_count?: number;
     active_async_task_count?: number;
+    shadow_audit_count?: number;
+    open_shadow_audit_count?: number;
     event_count: number;
     event_limit: number;
     latest_event_at?: string | null;

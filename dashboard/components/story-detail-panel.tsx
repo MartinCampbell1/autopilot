@@ -1,5 +1,6 @@
 "use client";
 
+import { StoryRuntimeHandoffsPanel } from "./story-runtime-handoffs-panel";
 import { ActionButtons } from "./action-buttons";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type { ProjectRunStatus, Story, TimelineEvent } from "@/lib/types";
@@ -354,6 +355,8 @@ export function StoryDetailPanel({
                 <p className="text-[#9b9a97]">No tool activation recorded yet.</p>
               )}
             </div>
+
+            <StoryRuntimeHandoffsPanel projectId={projectId} story={story} />
           </TabsContent>
 
           <TabsContent value="timeline" className="mt-4">

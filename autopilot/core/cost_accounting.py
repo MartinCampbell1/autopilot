@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import hashlib
 from datetime import datetime, timezone
 from typing import Any
 
@@ -174,6 +175,16 @@ def _estimate_cost_usd(
         + (output_tokens / 1_000_000) * output_rate
     )
     return round(cost, 8)
+
+
+def usage_record_digest(record: dict[str, Any]) -> str:
+    """Return a stable digest for one usage/cost payload."""
+
+    normalized = {
+        key: record.get(key)
+        for key in sorted(record)
+    }
+    return hashlib.sha256(json.dumps(normalized, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")).hexdigest()
 
 
 def summarize_invocation_usage(

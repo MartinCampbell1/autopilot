@@ -6,6 +6,7 @@ import json
 import re
 from pathlib import Path
 
+from autopilot.core.atomic_io import atomic_write_json as _shared_atomic_write_json
 from autopilot.core.config import AutopilotConfig
 from autopilot.core.plugin_models import (
     LoadedPlugin,
@@ -16,10 +17,7 @@ from autopilot.core.plugin_models import (
 
 
 def _atomic_write_json(path: Path, payload: dict[str, object]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temp_path = path.with_suffix(f"{path.suffix}.tmp")
-    temp_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False))
-    temp_path.replace(path)
+    _shared_atomic_write_json(path, payload)
 
 
 def _read_plugin_value_registry(path: Path) -> dict[str, dict[str, object]]:

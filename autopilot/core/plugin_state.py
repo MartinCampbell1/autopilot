@@ -8,6 +8,7 @@ from pathlib import Path
 
 from pydantic import BaseModel
 
+from autopilot.core.atomic_io import atomic_write_json as _shared_atomic_write_json
 from autopilot.core.config import AutopilotConfig
 
 
@@ -16,10 +17,7 @@ def _utcnow_iso() -> str:
 
 
 def _atomic_write_json(path: Path, payload: dict[str, object]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temp_path = path.with_suffix(f"{path.suffix}.tmp")
-    temp_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False))
-    temp_path.replace(path)
+    _shared_atomic_write_json(path, payload)
 
 
 class PluginEnablementRecord(BaseModel):

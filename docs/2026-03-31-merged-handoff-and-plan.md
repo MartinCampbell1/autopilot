@@ -484,11 +484,16 @@ Primary donors:
 
 ## Recommended Next-Agent Execution Order
 
+New donor-specific plan for the next productization track:
+
+- [2026-04-01-claude-code-direct-borrow-plan.md](/Users/martin/Desktop/autopilot/docs/2026-04-01-claude-code-direct-borrow-plan.md)
+
 1. Read this file.
-2. Read [2026-03-31-control-plane-handoff.md](/Users/martin/Desktop/autopilot/docs/2026-03-31-control-plane-handoff.md).
-3. Treat `Track A`, `P0`, `P1`, and `P2` in this document as already implemented on the branch unless a regression proves otherwise.
-4. If more branch work is needed, bias toward verification, cleanup, PR prep, or missing test coverage around the new surfaces.
-5. Do not start `P3` work by default. Promote a `P3` item only if there is a concrete failure mode or operator need that justifies it now.
+2. Read [2026-04-01-claude-code-direct-borrow-plan.md](/Users/martin/Desktop/autopilot/docs/2026-04-01-claude-code-direct-borrow-plan.md) if the task is about upgrading Autopilot using the `claude-code` donor snapshot.
+3. Read [2026-03-31-control-plane-handoff.md](/Users/martin/Desktop/autopilot/docs/2026-03-31-control-plane-handoff.md).
+4. Treat `Track A`, `P0`, `P1`, and `P2` in this document as already implemented on the branch unless a regression proves otherwise.
+5. If more branch work is needed, bias toward verification, cleanup, PR prep, or missing test coverage around the new surfaces.
+6. Do not start `P3` work by default. Promote a `P3` item only if there is a concrete failure mode or operator need that justifies it now.
 
 ## Ready Prompt For The New Chat
 
@@ -499,6 +504,10 @@ Use this if you want the next agent to continue from the current truth instead o
 Updated prompt for the current branch truth:
 
 > Continue from [2026-03-31-merged-handoff-and-plan.md](/Users/martin/Desktop/autopilot/docs/2026-03-31-merged-handoff-and-plan.md). We are on branch `codex/founderos-control-plane`. The control-plane deep-link work plus the active `P0`, `P1`, and `P2` backlog items are already landed on this branch. Do not repeat them. Verify and stabilize the current branch, or explicitly justify promoting a `P3` item before building more surface area.
+
+Updated prompt if the new task is the direct `claude-code` donor program:
+
+> Continue from [2026-03-31-merged-handoff-and-plan.md](/Users/martin/Desktop/autopilot/docs/2026-03-31-merged-handoff-and-plan.md) and [2026-04-01-claude-code-direct-borrow-plan.md](/Users/martin/Desktop/autopilot/docs/2026-04-01-claude-code-direct-borrow-plan.md). Keep the existing Autopilot execution-plane core intact. Implement the donor plan in order, starting with the typed tool contract, plugin loader/lifecycle, MCP/LSP plugin integrations, plugin policy/startup checks, cost telemetry, and the staged Claude-style init flow. Do not rebuild already-landed control-plane hardening work.
 
 ## Notes
 

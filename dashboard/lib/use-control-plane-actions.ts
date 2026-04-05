@@ -10,9 +10,15 @@ import {
   denyExecutionPlaneToolPermissionRuntime,
   executeExecutionPlaneAgentAction,
   rejectExecutionPlaneApproval,
+  resolveExecutionPlaneShadowAudit,
   resolveExecutionPlaneIssue,
 } from "@/lib/api";
 import { extractLatestRunIdFromAppliedSteps, extractRunId } from "@/lib/control-plane-data";
+import {
+  sortApprovalsBySessionOrder,
+  sortIssuesBySessionOrder,
+  sortToolPermissionRuntimesByRecency,
+} from "@/lib/control-plane-decision-ordering";
 import type {
   AgentTimelineEntry,
   SessionLineageEntry,
@@ -23,11 +29,14 @@ import {
   agentTimelinePriority,
   matchesSessionLineageFilter,
 } from "@/lib/control-plane-triage";
+import { compareShadowAuditsByRecency } from "@/lib/shadow-audit-queue";
 import type {
   ExecutionApprovalRecord,
   ExecutionAgentActionRunRecord,
   ExecutionIssueRecord,
   ExecutionRuntimeAgentDetail,
+  ExecutionShadowAuditRecord,
+  OrchestratorSessionDetail,
   OrchestratorSessionControlProfile,
   OrchestratorSessionControlRecommendation,
   ProjectSummary,
@@ -53,6 +62,18 @@ type UseControlPlaneActionsArgs = {
   projects: ProjectSummary[];
   selectedSessionId: string;
   selectedAgentId: string;
+  selectedSessionApprovalId: string;
+  selectedSessionIssueId: string;
+  selectedSessionToolPermissionRuntimeId: string;
+  selectedSessionShadowAuditId: string;
+  selectedSessionContextKind:
+    | ""
+    | "approval"
+    | "issue"
+    | "event"
+    | "tool_permission_runtime"
+    | "async_task"
+    | "shadow_audit";
   selectedAgent: ExecutionRuntimeAgentDetail | null;
   setRefreshing: Dispatch<SetStateAction<boolean>>;
   setBusyActionKey: Dispatch<SetStateAction<string>>;
@@ -61,6 +82,11 @@ type UseControlPlaneActionsArgs = {
   setSelectedRunId: Dispatch<SetStateAction<string>>;
   setSelectedRunResultIndex: Dispatch<SetStateAction<number>>;
   setSelectedPassId: Dispatch<SetStateAction<string>>;
+  setSelectedSessionApprovalId: Dispatch<SetStateAction<string>>;
+  setSelectedSessionIssueId: Dispatch<SetStateAction<string>>;
+  setSelectedSessionToolPermissionRuntimeId: Dispatch<SetStateAction<string>>;
+  setSelectedSessionShadowAuditId: Dispatch<SetStateAction<string>>;
+  setSelectedSessionContextKind: Dispatch<SetStateAction<"" | "approval" | "issue" | "event" | "tool_permission_runtime" | "async_task" | "shadow_audit">>;
   setEntitySearch: Dispatch<SetStateAction<string>>;
   setPendingLineageAutoAdvance: Dispatch<SetStateAction<PendingLineageAutoAdvance | null>>;
   setPendingAgentPriorityAutoAdvance: Dispatch<
@@ -72,7 +98,7 @@ type UseControlPlaneActionsArgs = {
   selectedTriageInboxKeyRef: MutableRefObject<string>;
   sessionLineageFilterRef: MutableRefObject<string>;
   loadOverview: () => Promise<void>;
-  loadSessionDetail: (sessionId: string) => Promise<unknown>;
+  loadSessionDetail: (sessionId: string) => Promise<OrchestratorSessionDetail>;
   loadAgentDetail: (runtimeAgentId: string) => Promise<ExecutionRuntimeAgentDetail>;
   requestGetRuntimeAgentActionRun?: (
     projectId: string,
@@ -91,6 +117,11 @@ export function useControlPlaneActions({
   projects,
   selectedSessionId,
   selectedAgentId,
+  selectedSessionApprovalId,
+  selectedSessionIssueId,
+  selectedSessionToolPermissionRuntimeId,
+  selectedSessionShadowAuditId,
+  selectedSessionContextKind,
   selectedAgent,
   setRefreshing,
   setBusyActionKey,
@@ -99,6 +130,11 @@ export function useControlPlaneActions({
   setSelectedRunId,
   setSelectedRunResultIndex,
   setSelectedPassId,
+  setSelectedSessionApprovalId,
+  setSelectedSessionIssueId,
+  setSelectedSessionToolPermissionRuntimeId,
+  setSelectedSessionShadowAuditId,
+  setSelectedSessionContextKind,
   setEntitySearch,
   setPendingLineageAutoAdvance,
   setPendingAgentPriorityAutoAdvance,
@@ -139,7 +175,7 @@ export function useControlPlaneActions({
   const refreshAfterMutation = useCallback(
     async (sessionId: string) => {
       await loadOverview();
-      await loadSessionDetail(sessionId);
+      return loadSessionDetail(sessionId);
     },
     [loadOverview, loadSessionDetail]
   );
@@ -288,7 +324,10 @@ export function useControlPlaneActions({
     async (
       actionKey: string,
       task: () => Promise<string>,
-      options?: { autoAdvanceQueue?: boolean }
+      options?: {
+        autoAdvanceQueue?: boolean;
+        afterRefresh?: (sessionDetail: OrchestratorSessionDetail) => Promise<void> | void;
+      }
     ) => {
       if (!selectedSessionId) return;
       setBusyActionKey(actionKey);
@@ -346,7 +385,10 @@ export function useControlPlaneActions({
             previousEntry: currentAgentEntry,
           });
         }
-        await refreshAfterMutation(selectedSessionId);
+        const sessionDetail = await refreshAfterMutation(selectedSessionId);
+        if (options?.afterRefresh) {
+          await options.afterRefresh(sessionDetail);
+        }
         if (selectedAgentId) {
           await loadAgentDetail(selectedAgentId);
         }
@@ -478,6 +520,22 @@ export function useControlPlaneActions({
         });
         const runId = extractRunId(payload.result);
         if (runId) setSelectedRunId(runId);
+        const openShadowAudits = Array.isArray(payload.result?.open_shadow_audits)
+          ? payload.result.open_shadow_audits
+          : Array.isArray(payload.result?.shadow_audits)
+            ? payload.result.shadow_audits
+            : [];
+        const firstShadowAuditId = openShadowAudits
+          .map((item) =>
+            item && typeof item === "object" && !Array.isArray(item)
+              ? toStringValue((item as Record<string, unknown>).id)
+              : ""
+          )
+          .find(Boolean);
+        if (recommendation.kind === "review_shadow_audit_quarantines" && firstShadowAuditId) {
+          setSelectedSessionShadowAuditId(firstShadowAuditId);
+          setSelectedSessionContextKind("shadow_audit");
+        }
         setNotice(
           `${payload.recommendation.title || recommendation.kind} finished with status ${payload.status}.`
         );
@@ -501,6 +559,9 @@ export function useControlPlaneActions({
       setErrorMessage,
       setNotice,
       setSelectedRunId,
+      setSelectedSessionContextKind,
+      setSelectedSessionShadowAuditId,
+      toStringValue,
     ]
   );
 
@@ -523,27 +584,63 @@ export function useControlPlaneActions({
 
   const rejectApproval = useCallback(
     async (approval: ExecutionApprovalRecord) => {
+      const approvalId = toStringValue(approval.id);
+      if (!approvalId) return;
+      const shouldAdvanceRejectedApprovalSelection =
+        selectedSessionContextKind === "approval" && selectedSessionApprovalId === approvalId;
       await runDecisionAction(
-        `approval-reject:${approval.id}`,
+        `approval-reject:${approvalId}`,
         async () => {
-          const payload = await rejectExecutionPlaneApproval(approval.id, {
+          const payload = await rejectExecutionPlaneApproval(approvalId, {
             actor: DEFAULT_CONTROL_ACTOR,
             note: `Dashboard rejected ${approval.action} for session ${selectedSessionId}`,
           });
           return `Approval ${payload.approval.id} marked ${payload.approval.status}.`;
         },
-        { autoAdvanceQueue: true }
+        {
+          autoAdvanceQueue: true,
+          afterRefresh: shouldAdvanceRejectedApprovalSelection
+            ? (sessionDetail) => {
+                const nextActionableApproval =
+                  sortApprovalsBySessionOrder(
+                    (sessionDetail.approvals || []).filter(
+                      (entry) =>
+                        ["pending", "approved"].includes(entry.status) && entry.id !== approvalId
+                    )
+                  )[0] || null;
+                if (nextActionableApproval) {
+                  setSelectedSessionApprovalId(nextActionableApproval.id);
+                  setSelectedSessionContextKind("approval");
+                } else {
+                  setSelectedSessionApprovalId("");
+                  setSelectedSessionContextKind("");
+                }
+              }
+            : undefined,
+        }
       );
     },
-    [runDecisionAction, selectedSessionId]
+    [
+      runDecisionAction,
+      selectedSessionApprovalId,
+      selectedSessionContextKind,
+      selectedSessionId,
+      setSelectedSessionApprovalId,
+      setSelectedSessionContextKind,
+      toStringValue,
+    ]
   );
 
   const applyApproval = useCallback(
     async (approval: ExecutionApprovalRecord) => {
+      const approvalId = toStringValue(approval.id);
+      if (!approvalId) return;
+      const shouldAdvanceAppliedApprovalSelection =
+        selectedSessionContextKind === "approval" && selectedSessionApprovalId === approvalId;
       await runDecisionAction(
-        `approval-apply:${approval.id}`,
+        `approval-apply:${approvalId}`,
         async () => {
-          const payload = await applyExecutionPlaneApproval(approval.id, {
+          const payload = await applyExecutionPlaneApproval(approvalId, {
             actor: DEFAULT_CONTROL_ACTOR,
             note: `Dashboard applied ${approval.action} for session ${selectedSessionId}`,
           });
@@ -552,55 +649,220 @@ export function useControlPlaneActions({
             `Approval ${payload.approval.id} applied successfully.`
           );
         },
-        { autoAdvanceQueue: true }
+        {
+          autoAdvanceQueue: true,
+          afterRefresh: shouldAdvanceAppliedApprovalSelection
+            ? (sessionDetail) => {
+                const nextActionableApproval =
+                  sortApprovalsBySessionOrder(
+                    (sessionDetail.approvals || []).filter(
+                      (entry) =>
+                        ["pending", "approved"].includes(entry.status) && entry.id !== approvalId
+                    )
+                  )[0] || null;
+                if (nextActionableApproval) {
+                  setSelectedSessionApprovalId(nextActionableApproval.id);
+                  setSelectedSessionContextKind("approval");
+                } else {
+                  setSelectedSessionApprovalId("");
+                  setSelectedSessionContextKind("");
+                }
+              }
+            : undefined,
+        }
       );
     },
-    [runDecisionAction, selectedSessionId, toStringValue]
+    [
+      runDecisionAction,
+      selectedSessionApprovalId,
+      selectedSessionContextKind,
+      selectedSessionId,
+      setSelectedSessionApprovalId,
+      setSelectedSessionContextKind,
+      toStringValue,
+    ]
   );
 
   const resolveIssue = useCallback(
     async (issue: ExecutionIssueRecord) => {
+      const issueId = toStringValue(issue.id);
+      if (!issueId) return;
+      const shouldAdvanceResolvedIssueSelection =
+        selectedSessionContextKind === "issue" && selectedSessionIssueId === issueId;
       await runDecisionAction(
-        `issue-resolve:${issue.id}`,
+        `issue-resolve:${issueId}`,
         async () => {
-          const payload = await resolveExecutionPlaneIssue(issue.id, {
+          const payload = await resolveExecutionPlaneIssue(issueId, {
             actor: DEFAULT_CONTROL_ACTOR,
-            note: `Dashboard resolved issue ${issue.id} for session ${selectedSessionId}`,
+            note: `Dashboard resolved issue ${issueId} for session ${selectedSessionId}`,
           });
           return `Issue ${payload.issue.id} marked ${payload.issue.status}.`;
         },
-        { autoAdvanceQueue: true }
+        {
+          autoAdvanceQueue: true,
+          afterRefresh: shouldAdvanceResolvedIssueSelection
+            ? (sessionDetail) => {
+                const nextOpenIssue =
+                  sortIssuesBySessionOrder(
+                    (sessionDetail.issues || []).filter(
+                      (entry) => entry.status === "open" && entry.id !== issueId
+                    )
+                  )[0] || null;
+                if (nextOpenIssue) {
+                  setSelectedSessionIssueId(nextOpenIssue.id);
+                  setSelectedSessionContextKind("issue");
+                } else {
+                  setSelectedSessionIssueId("");
+                  setSelectedSessionContextKind("");
+                }
+              }
+            : undefined,
+        }
       );
     },
-    [runDecisionAction, selectedSessionId]
+    [
+      runDecisionAction,
+      selectedSessionContextKind,
+      selectedSessionId,
+      selectedSessionIssueId,
+      setSelectedSessionContextKind,
+      setSelectedSessionIssueId,
+      toStringValue,
+    ]
   );
 
   const resolveToolPermissionRuntime = useCallback(
     async (runtime: ToolPermissionRuntimeRecord, outcome: "allow" | "deny") => {
+      const runtimeId = toStringValue(runtime.id);
+      if (!runtimeId) return;
       const actionLabel = outcome === "allow" ? "allow" : "deny";
       const runtimeAgentLabel =
         runtime.runtime_agent_ids[0] || selectedAgent?.runtime_agent_id || selectedSessionId || "session";
+      const shouldAdvanceResolvedRuntimeSelection =
+        selectedSessionContextKind === "tool_permission_runtime" &&
+        selectedSessionToolPermissionRuntimeId === runtimeId;
       await runDecisionAction(
-        `tool-permission-${actionLabel}:${runtime.id}`,
+        `tool-permission-${actionLabel}:${runtimeId}`,
         async () => {
           const payload =
             outcome === "allow"
-              ? await allowExecutionPlaneToolPermissionRuntime(runtime.id, {
+              ? await allowExecutionPlaneToolPermissionRuntime(runtimeId, {
                   actor: DEFAULT_CONTROL_ACTOR,
-                  note: `Dashboard allowed ${runtime.tool_name || runtime.id} for ${runtimeAgentLabel}`,
+                  note: `Dashboard allowed ${runtime.tool_name || runtimeId} for ${runtimeAgentLabel}`,
                   source: "user",
                 })
-              : await denyExecutionPlaneToolPermissionRuntime(runtime.id, {
+              : await denyExecutionPlaneToolPermissionRuntime(runtimeId, {
                   actor: DEFAULT_CONTROL_ACTOR,
-                  note: `Dashboard denied ${runtime.tool_name || runtime.id} for ${runtimeAgentLabel}`,
+                  note: `Dashboard denied ${runtime.tool_name || runtimeId} for ${runtimeAgentLabel}`,
                   source: "user",
                 });
           return `Tool permission ${payload.runtime.id} marked ${payload.runtime.status}.`;
         },
-        { autoAdvanceQueue: true }
+        {
+          autoAdvanceQueue: true,
+          afterRefresh: shouldAdvanceResolvedRuntimeSelection
+            ? (sessionDetail) => {
+                const nextPendingRuntime =
+                  sortToolPermissionRuntimesByRecency(
+                    (sessionDetail.tool_permission_runtimes || []).filter(
+                      (entry) => entry.status === "pending" && entry.id !== runtimeId
+                    )
+                  )[0] || null;
+                if (nextPendingRuntime) {
+                  setSelectedSessionToolPermissionRuntimeId(nextPendingRuntime.id);
+                  setSelectedSessionContextKind("tool_permission_runtime");
+                } else {
+                  setSelectedSessionToolPermissionRuntimeId("");
+                  setSelectedSessionContextKind("");
+                }
+              }
+            : undefined,
+        }
       );
     },
-    [runDecisionAction, selectedAgent?.runtime_agent_id, selectedSessionId]
+    [
+      runDecisionAction,
+      selectedAgent?.runtime_agent_id,
+      selectedSessionContextKind,
+      selectedSessionId,
+      selectedSessionToolPermissionRuntimeId,
+      setSelectedSessionContextKind,
+      setSelectedSessionToolPermissionRuntimeId,
+      toStringValue,
+    ]
+  );
+
+  const resolveShadowAudit = useCallback(
+    async (audit: ExecutionShadowAuditRecord) => {
+      const auditId = toStringValue(audit.id);
+      if (!auditId) return;
+      const sessionId = toStringValue(audit.orchestrator_session_id, selectedSessionId);
+      const shouldAdvanceResolvedShadowAuditSelection =
+        selectedSessionId === sessionId &&
+        selectedSessionContextKind === "shadow_audit" &&
+        selectedSessionShadowAuditId === auditId;
+      const busyKey = `shadow-audit-resolve:${auditId}`;
+      setBusyActionKey(busyKey);
+      setNotice("");
+      setErrorMessage("");
+
+      try {
+        const payload = await resolveExecutionPlaneShadowAudit(auditId, {
+          actor: DEFAULT_CONTROL_ACTOR,
+          note: `Dashboard reviewed and released shadow audit ${auditId}.`,
+          outcome: "released",
+        });
+        await loadOverview();
+        const sessionDetail = sessionId ? await loadSessionDetail(sessionId) : null;
+        if (shouldAdvanceResolvedShadowAuditSelection) {
+          const nextOpenShadowAudit =
+            (sessionDetail?.shadow_audits || [])
+              .filter((entry) => (entry.open || entry.status === "open") && entry.id !== auditId)
+              .sort(compareShadowAuditsByRecency)[0] || null;
+          if (nextOpenShadowAudit) {
+            setSelectedSessionShadowAuditId(nextOpenShadowAudit.id);
+            setSelectedSessionContextKind("shadow_audit");
+          } else {
+            setSelectedSessionShadowAuditId("");
+            setSelectedSessionContextKind("");
+          }
+        }
+        const runtimeAgentIds =
+          payload.shadow_audit.runtime_agent_ids?.length > 0
+            ? payload.shadow_audit.runtime_agent_ids
+            : audit.runtime_agent_ids || [];
+        const selectedOrAuditAgentId =
+          selectedAgentId && runtimeAgentIds.includes(selectedAgentId)
+            ? selectedAgentId
+            : toStringValue(runtimeAgentIds[0]);
+        if (selectedOrAuditAgentId) {
+          await loadAgentDetail(selectedOrAuditAgentId);
+        }
+        setNotice(`Shadow audit ${auditId} resolved and handoff released.`);
+      } catch (error) {
+        setErrorMessage(
+          error instanceof Error ? error.message : "Failed to resolve shadow audit."
+        );
+        throw error;
+      } finally {
+        setBusyActionKey("");
+      }
+    },
+    [
+      loadAgentDetail,
+      loadOverview,
+      loadSessionDetail,
+      selectedAgentId,
+      selectedSessionContextKind,
+      selectedSessionId,
+      selectedSessionShadowAuditId,
+      setBusyActionKey,
+      setErrorMessage,
+      setNotice,
+      setSelectedSessionContextKind,
+      setSelectedSessionShadowAuditId,
+      toStringValue,
+    ]
   );
 
   const runAgentSuggestedCommand = useCallback(
@@ -719,6 +981,7 @@ export function useControlPlaneActions({
     applyApproval,
     resolveIssue,
     resolveToolPermissionRuntime,
+    resolveShadowAudit,
     applyPreviewRun,
     runAgentSuggestedCommand,
     applyControlPlan,

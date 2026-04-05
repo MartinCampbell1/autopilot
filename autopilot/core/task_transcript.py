@@ -11,6 +11,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from autopilot.core.artifact_store import get_artifact, persist_artifact
 from autopilot.core.config import AutopilotConfig
 
 TASK_TRANSCRIPT_PREVIEW_CHARS = 4000
@@ -61,6 +62,9 @@ def task_transcript_metadata_path(config: AutopilotConfig, transcript_id: str) -
 def task_transcript_content_path(config: AutopilotConfig, transcript_id: str) -> Path:
     """Return content path for one transcript artifact."""
 
+    artifact = get_artifact(config, transcript_id)
+    if artifact is not None and str(artifact.content_path or "").strip():
+        return Path(str(artifact.content_path))
     return config.task_transcripts_dir / f"{transcript_id}.md"
 
 
@@ -104,9 +108,19 @@ def persist_task_transcript(
         raise ValueError("owner_id is required")
 
     transcript_id = task_transcript_id(normalized_owner_kind, normalized_owner_id)
-    content_path = task_transcript_content_path(config, transcript_id)
     stored_content = str(content or "")
-    _atomic_write_text(content_path, stored_content)
+    artifact = persist_artifact(
+        config,
+        artifact_id=transcript_id,
+        content=stored_content,
+        artifact_type="task_transcript",
+        stage="verified",
+        owner_kind=normalized_owner_kind,
+        owner_id=normalized_owner_id,
+        media_type="text/markdown",
+        file_extension=".md",
+        metadata=dict(metadata or {}),
+    )
 
     now = _utcnow_iso()
     existing = get_task_transcript(config, transcript_id)
@@ -115,7 +129,7 @@ def persist_task_transcript(
         id=transcript_id,
         owner_kind=normalized_owner_kind,
         owner_id=normalized_owner_id,
-        content_path=str(content_path),
+        content_path=str(artifact.content_path),
         preview=stored_content[:TASK_TRANSCRIPT_PREVIEW_CHARS],
         metadata=dict(metadata or {}),
         created_at=created_at,

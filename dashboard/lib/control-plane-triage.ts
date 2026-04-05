@@ -35,6 +35,7 @@ export function matchesRunFilter(
   if (filter === "attention") {
     return (
       run.completion_state === "pending_async" ||
+      run.completion_state === "quarantined" ||
       run.status === "error" ||
       run.status === "partial" ||
       run.results.some((result) =>
@@ -61,7 +62,10 @@ export function matchesAgentOutcomeFilter(outcome: AgentScopedOutcome, filter: s
   if (filter === "preview") return outcome.run.dry_run;
   if (filter === "attention") {
     const status = toStringValue(outcome.result.status);
-    return ["error", "partial", "pending_approval", "not_executable", "failed"].includes(status);
+    return (
+      outcome.run.completion_state === "quarantined" ||
+      ["error", "partial", "pending_approval", "not_executable", "failed"].includes(status)
+    );
   }
   return true;
 }
@@ -71,6 +75,7 @@ export function matchesAgentTimelineFilter(entry: AgentTimelineEntry, filter: st
   if (filter === "approvals") return entry.kind === "approval";
   if (filter === "issues") return entry.kind === "issue";
   if (filter === "events") return entry.kind === "event";
+  if (filter === "shadow_audits") return entry.kind === "shadow_audit";
   if (filter === "attention") {
     if (entry.kind === "approval") {
       return ["pending", "approved"].includes(entry.status);
@@ -78,7 +83,10 @@ export function matchesAgentTimelineFilter(entry: AgentTimelineEntry, filter: st
     if (entry.kind === "issue") {
       return entry.status === "open";
     }
-    return ["error", "partial", "pending_approval", "failed"].includes(entry.status);
+    if (entry.kind === "shadow_audit") {
+      return entry.status === "open" || Boolean(entry.shadowAudit?.open);
+    }
+    return ["error", "partial", "pending_approval", "failed", "quarantined"].includes(entry.status);
   }
   return true;
 }
@@ -87,10 +95,11 @@ export function isAttentionLineageEntry(entry: SessionLineageEntry): boolean {
   const status = entry.status.toLowerCase();
   const eventStatus = toStringValue(asRecord(entry.event)?.status).toLowerCase();
   return (
+    Boolean(entry.shadowAuditId) ||
     (Boolean(entry.asyncTaskId) && ["queued", "running"].includes(status)) ||
     (Boolean(entry.toolPermissionRuntimeId) && status === "pending") ||
     Boolean(entry.issueId) ||
-    ["error", "partial", "pending_approval", "failed", "rejected", "blocked", "not_executable"].includes(
+    ["error", "partial", "pending_approval", "failed", "rejected", "blocked", "not_executable", "quarantined"].includes(
       status
     ) ||
     ["error", "partial", "pending_approval", "failed"].includes(eventStatus)
@@ -103,7 +112,9 @@ export function matchesSessionLineageFilter(entry: SessionLineageEntry, filter: 
     return isAttentionLineageEntry(entry);
   }
   if (filter === "decisions") {
-    return Boolean(entry.approvalId || entry.issueId || entry.toolPermissionRuntimeId);
+    return Boolean(
+      entry.approvalId || entry.issueId || entry.toolPermissionRuntimeId || entry.shadowAuditId
+    );
   }
   if (filter === "agent-linked") return Boolean(entry.runtimeAgentId);
   return true;
@@ -121,7 +132,14 @@ export function sessionLineageTraits(entry: SessionLineageEntry | null): Session
     entry.asyncTaskId
       ? { key: "async-task", label: "Async follow-through", className: "border-[#d3e5ef] bg-[#eef7fb] text-[#2a6690]" }
       : null,
-    entry.approvalId || entry.issueId
+    entry.shadowAuditId
+      ? {
+          key: "shadow-audit",
+          label: "Shadow audit",
+          className: "border-[#f4e0c4] bg-[#fff6e8] text-[#9a6700]",
+        }
+      : null,
+    entry.approvalId || entry.issueId || entry.shadowAuditId
       ? { key: "decision", label: "Decision-linked", className: "border-[#d3e5ef] bg-[#eef7fb] text-[#2a6690]" }
       : null,
     entry.eventKey
@@ -189,6 +207,8 @@ export function agentTimelineFilterLabel(filter: string): string {
       return "Issues";
     case "events":
       return "Events";
+    case "shadow_audits":
+      return "Shadow audits";
     case "attention":
       return "Attention";
     default:
@@ -204,6 +224,8 @@ export function agentTimelineFilterClass(filter: string): string {
       return "border-[#f0d0c9] bg-[#fff0ed] text-[#93370d]";
     case "events":
       return "border-[#d6e9dc] bg-[#eef8f1] text-[#2b6e3f]";
+    case "shadow_audits":
+      return "border-[#f4e0c4] bg-[#fff6e8] text-[#9a6700]";
     case "attention":
       return "border-[#f4e0c4] bg-[#fff6e8] text-[#9a6700]";
     default:
@@ -264,6 +286,9 @@ export function buildQueueAdvanceFocusSummary(args: {
 export function sessionLineagePriority(entry: SessionLineageEntry): TriagePriority {
   const status = entry.status.toLowerCase();
   const eventStatus = toStringValue(asRecord(entry.event)?.status).toLowerCase();
+  if (entry.shadowAuditId) {
+    return "critical";
+  }
   if (entry.asyncTaskId && ["queued", "running"].includes(status)) {
     return "high";
   }
@@ -285,6 +310,9 @@ export function sessionLineagePriority(entry: SessionLineageEntry): TriagePriori
 
 export function agentTimelinePriority(entry: AgentTimelineEntry): TriagePriority {
   const status = entry.status.toLowerCase();
+  if (entry.kind === "shadow_audit" && (status === "open" || entry.shadowAudit?.open)) {
+    return "critical";
+  }
   if (entry.kind === "issue" && status === "open") {
     return "critical";
   }
@@ -307,6 +335,11 @@ export function agentTimelineEntryStatusClass(entry: AgentTimelineEntry): string
   if (entry.kind === "issue") {
     return passStatusClass(entry.status === "open" ? "partial" : "ok");
   }
+  if (entry.kind === "shadow_audit") {
+    return entry.status === "open" || entry.shadowAudit?.open
+      ? "border-[#f4e0c4] bg-[#fff6e8] text-[#9a6700]"
+      : "border-[#d6e9dc] bg-[#eef8f1] text-[#2b6e3f]";
+  }
   return passStatusClass(entry.status);
 }
 
@@ -314,6 +347,20 @@ export function describeSessionQueueAdvanceReason(entry: SessionLineageEntry): Q
   const priority = sessionLineagePriority(entry);
   const status = entry.status.toLowerCase();
   const eventStatus = toStringValue(asRecord(entry.event)?.status).toLowerCase();
+  if (entry.shadowAuditId) {
+    return {
+      priority,
+      reason: "Shadow-audit quarantine stays queued because the blocked handoff still requires explicit operator review.",
+      signals: [
+        queueAdvanceSignal(
+          "shadow-audit",
+          "Shadow audit",
+          "border-[#f4e0c4] bg-[#fff6e8] text-[#9a6700]",
+          "decisions"
+        ),
+      ],
+    };
+  }
   if (entry.asyncTaskId && ["queued", "running"].includes(status)) {
     return {
       priority,
@@ -452,6 +499,26 @@ export function describeSessionQueueAdvanceReason(entry: SessionLineageEntry): Q
 export function describeAgentQueueAdvanceReason(entry: AgentTimelineEntry): QueueAdvanceReasonDetails {
   const priority = agentTimelinePriority(entry);
   const status = entry.status.toLowerCase();
+  if (entry.kind === "shadow_audit" && (status === "open" || entry.shadowAudit?.open)) {
+    return {
+      priority,
+      reason: "Shadow-audit quarantine stays at the front because the blocked handoff still requires explicit operator review.",
+      signals: [
+        queueAdvanceSignal(
+          "shadow-audit",
+          "Shadow audit",
+          "border-[#f4e0c4] bg-[#fff6e8] text-[#9a6700]",
+          "shadow_audits"
+        ),
+        queueAdvanceSignal(
+          "attention",
+          "Attention",
+          "border-[#f4e0c4] bg-[#fff6e8] text-[#9a6700]",
+          "attention"
+        ),
+      ],
+    };
+  }
   if (entry.kind === "issue" && status === "open") {
     return {
       priority,

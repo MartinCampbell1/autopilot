@@ -1,5 +1,6 @@
 """Tests for loop runner."""
 
+import json
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -15,6 +16,7 @@ from autopilot.core.loop_runner import (
     init_ralph_project,
     read_quality_ratchet,
     read_progress,
+    run_prompt_iteration,
     run_ralph_iteration,
     run_retry_iteration,
     summarize_quality_regressions,
@@ -110,6 +112,18 @@ class TestLoopRunner:
         write_critic_feedback(tmp_path, "- callback URL hardcoded\n- no tests")
         content = (ralph_dir / "critic-feedback.md").read_text()
         assert "callback URL" in content
+
+    def test_write_critic_feedback_spills_large_feedback_to_context_artifact(self, tmp_path: Path) -> None:
+        large_feedback = ("failure details\n" * 600).strip()
+
+        write_critic_feedback(tmp_path, large_feedback)
+
+        content = (tmp_path / ".ralph" / "critic-feedback.md").read_text()
+        artifacts = list((tmp_path / ".ralph" / "context").glob("critic-feedback-*.txt"))
+
+        assert "full context stored at" in content
+        assert len(artifacts) == 1
+        assert artifacts[0].read_text() == large_feedback
 
     def test_quality_ratchet_persists_previous_green_gates(self, tmp_path: Path) -> None:
         update_quality_ratchet(
@@ -233,14 +247,9 @@ class TestLoopRunner:
         assert ".ralph/team-messages.json" in prompt
         assert "do not assume arbitrary notes files are shared" in prompt
 
-    @patch("autopilot.core.loop_runner.get_adapter")
-    def test_run_retry_iteration_success(self, mock_get_adapter: MagicMock, tmp_path: Path) -> None:
-        mock_adapter = MagicMock()
-        mock_adapter.provider_family = "codex"
-        mock_adapter.adapter_id = "codex_local"
-        mock_adapter.execute.return_value = SimpleNamespace(success=True, output="fixed", rate_limited=False)
-        mock_adapter.parse_output.return_value = SimpleNamespace(text="fixed", rate_limited=False)
-        mock_get_adapter.return_value = mock_adapter
+    @patch("autopilot.core.loop_runner.run_streaming_execution")
+    def test_run_retry_iteration_success(self, mock_run_streaming: MagicMock, tmp_path: Path) -> None:
+        mock_run_streaming.return_value = SimpleNamespace(success=True, text="fixed", rate_limited=False)
 
         success, output, rate_limited = run_retry_iteration(
             tmp_path,
@@ -253,7 +262,34 @@ class TestLoopRunner:
         assert success is True
         assert output == "fixed"
         assert rate_limited is False
-        request = mock_adapter.execute.call_args.args[0]
-        assert request.profile.provider == "codex"
-        assert "story #1" in request.prompt
-        assert "Create README and notes" in request.prompt
+        spec = mock_run_streaming.call_args.args[0]
+        assert spec.provider == "codex"
+        assert "story #1" in spec.prompt
+        assert "Create README and notes" in spec.prompt
+
+    @patch("autopilot.core.loop_runner.run_streaming_execution")
+    def test_run_prompt_iteration_delegates_to_streaming_orchestrator(self, mock_run_streaming: MagicMock, tmp_path: Path) -> None:
+        mock_run_streaming.return_value = SimpleNamespace(success=True, text="fixed", rate_limited=False)
+
+        success, output, rate_limited = run_prompt_iteration(
+            tmp_path,
+            {"PATH": "/usr/bin"},
+            "codex",
+            (
+                "You are an autonomous coding agent.\n"
+                "Selected story #8: Fix callback\n"
+                "Story description: Tighten OAuth callback validation.\n"
+                "PRD snapshot: .agents/tasks/prd.json\n"
+            ),
+        )
+
+        assert success is True
+        assert output == "fixed"
+        assert rate_limited is False
+        spec = mock_run_streaming.call_args.args[0]
+        assert spec.project_path == tmp_path
+        assert spec.provider == "codex"
+        assert "Selected story #8" in spec.prompt
+        assert "Identity:" in spec.prompt
+        memory_state = json.loads((tmp_path / ".ralph" / "memory" / "session-memory.json").read_text())
+        assert memory_state["working_log_count"] >= 2

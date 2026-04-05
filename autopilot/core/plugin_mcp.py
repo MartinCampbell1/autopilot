@@ -10,6 +10,7 @@ from pathlib import Path
 from autopilot.core.capability_store import MCPConnector, ConnectorValidationResult, validate_connector_config
 from autopilot.core.config import AutopilotConfig
 from autopilot.core.plugin_models import LoadedPlugin, PluginMcpServerDescriptor
+from autopilot.core.plugin_policy import evaluate_plugin_mcp_policy
 from autopilot.core.plugin_storage import (
     get_plugin_option_state,
     load_plugin_options,
@@ -267,21 +268,33 @@ def list_plugin_mcp_servers(
                     + ", ".join(missing_envs)
                 )
             transport = "stdio" if normalized.get("type") == "stdio" else "http"
+            descriptor = PluginMcpServerDescriptor(
+                plugin_id=plugin.plugin_id,
+                server_name=server_name,
+                connector_id=build_plugin_connector_id(plugin.plugin_id, server_name),
+                display_name=f"{plugin.display_name or plugin.name}: {server_name}",
+                transport=transport,
+                source_kind=source_kind,
+                source_path=source_path,
+                config=preview_config,
+                validation_status="invalid" if validation_errors else "valid",
+                validation_errors=validation_errors,
+                missing_env_vars=missing_envs,
+                missing_option_keys=list(option_state.unconfigured_keys),
+                sensitive_option_keys=list(option_state.sensitive_keys),
+            )
+            decision = evaluate_plugin_mcp_policy(config, plugin, descriptor)
             descriptors.append(
-                PluginMcpServerDescriptor(
-                    plugin_id=plugin.plugin_id,
-                    server_name=server_name,
-                    connector_id=build_plugin_connector_id(plugin.plugin_id, server_name),
-                    display_name=f"{plugin.display_name or plugin.name}: {server_name}",
-                    transport=transport,
-                    source_kind=source_kind,
-                    source_path=source_path,
-                    config=preview_config,
-                    validation_status="invalid" if validation_errors else "valid",
-                    validation_errors=validation_errors,
-                    missing_env_vars=missing_envs,
-                    missing_option_keys=list(option_state.unconfigured_keys),
-                    sensitive_option_keys=list(option_state.sensitive_keys),
+                descriptor.model_copy(
+                    update={
+                        "policy_action": decision.action,
+                        "policy_status": decision.status,
+                        "policy_summary": decision.summary,
+                        "policy_flags": list(decision.flags),
+                        "wrapper_mode": decision.wrapper_mode,
+                        "recommended_runtime_profile": decision.runtime_profile,
+                        "runtime_active": plugin.enabled and decision.action != "block",
+                    }
                 )
             )
     descriptors.sort(key=lambda item: (item.plugin_id, item.server_name, item.connector_id))
@@ -326,16 +339,22 @@ def plugin_mcp_connectors(config: AutopilotConfig) -> list[MCPConnector]:
             connector_type="mcp_server",
             description=f"Plugin-provided MCP server `{descriptor.server_name}` from `{plugin.display_name or plugin.name}`.",
             transport=descriptor.transport,
-            tags=["plugin", "mcp", descriptor.plugin_id],
+            tags=["plugin", "mcp", descriptor.plugin_id, f"policy-{descriptor.policy_action}"],
             providers=["codex", "claude", "gemini", "ollama"],
-            risk_level="medium",
+            risk_level="high" if descriptor.policy_action == "wrap" else "medium",
             scopes=["workspace"] if descriptor.transport == "stdio" else ["network"],
-            enabled=plugin.enabled,
+            enabled=plugin.enabled and descriptor.policy_action != "block",
             built_in=False,
             config={
                 **descriptor.config,
                 "plugin_source_kind": descriptor.source_kind,
                 "plugin_source_path": descriptor.source_path,
+                "plugin_policy_action": descriptor.policy_action,
+                "plugin_policy_status": descriptor.policy_status,
+                "plugin_policy_summary": descriptor.policy_summary,
+                "plugin_policy_flags": list(descriptor.policy_flags),
+                "plugin_policy_wrapper_mode": descriptor.wrapper_mode,
+                "plugin_policy_runtime_profile": descriptor.recommended_runtime_profile,
             },
             validation_status=descriptor.validation_status,
             source="plugin",
@@ -347,8 +366,23 @@ def plugin_mcp_connectors(config: AutopilotConfig) -> list[MCPConnector]:
         connectors.append(
             connector.model_copy(
                 update={
-                    "validation_status": validation.status,
-                    "last_validation_result": validation.model_dump(),
+                    "validation_status": "blocked" if descriptor.policy_action == "block" else validation.status,
+                    "last_validation_result": validation.model_copy(
+                        update={
+                            "ok": False if descriptor.policy_action == "block" else validation.ok,
+                            "status": "blocked" if descriptor.policy_action == "block" else validation.status,
+                            "summary": descriptor.policy_summary if descriptor.policy_action == "block" else validation.summary,
+                            "log": (
+                                (
+                                    validation.log.rstrip()
+                                    + ("\n" if validation.log.strip() and descriptor.validation_errors else "")
+                                    + "\n".join(f"- {issue}" for issue in descriptor.validation_errors)
+                                ).strip()
+                                if descriptor.policy_action == "block"
+                                else validation.log
+                            ),
+                        }
+                    ).model_dump(),
                 }
             )
         )

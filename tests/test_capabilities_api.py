@@ -104,7 +104,7 @@ def test_capabilities_extensions_surface_discovered_plugins_and_enablement(tmp_p
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["lifecycle"][:3] == ["discover", "validate", "enable"]
+    assert payload["lifecycle"][:4] == ["discover", "validate", "configure", "scan"]
     plugin = next(item for item in payload["plugins"] if item["extension_id"] == "github")
     assert plugin["display_name"] == "Github"
     assert plugin["metadata"]["enabled"] is True
@@ -219,11 +219,15 @@ def test_capabilities_plugin_mcp_routes_and_managed_connector_guards(tmp_path: P
     assert extensions_response.status_code == 200
     ops = next(item for item in extensions_response.json()["plugins"] if item["extension_id"] == "ops")
     assert ops["metadata"]["mcp_server_count"] == 1
+    assert ops["metadata"]["wrapped_surface_count"] == 0
+    assert ops["metadata"]["sandboxed_surface_count"] == 1
+    assert extensions_response.json()["scan"]["summary"]["sandboxed_surface_count"] == 1
 
     mcp_response = client.get("/api/capabilities/plugins/ops/mcp")
     assert mcp_response.status_code == 200
     server = mcp_response.json()["mcp_servers"][0]
     assert server["connector_id"] == "plugin-ops-review"
+    assert server["policy_action"] == "sandbox"
 
     connectors = client.get("/api/capabilities/connectors").json()["connectors"]
     assert any(item["id"] == "plugin-ops-review" and item["managed"] is True for item in connectors)

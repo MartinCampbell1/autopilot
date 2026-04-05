@@ -114,6 +114,13 @@ class CriticResult:
     review_phases: list[str] = field(default_factory=list)
     verification_checks: list[VerificationCheck] = field(default_factory=list)
     review_results: list["ReviewPhaseResult"] = field(default_factory=list)
+    shadow_audit_action: str = "pass"
+    shadow_audit_feedback: str = ""
+    shadow_audit_findings: list[str] = field(default_factory=list)
+    judge_pack: str = ""
+    judge_verdict: str = ""
+    judge_summary: str = ""
+    judge_findings: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -129,6 +136,9 @@ class ReviewPhaseResult:
     elapsed_sec: float = 0.0
     usage: dict[str, Any] = field(default_factory=dict)
     verification_checks: list[VerificationCheck] = field(default_factory=list)
+    shadow_audit_action: str = "pass"
+    shadow_audit_feedback: str = ""
+    shadow_audit_findings: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -149,10 +159,22 @@ class IterationRecord:
     gate_results: list[GateResult] = field(default_factory=list)
     worker_usage: dict[str, Any] = field(default_factory=dict)
     critic_usage: dict[str, Any] = field(default_factory=dict)
+    adapter_id: str = ""
+    prompt_type: str = ""
+    attempt_strategy: str = ""
+    attempt_number: int = 1
+    attempt_count: int = 1
+    escalation_state: str = ""
+    selected_by_policy: bool = False
     review_phases: list[str] = field(default_factory=list)
+    verification_checks: list[VerificationCheck] = field(default_factory=list)
     review_results: list[ReviewPhaseResult] = field(default_factory=list)
     quality_regression: bool = False
     regression_summary: str = ""
+    judge_pack: str = ""
+    judge_verdict: str = ""
+    judge_summary: str = ""
+    judge_findings: list[str] = field(default_factory=list)
 
 
 @dataclass

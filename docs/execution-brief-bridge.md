@@ -23,16 +23,30 @@ The bridge between them should be a typed artifact, not an unstructured chat tra
 
 ## Minimal flow
 
-1. `Quorum` produces an `Execution Brief`
-2. `Autopilot` receives it via `POST /api/projects/from-execution-brief`
-3. `Autopilot` also exposes a stable external alias via `POST /api/execution-plane/projects/from-brief`
-4. `Autopilot` renders the brief into a planner-friendly spec
-5. `Autopilot` uses the existing PRD generation pipeline
-6. `Autopilot` creates the local project
-7. `Autopilot` persists the typed brief at `.agents/tasks/execution-brief.json`
-8. `Autopilot` optionally launches execution immediately
+1. `Quorum` produces a **shared Execution Brief** (or canonical `ExecutionBriefV2`)
+2. `Autopilot` receives it via the appropriate ingest route (see below)
+3. `Autopilot` renders the brief into a planner-friendly spec
+4. `Autopilot` uses the existing PRD generation pipeline
+5. `Autopilot` creates the local project
+6. `Autopilot` persists the typed brief at `.agents/tasks/execution-brief.json`
+7. `Autopilot` optionally launches execution (blocked if founder approval required but not granted)
 
-## Endpoints
+## Canonical Handoff Routes
+
+### Shared brief (from Quorum discovery)
+
+- **Canonical:** `POST /api/execution-plane/projects/from-shared-brief`
+- **Compatibility:** `POST /api/projects/from-shared-execution-brief`
+
+> **Warning:** Never send shared briefs to `/projects/from-execution-brief`. That route expects
+> Autopilot's internal ExecutionBrief with a required `thesis` field.
+
+### Internal brief (Autopilot-native)
+
+- **Canonical:** `POST /api/execution-plane/projects/from-brief`
+- **Deprecated for shared briefs:** `POST /api/projects/from-execution-brief`
+
+## Other Endpoints
 
 ### Get the schema
 
@@ -40,17 +54,17 @@ The bridge between them should be a typed artifact, not an unstructured chat tra
 
 Returns the JSON schema generated from the `ExecutionBrief` model.
 
-### Create a project from a brief
+### Create a project from an internal brief (dashboard compatibility)
 
 `POST /api/projects/from-execution-brief`
 
-Compatibility endpoint for the dashboard.
+**Deprecated for Quorum handoff.** Expects internal `ExecutionBrief` with `thesis` field. Use `/execution-plane/projects/from-shared-brief` for shared briefs.
 
-### Stable execution-plane ingest
+### Stable execution-plane ingest (internal brief)
 
 `POST /api/execution-plane/projects/from-brief`
 
-FounderOS-facing stable ingest endpoint. Returns a typed execution-plane project snapshot plus the generated PRD.
+FounderOS-facing stable ingest endpoint for **internal** briefs. Returns a typed execution-plane project snapshot plus the generated PRD.
 
 Request shape:
 

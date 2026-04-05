@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
+import type { ProjectRuntimeHandoffSummary } from "@/lib/story-runtime-handoffs";
 import type { ProjectSummary, ToolPermissionRuntimeRecord } from "@/lib/types";
 
 const STATUS_LABELS: Record<ProjectSummary["status"], string> = {
@@ -22,6 +23,7 @@ const STATUS_STYLES: Record<ProjectSummary["status"], string> = {
 
 interface PortfolioProjectCardProps {
   project: ProjectSummary;
+  runtimeHandoffSummary?: ProjectRuntimeHandoffSummary | null;
   busy?: boolean;
   interruptBusy?: boolean;
   interruptStateLabel?: string;
@@ -89,6 +91,7 @@ function extractToolPermissionMessage(runtime: ToolPermissionRuntimeRecord) {
 
 export function PortfolioProjectCard({
   project,
+  runtimeHandoffSummary,
   busy = false,
   interruptBusy = false,
   interruptStateLabel = "",
@@ -118,9 +121,14 @@ export function PortfolioProjectCard({
   const reviewLabel = pendingToolPermissionCount > 0
     ? `Review ${pendingToolPermissionCount}`
     : "Review";
+  const hasQuarantinedHandoff = Boolean(runtimeHandoffSummary?.openShadowAuditCount);
 
   return (
-    <article className="rounded-[14px] border border-[#e5e5e3] bg-white p-5 shadow-[0_1px_3px_rgba(15,15,15,0.08),0_0_1px_rgba(15,15,15,0.04)]">
+    <article
+      className={`rounded-[14px] border bg-white p-5 shadow-[0_1px_3px_rgba(15,15,15,0.08),0_0_1px_rgba(15,15,15,0.04)] ${
+        hasQuarantinedHandoff ? "border-[#f4e0c4]" : "border-[#e5e5e3]"
+      }`}
+    >
       <div className="flex items-start justify-between gap-4">
         <div>
           <h2 className="text-[18px] font-semibold tracking-[-0.02em] text-[#37352f]">
@@ -131,6 +139,21 @@ export function PortfolioProjectCard({
               ? `Current story: ${project.current_story_title}`
               : "No story currently active."}
           </p>
+          {hasQuarantinedHandoff ? (
+            <div className="mt-3 flex flex-wrap gap-2">
+              <span className="rounded-full bg-[#fff1cc] px-2.5 py-1 text-[11px] font-semibold text-[#9a6700]">
+                handoff blocked
+              </span>
+              <span className="rounded-full bg-[#fff6e8] px-2.5 py-1 text-[11px] font-medium text-[#9a6700]">
+                {runtimeHandoffSummary?.openShadowAuditCount} shadow audit
+                {runtimeHandoffSummary?.openShadowAuditCount === 1 ? "" : "s"}
+              </span>
+              <span className="rounded-full bg-[#fbfbf9] px-2.5 py-1 text-[11px] font-medium text-[#6b6b6b]">
+                {runtimeHandoffSummary?.blockedStoryCount} affected stor
+                {runtimeHandoffSummary?.blockedStoryCount === 1 ? "y" : "ies"}
+              </span>
+            </div>
+          ) : null}
         </div>
         <span className={`rounded-full px-3 py-1 text-[12px] font-semibold ${STATUS_STYLES[project.status]}`}>
           {STATUS_LABELS[project.status]}
@@ -195,6 +218,12 @@ export function PortfolioProjectCard({
                       Artifact: {handoffArtifact.path}
                     </p>
                   )}
+                  {hasQuarantinedHandoff ? (
+                    <p className="mt-2 text-[12px] font-medium text-[#9a6700]">
+                      {runtimeHandoffSummary?.blockedHandoffCount} blocked handoff
+                      {runtimeHandoffSummary?.blockedHandoffCount === 1 ? "" : "s"} waiting for release
+                    </p>
+                  ) : null}
                 </>
               ) : (
                 <p className="mt-1 text-[12px] text-[#787774]">
@@ -212,10 +241,14 @@ export function PortfolioProjectCard({
 
         <div className="flex flex-wrap items-start justify-end gap-2">
           <Link
-            href={`/projects/${project.id}`}
+            href={
+              runtimeHandoffSummary?.primaryStoryId
+                ? `/projects/${project.id}?storyId=${runtimeHandoffSummary.primaryStoryId}`
+                : `/projects/${project.id}`
+            }
             className="inline-flex h-9 items-center justify-center rounded-lg border border-[#e5e5e3] bg-white px-3 text-[13px] font-medium text-[#37352f] transition-colors hover:bg-[#f7f7f5]"
           >
-            Open
+            {runtimeHandoffSummary?.primaryStoryId ? "Open blocked story" : "Open"}
           </Link>
           {project.status === "running" ? (
             <Button

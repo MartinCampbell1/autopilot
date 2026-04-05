@@ -51,6 +51,26 @@ type UseControlPlaneRuntimeAgentModelArgs = {
   selectedAgentTimelineEntryRef: MutableRefObject<AgentTimelineEntry | null>;
 };
 
+function shadowAuditSourceLabel(entry: AgentTimelineEntry["shadowAudit"]): string {
+  const sourceName = (entry?.source_name || "").trim();
+  if (sourceName) return sourceName;
+  const sourceKind = (entry?.source_kind || "").trim();
+  return sourceKind ? sourceKind.replaceAll("_", " ") : "shadow audit";
+}
+
+function shadowAuditBlockedOwnerLabel(entry: AgentTimelineEntry["shadowAudit"]): string {
+  const ownerKind = (entry?.blocked_artifact_owner_kind || "").trim();
+  if (!ownerKind) return "blocked handoff";
+  return ownerKind.replaceAll("_", " ");
+}
+
+function shadowAuditMessage(entry: AgentTimelineEntry["shadowAudit"]): string {
+  if (!entry) return "Blocked handoff requires explicit review.";
+  if (entry.summary) return entry.summary;
+  if (entry.findings.length > 0) return entry.findings.join(" · ");
+  return "Blocked handoff requires explicit review.";
+}
+
 export function useControlPlaneRuntimeAgentModel({
   selectedAgentId,
   selectedAgent,
@@ -187,13 +207,63 @@ export function useControlPlaneRuntimeAgentModel({
       });
     });
 
+    const shadowAuditEntries = new Map<string, AgentTimelineEntry>();
+    const mergeShadowAuditEntry = (
+      entry: NonNullable<ExecutionAgentActionRunRecord["shadow_audits"]>[number],
+      options?: {
+        runId?: string;
+        taskId?: string;
+      }
+    ) => {
+      const existing = shadowAuditEntries.get(entry.id);
+      shadowAuditEntries.set(entry.id, {
+        kind: "shadow_audit",
+        id: entry.id,
+        timestamp: entry.resolved_at || entry.updated_at || entry.created_at,
+        status: entry.status,
+        title: shadowAuditSourceLabel(entry),
+        subtitle: `${entry.action || "review"} · ${shadowAuditBlockedOwnerLabel(entry)}`,
+        message: shadowAuditMessage(entry),
+        shadowAudit: entry,
+        shadowAuditTaskId:
+          existing?.shadowAuditTaskId ||
+          options?.taskId ||
+          (entry.blocked_artifact_owner_kind === "runtime_agent_task"
+            ? entry.blocked_artifact_owner_id
+            : ""),
+        shadowAuditRunId:
+          existing?.shadowAuditRunId ||
+          options?.runId ||
+          (entry.source_kind === "agent_action_run" ? entry.source_id : "") ||
+          toStringValue(entry.metadata?.agent_action_run_id) ||
+          toStringValue(entry.metadata?.run_id),
+      });
+    };
+
+    agentScopedRuns.forEach((run) => {
+      (run.shadow_audits || []).forEach((shadowAudit) => {
+        mergeShadowAuditEntry(shadowAudit, { runId: run.id });
+      });
+    });
+
+    (selectedAgent.async_tasks || []).forEach((task) => {
+      (task.shadow_audits || []).forEach((shadowAudit) => {
+        mergeShadowAuditEntry(shadowAudit, {
+          runId: task.agent_action_run_id,
+          taskId: task.id,
+        });
+      });
+    });
+
+    entries.push(...shadowAuditEntries.values());
+
     return entries.sort(
       (left, right) =>
         right.timestamp.localeCompare(left.timestamp) ||
         left.kind.localeCompare(right.kind) ||
         left.id.localeCompare(right.id)
     );
-  }, [selectedAgent]);
+  }, [agentScopedRuns, selectedAgent]);
 
   const agentTimelineOperatorVisibilityState = useMemo(
     () =>
@@ -234,6 +304,7 @@ export function useControlPlaneRuntimeAgentModel({
               entry.approval,
               entry.issue,
               entry.event,
+              entry.shadowAudit,
             ],
             agentTimelineSearch
           )
@@ -247,6 +318,8 @@ export function useControlPlaneRuntimeAgentModel({
       approvals: activeAgentTimelineEntries.filter((entry) => entry.kind === "approval").length,
       issues: activeAgentTimelineEntries.filter((entry) => entry.kind === "issue").length,
       events: activeAgentTimelineEntries.filter((entry) => entry.kind === "event").length,
+      shadow_audits: activeAgentTimelineEntries.filter((entry) => entry.kind === "shadow_audit")
+        .length,
       attention: activeAgentTimelineEntries.filter((entry) =>
         matchesAgentTimelineFilter(entry, "attention")
       ).length,
@@ -284,6 +357,10 @@ export function useControlPlaneRuntimeAgentModel({
   );
   const latestAgentEventEntry = useMemo(
     () => activeAgentTimelineEntries.find((entry) => entry.kind === "event") ?? null,
+    [activeAgentTimelineEntries]
+  );
+  const latestAgentShadowAuditEntry = useMemo(
+    () => activeAgentTimelineEntries.find((entry) => entry.kind === "shadow_audit") ?? null,
     [activeAgentTimelineEntries]
   );
 
@@ -440,6 +517,7 @@ export function useControlPlaneRuntimeAgentModel({
     latestAgentApprovalEntry,
     latestAgentIssueEntry,
     latestAgentEventEntry,
+    latestAgentShadowAuditEntry,
     hiddenAgentTimelineEntryCount,
     persistedAgentTimelineState,
     persistedDismissedAgentTimelineCount,

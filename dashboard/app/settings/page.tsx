@@ -5,11 +5,16 @@ import { useEffect, useState } from "react";
 import { AppSidebar } from "@/components/app-sidebar";
 import { SettingsCapabilitiesManager } from "@/components/settings-capabilities";
 import { fetchAccountsHealth, fetchProjects } from "@/lib/api";
+import { useProjectRuntimeHandoffSignals } from "@/lib/use-project-runtime-handoff-signals";
 import type { AccountHealth, ProjectSummary } from "@/lib/types";
 
 export default function SettingsPage() {
   const [health, setHealth] = useState<AccountHealth | null>(null);
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
+  const {
+    signals: projectRuntimeHandoffSignals,
+    refresh: refreshProjectRuntimeHandoffSignals,
+  } = useProjectRuntimeHandoffSignals(projects);
 
   useEffect(() => {
     void Promise.all([fetchAccountsHealth(), fetchProjects(false)])
@@ -25,7 +30,12 @@ export default function SettingsPage() {
 
   return (
     <div className="flex min-h-screen bg-[#fafaf9]">
-      <AppSidebar health={health} projects={projects} />
+      <AppSidebar
+        health={health}
+        projects={projects}
+        projectRuntimeHandoffSignals={projectRuntimeHandoffSignals}
+        onRefreshProjectRuntimeHandoffSignals={refreshProjectRuntimeHandoffSignals}
+      />
 
       <main className="flex-1 pl-[260px]">
         <header className="sticky top-0 z-30 flex h-[52px] items-center justify-between border-b border-[#e5e5e3] bg-white px-6">

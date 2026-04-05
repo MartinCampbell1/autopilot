@@ -144,6 +144,10 @@ class AutopilotConfig:
         return self.autopilot_home / "state"
 
     @property
+    def intake_sessions_dir(self) -> Path:
+        return self.runtime_state_dir / "intake-sessions"
+
+    @property
     def account_probe_state_path(self) -> Path:
         return self.runtime_state_dir / "account-probes.json"
 

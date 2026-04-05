@@ -19,6 +19,7 @@ type UseControlPlaneSessionLineageSelectionArgs = {
   selectedRunResultIndex: number;
   selectedSessionToolPermissionRuntimeId: string;
   selectedSessionAsyncTaskId: string;
+  selectedSessionShadowAuditId: string;
   sessionLineageEntries: SessionLineageEntry[];
   sessionLineageFilter: string;
   selectedSessionLineageEntryRef: MutableRefObject<SessionLineageEntry | null>;
@@ -32,6 +33,7 @@ export function useControlPlaneSessionLineageSelection({
   selectedRunResultIndex,
   selectedSessionToolPermissionRuntimeId,
   selectedSessionAsyncTaskId,
+  selectedSessionShadowAuditId,
   sessionLineageEntries,
   sessionLineageFilter,
   selectedSessionLineageEntryRef,
@@ -52,6 +54,12 @@ export function useControlPlaneSessionLineageSelection({
         null
       );
     }
+    if (selectedSessionShadowAuditId) {
+      return (
+        sessionLineageEntries.find((entry) => entry.shadowAuditId === selectedSessionShadowAuditId) ??
+        null
+      );
+    }
     if (selectedRunId) {
       return (
         sessionLineageEntries.find(
@@ -65,6 +73,7 @@ export function useControlPlaneSessionLineageSelection({
     selectedRunResultIndex,
     selectedSessionToolPermissionRuntimeId,
     selectedSessionAsyncTaskId,
+    selectedSessionShadowAuditId,
     sessionLineageEntries,
   ]);
 

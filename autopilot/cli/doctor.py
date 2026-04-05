@@ -16,6 +16,7 @@ from autopilot.core.account_manager import AccountManager
 from autopilot.core.bootstrap_visibility import build_bootstrap_status
 from autopilot.core.config import load_config
 from autopilot.core.onboarding import detect_project_tooling
+from autopilot.core.plugin_scan import build_plugin_runtime_scan
 from autopilot.core.runtime_diagnostics import build_runtime_diagnostics
 
 console = Console()
@@ -39,6 +40,7 @@ def _doctor_report(
         config_path=config_path,
         project_path=project_path,
     )
+    plugin_runtime = build_plugin_runtime_scan(config)
 
     recommendations: list[str] = []
     for provider, payload in provider_snapshot["providers"].items():
@@ -62,6 +64,7 @@ def _doctor_report(
         fix = str(diagnostic.get("fix") or "").strip()
         if fix:
             recommendations.append(fix)
+    recommendations.extend(plugin_runtime.recommendations)
     recommendations = list(dict.fromkeys(recommendations))
 
     return {
@@ -78,6 +81,7 @@ def _doctor_report(
         "project": project_report.to_dict(),
         "bootstrap": bootstrap_status,
         "runtime_diagnostics": runtime_diagnostics,
+        "plugin_runtime": plugin_runtime.model_dump(),
         "recommendations": recommendations,
     }
 
@@ -182,6 +186,32 @@ def doctor(
         str(github_status.get("workflow_path") or ""),
     )
     console.print(bootstrap_table)
+
+    plugin_runtime = dict(report.get("plugin_runtime") or {})
+    plugin_summary = dict(plugin_runtime.get("summary") or {})
+    plugin_table = Table(title="Plugin Runtime Preflight")
+    plugin_table.add_column("Plugins")
+    plugin_table.add_column("Active MCP")
+    plugin_table.add_column("Blocked")
+    plugin_table.add_column("Wrapped")
+    plugin_table.add_column("Sandboxed")
+    plugin_table.add_column("Recommended Profile")
+    plugin_table.add_row(
+        str(plugin_summary.get("plugin_count", 0)),
+        str(plugin_summary.get("active_mcp_server_count", 0)),
+        str(
+            int(plugin_summary.get("blocked_plugin_count", 0))
+            + int(plugin_summary.get("blocked_mcp_server_count", 0))
+        ),
+        str(plugin_summary.get("wrapped_surface_count", 0)),
+        str(plugin_summary.get("sandboxed_surface_count", 0)),
+        str(plugin_summary.get("recommended_runtime_profile", "cloud")),
+    )
+    console.print(plugin_table)
+
+    plugin_findings = list(plugin_runtime.get("recommendations") or [])
+    if plugin_findings:
+        console.print(Panel("\n".join(f"- {note}" for note in plugin_findings), title="Plugin Runtime"))
 
     gates = project_payload["gates"]
     if gates:

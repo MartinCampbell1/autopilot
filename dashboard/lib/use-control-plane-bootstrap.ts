@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, type Dispatch, type SetStateAction } from "react";
+import { useCallback, useEffect, useRef, type Dispatch, type SetStateAction } from "react";
 import type { QueueAdvanceFeedback, QueueAdvanceFocusDelta } from "@/components/queue-advance-notice";
 import { outcomeRuntimeAgentId } from "@/lib/control-plane-data";
 import type {
@@ -22,6 +22,7 @@ import type {
 type UseControlPlaneBootstrapArgs = {
   sessions: OrchestratorSessionRecord[];
   controlPasses: OrchestratorControlPassRecord[];
+  overviewReady: boolean;
   selectedSessionId: string;
   selectedAgentId: string;
   selectedRunId: string;
@@ -40,6 +41,7 @@ type UseControlPlaneBootstrapArgs = {
   setSelectedSessionIssueId: Dispatch<SetStateAction<string>>;
   setSelectedSessionToolPermissionRuntimeId: Dispatch<SetStateAction<string>>;
   setSelectedSessionAsyncTaskId: Dispatch<SetStateAction<string>>;
+  setSelectedSessionShadowAuditId: Dispatch<SetStateAction<string>>;
   setSelectedSessionEventKey: Dispatch<SetStateAction<string>>;
   setSelectedSessionContextKind: Dispatch<SetStateAction<SessionContextKind>>;
   setEntitySearch: Dispatch<SetStateAction<string>>;
@@ -69,6 +71,7 @@ type UseControlPlaneBootstrapArgs = {
 export function useControlPlaneBootstrap({
   sessions,
   controlPasses,
+  overviewReady,
   selectedSessionId,
   selectedAgentId,
   selectedRunId,
@@ -87,6 +90,7 @@ export function useControlPlaneBootstrap({
   setSelectedSessionIssueId,
   setSelectedSessionToolPermissionRuntimeId,
   setSelectedSessionAsyncTaskId,
+  setSelectedSessionShadowAuditId,
   setSelectedSessionEventKey,
   setSelectedSessionContextKind,
   setEntitySearch,
@@ -106,7 +110,10 @@ export function useControlPlaneBootstrap({
   setAgentQueueFocusDelta,
   setPendingAgentPriorityAutoAdvance,
 }: UseControlPlaneBootstrapArgs) {
+  const initializedSessionIdRef = useRef(false);
+
   useEffect(() => {
+    if (!overviewReady) return;
     if (sessions.length === 0) {
       setSelectedSessionId("");
       setSelectedAgentId("");
@@ -119,6 +126,7 @@ export function useControlPlaneBootstrap({
       sessions.some((session) => session.id === current) ? current : sessions[0].id
     );
   }, [
+    overviewReady,
     sessions,
     setSelectedAgent,
     setSelectedAgentId,
@@ -148,6 +156,7 @@ export function useControlPlaneBootstrap({
       setSelectedSessionIssueId("");
       setSelectedSessionToolPermissionRuntimeId("");
       setSelectedSessionAsyncTaskId("");
+      setSelectedSessionShadowAuditId("");
       setSelectedSessionEventKey("");
       setSelectedSessionContextKind("");
       setEntitySearch("");
@@ -191,15 +200,22 @@ export function useControlPlaneBootstrap({
     setSelectedSessionIssueId,
     setSelectedSessionToolPermissionRuntimeId,
     setSelectedSessionAsyncTaskId,
+    setSelectedSessionShadowAuditId,
     setSessionLoading,
   ]);
 
   useEffect(() => {
+    if (!overviewReady) return;
+    if (!initializedSessionIdRef.current) {
+      initializedSessionIdRef.current = true;
+      return;
+    }
     setEntitySearch("");
     setSelectedSessionApprovalId("");
     setSelectedSessionIssueId("");
     setSelectedSessionToolPermissionRuntimeId("");
     setSelectedSessionAsyncTaskId("");
+    setSelectedSessionShadowAuditId("");
     setSelectedSessionEventKey("");
     setSelectedSessionContextKind("");
     setSessionQueueAdvanceFeedback(null);
@@ -207,6 +223,7 @@ export function useControlPlaneBootstrap({
     setPendingLineageAutoAdvance(null);
     setLineageQueueNow(Date.now());
   }, [
+    overviewReady,
     selectedSessionId,
     setEntitySearch,
     setLineageQueueNow,
@@ -217,6 +234,7 @@ export function useControlPlaneBootstrap({
     setSelectedSessionIssueId,
     setSelectedSessionToolPermissionRuntimeId,
     setSelectedSessionAsyncTaskId,
+    setSelectedSessionShadowAuditId,
     setSessionQueueAdvanceFeedback,
     setSessionQueueFocusDelta,
   ]);

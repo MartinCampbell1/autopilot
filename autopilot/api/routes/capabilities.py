@@ -35,12 +35,13 @@ from autopilot.core.plugins import (
 from autopilot.core.plugin_commands import list_plugin_commands, render_plugin_command_content
 from autopilot.core.plugin_loader import build_plugin_id, clear_plugin_cache
 from autopilot.core.plugin_mcp import list_plugin_mcp_servers
+from autopilot.core.plugin_scan import build_plugin_runtime_scan
 from autopilot.core.plugin_skills import list_plugin_skills
 from autopilot.core.plugin_storage import get_plugin_option_state, save_plugin_options
 from autopilot.core.plugin_state import set_plugin_enabled
 
 router = APIRouter()
-EXTENSION_LIFECYCLE = ["discover", "validate", "enable", "expose", "audit"]
+EXTENSION_LIFECYCLE = ["discover", "validate", "configure", "scan", "enable", "expose", "audit"]
 
 
 def _build_extension_registry(config) -> dict[str, object]:
@@ -48,6 +49,8 @@ def _build_extension_registry(config) -> dict[str, object]:
     plugin_skills = list_plugin_skills(config)
     plugin_commands = list_plugin_commands(config)
     plugin_mcp_servers = list_plugin_mcp_servers(config)
+    plugin_scan = build_plugin_runtime_scan(config)
+    scan_by_plugin = {item.plugin_id: item for item in plugin_scan.plugins}
     skill_counts: dict[str, int] = {}
     command_counts: dict[str, int] = {}
     mcp_counts: dict[str, int] = {}
@@ -107,6 +110,14 @@ def _build_extension_registry(config) -> dict[str, object]:
                     or (plugin.author.name if plugin.author is not None else ""),
                     "capabilities": list(plugin.interface.capabilities),
                     "default_prompts": plugin.interface.normalized_default_prompts(),
+                    "policy_action": scan_by_plugin[plugin.plugin_id].policy_action,
+                    "policy_status": scan_by_plugin[plugin.plugin_id].policy_status,
+                    "policy_summary": scan_by_plugin[plugin.plugin_id].policy_summary,
+                    "policy_flags": list(scan_by_plugin[plugin.plugin_id].policy_flags),
+                    "blocked_mcp_server_count": scan_by_plugin[plugin.plugin_id].blocked_mcp_server_count,
+                    "wrapped_surface_count": scan_by_plugin[plugin.plugin_id].wrapped_surface_count,
+                    "sandboxed_surface_count": scan_by_plugin[plugin.plugin_id].sandboxed_surface_count,
+                    "recommended_runtime_profile": scan_by_plugin[plugin.plugin_id].recommended_runtime_profile,
                 },
             }
             for plugin in loaded_plugins
@@ -156,6 +167,7 @@ def _build_extension_registry(config) -> dict[str, object]:
             }
             for plugin in resolve_notifier_plugins(config)
         ],
+        "scan": plugin_scan.model_dump(),
     }
 
 

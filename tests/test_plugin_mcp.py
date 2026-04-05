@@ -92,6 +92,8 @@ def test_list_plugin_mcp_servers_redacts_sensitive_values_and_tracks_missing_con
     assert len(initial) == 2
     assert all(item.validation_status == "invalid" for item in initial)
     assert initial[0].missing_option_keys == ["apiToken", "projectId"]
+    assert all(item.policy_action == "block" for item in initial)
+    assert all(item.runtime_active is False for item in initial)
 
     save_plugin_options(
         config,
@@ -113,6 +115,14 @@ def test_list_plugin_mcp_servers_redacts_sensitive_values_and_tracks_missing_con
     assert review.config["args"] == ["--project", "proj-123"]
     assert review.config["env"]["API_TOKEN"] == "[sensitive option 'apiToken' not available in prompt content]"
     assert review.config["env"]["HOME_REF"].startswith("[env:") or review.config["env"]["HOME_REF"].startswith("[missing env:")
+    assert review.policy_action == "sandbox"
+    assert review.wrapper_mode == "sandbox-runner"
+    assert review.recommended_runtime_profile == "local"
+    assert review.runtime_active is True
+    assert remote.policy_action == "wrap"
+    assert remote.wrapper_mode == "audit-proxy"
+    assert remote.recommended_runtime_profile == "hybrid"
+    assert remote.runtime_active is True
     assert remote.config["headers"]["Authorization"] == "Bearer [sensitive option 'apiToken' not available in prompt content]"
 
 
@@ -136,11 +146,31 @@ def test_plugin_mcp_connectors_merge_into_registry_without_persisting(tmp_path: 
 
     assert {item.id for item in managed} == {"plugin-ops-remote", "plugin-ops-review"}
     review = next(item for item in registry if item.id == "plugin-ops-review")
+    remote = next(item for item in registry if item.id == "plugin-ops-remote")
     assert review.managed is True
     assert review.source == "plugin"
     assert review.origin_plugin_id == "ops"
     assert review.last_validation_result["status"] == "valid"
+    assert review.config["plugin_policy_action"] == "sandbox"
+    assert review.config["plugin_policy_runtime_profile"] == "local"
+    assert remote.config["plugin_policy_action"] == "wrap"
+    assert remote.config["plugin_policy_wrapper_mode"] == "audit-proxy"
+    assert remote.risk_level == "high"
     assert not config.connectors_json_path.exists()
+
+
+def test_plugin_mcp_connectors_block_invalid_surfaces_before_runtime(tmp_path: Path) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    _write_plugin_with_inline_mcp(config.plugins_dir / "ops")
+
+    connectors = {connector.id: connector for connector in plugin_mcp_connectors(config)}
+
+    assert set(connectors) == {"plugin-ops-remote", "plugin-ops-review"}
+    assert connectors["plugin-ops-review"].enabled is False
+    assert connectors["plugin-ops-review"].validation_status == "blocked"
+    assert connectors["plugin-ops-review"].config["plugin_policy_action"] == "block"
+    assert connectors["plugin-ops-remote"].enabled is False
+    assert connectors["plugin-ops-remote"].validation_status == "blocked"
 
 
 def test_list_plugin_mcp_servers_loads_json_specs_from_manifest_paths(tmp_path: Path) -> None:

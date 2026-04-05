@@ -12,6 +12,7 @@ from autopilot.core.critic import (
     run_critic,
     run_review_plan,
 )
+from autopilot.core.evals.judges import JudgePack, JudgePackResult
 from autopilot.core.verification_agent import (
     NON_ACTIONABLE_ADVERSARIAL_PROBE_FEEDBACK,
     NON_ACTIONABLE_VERDICT_FEEDBACK,
@@ -104,6 +105,7 @@ VERDICT: PASS
         result = parse_critic_output(output)
         assert result.approved is True
         assert result.verdict == "PASS"
+        assert result.shadow_audit_action == "pass"
         assert len(result.verification_checks) == 2
         assert result.verification_checks[0].command == "pytest -q"
 
@@ -111,6 +113,8 @@ VERDICT: PASS
         result = parse_critic_output("VERDICT: PASS")
         assert result.approved is False
         assert result.feedback == NON_ACTIONABLE_VERIFICATION_FEEDBACK
+        assert result.shadow_audit_action == "quarantine"
+        assert result.shadow_audit_findings == ["missing_command_evidence"]
 
     def test_verdict_pass_without_adversarial_probe_is_rejected(self) -> None:
         output = """### Check: unit tests
@@ -125,6 +129,8 @@ VERDICT: PASS
         result = parse_critic_output(output)
         assert result.approved is False
         assert result.feedback == NON_ACTIONABLE_ADVERSARIAL_PROBE_FEEDBACK
+        assert result.shadow_audit_action == "quarantine"
+        assert result.shadow_audit_findings == ["missing_adversarial_probe"]
 
     def test_verdict_must_be_single_terminal_line(self) -> None:
         output = """### Check: adversarial probe - invalid OAuth state
@@ -140,6 +146,8 @@ extra trailing line
         result = parse_critic_output(output)
         assert result.approved is False
         assert result.feedback == NON_ACTIONABLE_VERDICT_FEEDBACK
+        assert result.shadow_audit_action == "retry"
+        assert result.shadow_audit_findings == ["invalid_verdict_contract"]
 
     def test_multiple_verdict_lines_are_rejected(self) -> None:
         output = """### Check: adversarial probe - invalid OAuth state
@@ -322,3 +330,72 @@ class TestRunReviewPlan:
         assert result.approved is True
         assert result.review_results == []
         assert mock_run_critic.call_count == 1
+
+    @patch("autopilot.core.critic.run_critic")
+    def test_run_review_plan_allows_swappable_judge_pack_without_core_loop_edits(
+        self, mock_run_critic: MagicMock, tmp_path: Path
+    ) -> None:
+        mock_run_critic.return_value = SimpleNamespace(
+            approved=True,
+            feedback="",
+            raw_output="VERDICT: PASS",
+            verdict="PASS",
+            usage={
+                "provider": "codex",
+                "role": "critic",
+                "invocations": 1,
+                "tracked_invocations": 0,
+                "priced_invocations": 0,
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "cached_tokens": 0,
+                "total_tokens": 0,
+                "estimated_cost_usd": 0.0,
+                "pricing_source": "unconfigured",
+            },
+            elapsed_sec=0.5,
+            profile_used="critic",
+            review_results=[],
+            verification_checks=[
+                SimpleNamespace(
+                    name="adversarial probe - invalid token",
+                    command="pytest -q",
+                    output="3 passed",
+                    status="PASS",
+                )
+            ],
+            shadow_audit_action="pass",
+            shadow_audit_feedback="",
+            shadow_audit_findings=[],
+        )
+
+        custom_pack = JudgePack(
+            pack_id="strict_custom",
+            label="Strict custom",
+            description="Always downgrade PASS for regression coverage.",
+            evaluator=lambda context: JudgePackResult(
+                pack_id="strict_custom",
+                verdict="PARTIAL",
+                approved=False,
+                summary="Custom judge requires a dedicated regression suite before PASS.",
+                findings=["missing_regression_suite"],
+            ),
+        )
+
+        result = run_review_plan(
+            story_title="OAuth login",
+            story_description="Add Google OAuth",
+            diff="+ def oauth_callback():\n+     pass",
+            provider="codex",
+            env={"CODEX_HOME": str(tmp_path / ".codex")},
+            workdir=tmp_path,
+            review_phases=[],
+            judge_pack="strict_custom",
+            judge_registry={"strict_custom": custom_pack},
+        )
+
+        assert result.approved is False
+        assert result.judge_pack == "strict_custom"
+        assert result.judge_verdict == "PARTIAL"
+        assert result.judge_findings == ["missing_regression_suite"]
+        assert "dedicated regression suite" in result.feedback

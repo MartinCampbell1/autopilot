@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import hashlib
 import json
-import time
-from pathlib import Path
 from typing import Any
 
+from autopilot.core.artifact_store import persist_json_artifact
 from autopilot.core.config import AutopilotConfig
+from autopilot.core.orchestrator_sessions import link_orchestrator_session_entities
 from autopilot.core.tool_contracts import ToolResult, ToolUseContext
 
 
@@ -54,11 +54,35 @@ def store_large_tool_result(
     if inline_limit <= 0 or len(serialized.encode("utf-8")) <= inline_limit:
         return tool_result
 
-    scope_dir = config.tool_results_dir / _storage_scope(use_context)
-    scope_dir.mkdir(parents=True, exist_ok=True)
     payload_hash = hashlib.sha1(serialized.encode("utf-8")).hexdigest()[:12]
-    storage_path = scope_dir / f"{int(time.time())}-{tool_name.replace('/', '_')}-{payload_hash}.json"
-    storage_path.write_text(json.dumps(envelope, indent=2, ensure_ascii=False, sort_keys=True))
+    artifact = persist_json_artifact(
+        config,
+        payload=envelope,
+        artifact_type="tool_result",
+        stage="temporary",
+        owner_kind="tool_result",
+        owner_id=f"{_storage_scope(use_context)}:{tool_name}:{payload_hash}",
+        project_id=str(use_context.project_id or ""),
+        orchestrator_session_id=str(use_context.orchestrator_session_id or ""),
+        runtime_agent_ids=list(use_context.runtime_agent_ids or ()),
+        metadata={
+            "tool_name": tool_name,
+            "actor": str(use_context.actor or ""),
+            "storage_scope": _storage_scope(use_context),
+            "payload_hash": payload_hash,
+        },
+    )
+    if str(use_context.orchestrator_session_id or "").strip():
+        try:
+            link_orchestrator_session_entities(
+                config,
+                str(use_context.orchestrator_session_id or "").strip(),
+                project_ids=[str(use_context.project_id or "").strip()] if str(use_context.project_id or "").strip() else None,
+                linked_runtime_agent_ids=list(use_context.runtime_agent_ids or ()),
+                linked_artifact_ids=[artifact.id],
+            )
+        except KeyError:
+            pass
 
     preview_chars = max(int(config.tool_result_preview_chars or 0), 120)
     preview = serialized[:preview_chars].strip()
@@ -69,17 +93,23 @@ def store_large_tool_result(
     metadata.update(
         {
             "stored_result": True,
-            "stored_result_path": str(storage_path),
+            "stored_result_artifact_id": artifact.id,
+            "stored_result_path": str(artifact.content_path),
+            "stored_result_manifest_path": str(artifact.manifest_path),
+            "stored_result_stage": artifact.stage,
             "stored_result_bytes": len(serialized.encode("utf-8")),
             "stored_result_preview": preview,
         }
     )
     payload = {
         "stored_result": True,
-        "stored_result_path": str(storage_path),
+        "stored_result_artifact_id": artifact.id,
+        "stored_result_path": str(artifact.content_path),
+        "stored_result_manifest_path": str(artifact.manifest_path),
+        "stored_result_stage": artifact.stage,
         "stored_result_bytes": metadata["stored_result_bytes"],
         "stored_result_preview": preview,
     }
-    message = str(tool_result.message or "").strip() or f"Stored large tool result at {storage_path}."
+    message = str(tool_result.message or "").strip() or f"Stored large tool result at {artifact.content_path}."
 
     return tool_result.model_copy(update={"message": message, "payload": payload, "metadata": metadata})

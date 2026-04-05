@@ -11,6 +11,7 @@ import type {
   ExecutionApprovalRecord,
   ExecutionAgentActionRunRecord,
   ExecutionIssueRecord,
+  ExecutionShadowAuditRecord,
   ExecutionRuntimeAgentTaskRecord,
 } from "@/lib/types";
 
@@ -64,6 +65,8 @@ type BuildRuntimeAgentSectionPropsArgs = {
   refreshAsyncTask: (task: ExecutionRuntimeAgentTaskRecord) => Promise<void>;
   waitForAsyncTaskSettlement: (task: ExecutionRuntimeAgentTaskRecord) => Promise<void>;
   cancelAsyncTask: (task: ExecutionRuntimeAgentTaskRecord) => Promise<void>;
+  inspectShadowAudit: (audit: ExecutionShadowAuditRecord) => void;
+  resolveShadowAudit: (audit: ExecutionShadowAuditRecord) => Promise<void>;
   onAllowToolPermissionRuntime: RuntimeAgentSectionProps["onAllowToolPermissionRuntime"];
   onDenyToolPermissionRuntime: RuntimeAgentSectionProps["onDenyToolPermissionRuntime"];
   agentScopedRuns: ExecutionAgentActionRunRecord[];
@@ -116,6 +119,8 @@ type BuildRuntimeAgentSectionPropsArgs = {
   latestAgentIssueEntry: RuntimeAgentTimelineSectionProps["latestAgentIssueEntry"];
   latestAgentApprovalEntry: RuntimeAgentTimelineSectionProps["latestAgentApprovalEntry"];
   latestAgentEventEntry: RuntimeAgentTimelineSectionProps["latestAgentEventEntry"];
+  latestAgentShadowAuditEntry: RuntimeAgentTimelineSectionProps["latestAgentShadowAuditEntry"];
+  activeAgentShadowAuditCount: number;
   syncLinkedSelection: (payload: LinkedSelectionContext) => void;
   approveApproval: (approval: ExecutionApprovalRecord) => Promise<void>;
   rejectApproval: (approval: ExecutionApprovalRecord) => Promise<void>;
@@ -161,6 +166,8 @@ export function buildRuntimeAgentSectionProps({
   refreshAsyncTask,
   waitForAsyncTaskSettlement,
   cancelAsyncTask,
+  inspectShadowAudit,
+  resolveShadowAudit,
   onAllowToolPermissionRuntime,
   onDenyToolPermissionRuntime,
   agentScopedRuns,
@@ -213,6 +220,8 @@ export function buildRuntimeAgentSectionProps({
   latestAgentIssueEntry,
   latestAgentApprovalEntry,
   latestAgentEventEntry,
+  latestAgentShadowAuditEntry,
+  activeAgentShadowAuditCount,
   syncLinkedSelection,
   approveApproval,
   rejectApproval,
@@ -245,6 +254,12 @@ export function buildRuntimeAgentSectionProps({
         onSelectRun: (runId, resultIndex) => {
           setSelectedRunId(runId);
           setSelectedRunResultIndex(resultIndex);
+        },
+        onInspectShadowAudit: (audit) => {
+          inspectShadowAudit(audit);
+        },
+        onResolveShadowAudit: (audit) => {
+          return resolveShadowAudit(audit);
         },
         onWaitForAsyncSettlement: (run) => {
           void waitForRunAsyncSettlement(run);
@@ -313,6 +328,8 @@ export function buildRuntimeAgentSectionProps({
         latestAgentIssueEntry,
         latestAgentApprovalEntry,
         latestAgentEventEntry,
+        latestAgentShadowAuditEntry,
+        activeAgentShadowAuditCount,
         busyActionKey,
         formatTimestamp,
         formatJson,
@@ -350,6 +367,9 @@ export function buildRuntimeAgentSectionProps({
           setEventFilter("all");
           setEntitySearch(value);
         },
+        onResolveShadowAudit: (audit) => {
+          return resolveShadowAudit(audit);
+        },
         onSnoozeAgentTimelineEntry: snoozeAgentTimelineEntry,
         onDismissAgentTimelineEntry: dismissAgentTimelineEntry,
         onAdvanceAgentPriorityQueueFromEntry: advanceAgentPriorityQueueFromEntry,
@@ -368,6 +388,18 @@ export function buildRuntimeAgentSectionProps({
         (right.updated_at || right.created_at).localeCompare(left.updated_at || left.created_at) ||
         right.id.localeCompare(left.id)
     );
+  const openShadowAudits = [
+    ...agentScopedRuns.flatMap((run) => run.shadow_audits || []),
+    ...((selectedAgent?.async_tasks || []).flatMap((task) => task.shadow_audits || [])),
+  ]
+    .filter((audit) => audit.open || audit.status === "open")
+    .sort(
+      (left, right) =>
+        right.updated_at.localeCompare(left.updated_at) || right.id.localeCompare(left.id)
+    )
+    .filter(
+      (audit, index, items) => items.findIndex((candidate) => candidate.id === audit.id) === index
+    );
 
   return {
     selectedAgentId,
@@ -378,6 +410,7 @@ export function buildRuntimeAgentSectionProps({
     toNumber,
     toStringValue,
     pendingAsyncRuns,
+    openShadowAudits,
     onCopyLink: onCopyAgentLink,
     onFocusRuntimeAgent: (runtimeAgentId) => {
       focusRuntimeAgent(runtimeAgentId, true);
@@ -402,6 +435,12 @@ export function buildRuntimeAgentSectionProps({
     },
     onCancelAsyncTask: (task) => {
       void cancelAsyncTask(task);
+    },
+    onInspectShadowAudit: (audit) => {
+      inspectShadowAudit(audit);
+    },
+    onResolveShadowAudit: (audit) => {
+      return resolveShadowAudit(audit);
     },
     activitySectionProps,
     timelineSectionProps,

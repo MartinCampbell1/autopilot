@@ -7,6 +7,11 @@ from pathlib import Path
 from typing import Any
 
 from autopilot.core.config import AutopilotConfig
+from autopilot.core.evals.judges import (
+    build_local_review_judge_context,
+    evaluate_judge_pack,
+    judge_result_to_dict,
+)
 from autopilot.core.gates import run_gates
 from autopilot.core.models import GateResult
 from autopilot.core.onboarding import detect_project_tooling
@@ -61,6 +66,14 @@ def _gate_result_payload(result: GateResult) -> dict[str, Any]:
         "exit_semantics_summary": str(result.exit_semantics_summary or ""),
         "baseline_passed": result.baseline_passed,
         "regression": bool(result.regression),
+    }
+
+
+def _recount_findings(findings: list[dict[str, Any]]) -> dict[str, int]:
+    return {
+        "error": sum(1 for item in findings if item["severity"] == "error"),
+        "warning": sum(1 for item in findings if item["severity"] == "warning"),
+        "info": sum(1 for item in findings if item["severity"] == "info"),
     }
 
 
@@ -134,6 +147,8 @@ def build_local_review(
     project_path: Path | str = ".",
     project_id: str | None = None,
     base_branch: str | None = None,
+    judge_pack: str | None = "execution_claims",
+    judge_registry: dict[str, object] | None = None,
 ) -> dict[str, Any]:
     """Build a structured local review payload for one project checkout."""
 
@@ -293,7 +308,10 @@ def build_local_review(
         )
 
     has_errors = any(item["severity"] == "error" for item in findings)
-    has_command_backed_evidence = bool(review_gates)
+    has_command_backed_evidence = any(
+        bool(result.passed) and str(result.cmd or "").strip() and str(result.output or "").strip()
+        for result in gate_results
+    )
     if has_errors:
         verdict = "FAIL"
     elif has_command_backed_evidence and gates_passed and probe["status"] == "PASS":
@@ -301,7 +319,7 @@ def build_local_review(
     else:
         verdict = "PARTIAL"
 
-    return {
+    payload = {
         "project_path": str(normalized_path),
         "project": {
             "registered": registered_project is not None,
@@ -327,12 +345,32 @@ def build_local_review(
             "required_gate_count": sum(1 for gate in review_gates if bool(gate.get("required", True))),
             "gate_count": len(review_gates),
             "passed_gate_count": sum(1 for result in gate_results if result.passed),
-            "finding_counts": {
-                "error": sum(1 for item in findings if item["severity"] == "error"),
-                "warning": sum(1 for item in findings if item["severity"] == "warning"),
-                "info": sum(1 for item in findings if item["severity"] == "info"),
-            },
+            "finding_counts": _recount_findings(findings),
             "command_backed_evidence": has_command_backed_evidence,
             "adversarial_probe_status": probe["status"],
         },
     }
+    normalized_pack = str(judge_pack or "").strip()
+    if normalized_pack:
+        judge_result = evaluate_judge_pack(
+            normalized_pack,
+            build_local_review_judge_context(payload),
+            registry=judge_registry,
+        )
+        payload["judge"] = judge_result_to_dict(judge_result)
+        if verdict == "PASS" and judge_result.verdict != "PASS":
+            severity = "error" if judge_result.verdict == "FAIL" else "warning"
+            findings.append(
+                _finding(
+                    code="judge_pack_rejected",
+                    severity=severity,
+                    scope="review",
+                    message=judge_result.summary,
+                    fix=f"Inspect the `{judge_result.pack_id}` judge findings before treating this review as a PASS.",
+                    metadata={"pack_id": judge_result.pack_id, "findings": list(judge_result.findings)},
+                )
+            )
+            payload["verdict"] = judge_result.verdict
+            payload["findings"] = findings
+            payload["summary"]["finding_counts"] = _recount_findings(findings)
+    return payload

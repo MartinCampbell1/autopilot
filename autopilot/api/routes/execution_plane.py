@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from autopilot.api.deps import get_account_manager, get_config
 from autopilot.core.approvals import decide_approval, get_approval, list_approvals
@@ -46,11 +46,14 @@ from autopilot.core.execution_plane import (
     list_execution_plane_events,
     list_execution_plane_orchestrator_sessions,
     list_execution_plane_projects,
+    get_execution_plane_shadow_audit,
+    ingest_shared_execution_brief_project,
     list_execution_plane_tool_permission_runtimes,
     get_execution_plane_runtime_agent_task,
     get_execution_plane_runtime_agent_task_output,
     get_execution_plane_runtime_agent_task_transcript,
     get_execution_plane_tool_permission_runtime,
+    resolve_execution_plane_shadow_audit,
     summarize_execution_plane_orchestrator_session_actions,
     summarize_execution_plane_orchestrator_session_control_passes,
     summarize_execution_plane_orchestrator_sessions,
@@ -62,6 +65,8 @@ from autopilot.core.execution_plane import (
     wait_for_execution_plane_agent_action_run_async_settlement,
 )
 from autopilot.core.github_reactions import ingest_story_github_reaction, sync_story_github_pr
+from autopilot.core.shared_contract_adapters import SHARED_EXECUTION_BRIEF_RELPATH
+from autopilot.core.shared_contract_codec import load_shared_execution_brief, shared_execution_brief_json_schema
 
 router = APIRouter()
 
@@ -80,6 +85,15 @@ class LaunchProfileRequest(BaseModel):
 
 class ImportExecutionBriefRequest(BaseModel):
     brief: ExecutionBrief
+    project_name: str | None = None
+    project_path: str | None = None
+    priority: str = "normal"
+    launch: bool = False
+    launch_profile: LaunchProfileRequest | None = None
+
+
+class ImportSharedExecutionBriefRequest(BaseModel):
+    brief: dict[str, object] = Field(default_factory=dict)
     project_name: str | None = None
     project_path: str | None = None
     priority: str = "normal"
@@ -123,6 +137,12 @@ class ToolPermissionRuntimeDecisionRequest(BaseModel):
 class RuntimeAgentTaskCancelRequest(BaseModel):
     actor: str = "human"
     note: str = ""
+
+
+class ShadowAuditResolutionRequest(BaseModel):
+    actor: str = "human"
+    note: str = ""
+    outcome: str = "resolved"
 
 
 class AgentActionExecutionRequest(BaseModel):
@@ -296,6 +316,11 @@ async def execution_brief_schema() -> dict:
     return ExecutionBrief.model_json_schema()
 
 
+@router.get("/shared-execution-brief/schema")
+async def shared_execution_brief_schema() -> dict:
+    return shared_execution_brief_json_schema()
+
+
 @router.get("/projects")
 async def list_execution_projects(
     include_archived: bool = Query(False),
@@ -405,7 +430,7 @@ async def create_execution_orchestrator_session(
                 context=request.context,
             ),
         }
-    except ValueError as exc:
+    except (ValueError, ValidationError) as exc:
         raise HTTPException(400, str(exc)) from exc
 
 
@@ -684,7 +709,7 @@ async def execute_execution_orchestrator_session_actions(
         return {"session_id": session_id, **payload}
     except KeyError as exc:
         raise HTTPException(404, f"Orchestrator session {session_id} not found") from exc
-    except ValueError as exc:
+    except (ValueError, ValidationError) as exc:
         raise HTTPException(400, str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(409, str(exc)) from exc
@@ -995,6 +1020,37 @@ async def get_execution_runtime_agent_task_transcript(task_id: str) -> dict[str,
         raise HTTPException(404, f"Runtime agent task {task_id} not found") from exc
     except FileNotFoundError as exc:
         raise HTTPException(404, f"Runtime agent task {task_id} has no transcript artifact") from exc
+
+
+@router.get("/shadow-audits/{audit_id}")
+async def get_execution_shadow_audit(audit_id: str) -> dict[str, object]:
+    config = get_config()
+    try:
+        return get_execution_plane_shadow_audit(config, audit_id)
+    except KeyError as exc:
+        raise HTTPException(404, f"Shadow audit {audit_id} not found") from exc
+
+
+@router.post("/shadow-audits/{audit_id}/resolve")
+async def resolve_execution_shadow_audit(
+    audit_id: str,
+    request: ShadowAuditResolutionRequest | None = None,
+) -> dict[str, object]:
+    config = get_config()
+    payload = request or ShadowAuditResolutionRequest()
+    try:
+        shadow_audit = resolve_execution_plane_shadow_audit(
+            config,
+            audit_id,
+            actor=payload.actor,
+            note=payload.note,
+            outcome=payload.outcome,
+        )
+    except KeyError as exc:
+        raise HTTPException(404, f"Shadow audit {audit_id} not found") from exc
+    except RuntimeError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return {"status": "ok", "shadow_audit": shadow_audit}
 
 
 @router.get("/tool-permission-runtimes")
@@ -1561,6 +1617,48 @@ async def create_execution_project_from_brief(request: ImportExecutionBriefReque
         "launched": ingested.launched,
         "message": ingested.message,
         "log_path": str(ingested.log_path) if ingested.log_path else "",
+    }
+
+
+@router.post("/projects/from-shared-brief")
+async def create_execution_project_from_shared_brief(request: ImportSharedExecutionBriefRequest) -> dict[str, object]:
+    if request.launch:
+        raise HTTPException(
+            409,
+            "Legacy shared brief launch is disabled — founder approval gate "
+            "cannot be enforced on this path. Use POST /api/projects/from-brief-v2 "
+            "with an approved ExecutionBriefV2 to launch execution.",
+        )
+    config = get_config()
+    manager = get_account_manager()
+    try:
+        brief = load_shared_execution_brief(dict(request.brief))
+        ingested = ingest_shared_execution_brief_project(
+            config,
+            manager,
+            brief=brief,
+            project_name=request.project_name,
+            project_path=request.project_path,
+            priority=request.priority,
+            launch=request.launch,
+            launch_profile=request.launch_profile.model_dump() if request.launch_profile else None,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(503, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+    return {
+        "status": "ok" if (not request.launch or ingested.launched) else "error",
+        "project": build_execution_plane_project_detail(config, ingested.created.project_id),
+        "prd": ingested.prd,
+        "launched": ingested.launched,
+        "message": ingested.message,
+        "log_path": str(ingested.log_path) if ingested.log_path else "",
+        "execution_brief_path": str(ingested.brief_path),
+        "shared_execution_brief_path": str((ingested.created.path / SHARED_EXECUTION_BRIEF_RELPATH).resolve()),
+        "brief_id": brief.brief_id,
+        "idea_id": brief.idea_id,
     }
 
 

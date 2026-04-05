@@ -7,6 +7,7 @@ from pathlib import Path
 
 from autopilot.core.agent_mailbox import list_agent_mailbox_messages
 from autopilot.core.config import AutopilotConfig
+from autopilot.core.orchestrator_sessions import create_orchestrator_session, get_orchestrator_session
 from autopilot.core.project_store import (
     ensure_project_state,
     load_project_state,
@@ -26,6 +27,7 @@ from autopilot.core.runtime_agent_tasks import (
     refresh_runtime_agent_task,
     wait_for_runtime_agent_task_mailbox_resolution,
 )
+from autopilot.core.shadow_audit import list_shadow_audit_records
 from autopilot.core.task_output import get_task_output, read_task_output_text
 from autopilot.core.task_transcript import get_task_transcript, read_task_transcript_text, task_transcript_id
 
@@ -332,6 +334,41 @@ def test_runtime_agent_task_transitions_to_completed_with_terminal_summary(tmp_p
     assert "worker finished cleanly" in read_task_output_text(config, refreshed.output_artifact_id)
 
 
+def test_runtime_agent_task_auto_quarantines_generated_patch_output(tmp_path: Path) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    project = _seed_project(config, tmp_path / "async-task-shadow-patch-project")
+    log_path = config.autopilot_home / "logs" / "shadow-patch.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path.write_text("diff --git a/app.py b/app.py\n+print('patched')\n", encoding="utf-8")
+
+    task = create_or_reuse_runtime_agent_task(
+        config,
+        project_id=str(project["id"]),
+        command="resume",
+        actor="founderos",
+        reason="Resume background work.",
+        orchestrator_session_id="ors_shadow_patch_1",
+        runtime_agent_ids=["proj:1:worker:a"],
+        output_path=str(log_path),
+    )
+
+    state = load_project_state(config, str(project["id"]))
+    state["status"] = "completed"
+    state["paused"] = False
+    state["finished_at"] = "2026-04-01T12:34:56+00:00"
+    state["log_path"] = str(log_path)
+    save_project_state(config, str(project["id"]), state)
+
+    refreshed = refresh_runtime_agent_task(config, task.id)
+    shadow_audits = list_shadow_audit_records(config, orchestrator_session_id="ors_shadow_patch_1")
+
+    assert refreshed.status == "completed"
+    assert refreshed.result_payload["output_quarantined"] is True
+    assert len(shadow_audits) == 1
+    assert shadow_audits[0].source_kind == "runtime_agent_task_output"
+    assert shadow_audits[0].findings == ["unverified_generated_patch"]
+
+
 def test_runtime_agent_task_marks_fallback_output_provenance_when_source_log_is_missing(tmp_path: Path) -> None:
     config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
     project = _seed_project(config, tmp_path / "async-task-fallback-project")
@@ -533,6 +570,47 @@ def test_runtime_agent_task_terminal_transition_publishes_resolution_mailbox(tmp
     assert specific.payload["task_id"] == task.id
     assert specific.payload["agent_action_run_id"] == "aar_mailbox_1"
     assert specific.payload["resume_contract"]["task_id"] == task.id
+
+
+def test_runtime_agent_task_links_output_and_transcript_artifacts_to_session(tmp_path: Path) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    project = _seed_project(config, tmp_path / "async-task-session-artifacts-project")
+    session = create_orchestrator_session(
+        config,
+        orchestrator="founderos",
+        actor="founderos",
+        project_ids=[str(project["id"])],
+        title="Artifact linking",
+    )
+    log_path = config.autopilot_home / "logs" / "session-artifacts.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path.write_text("artifact result\n", encoding="utf-8")
+
+    task = create_or_reuse_runtime_agent_task(
+        config,
+        project_id=str(project["id"]),
+        command="resume",
+        actor="founderos",
+        reason="Track artifact linkage.",
+        orchestrator_session_id=session.id,
+        runtime_agent_ids=["proj:1:worker:a"],
+        output_path=str(log_path),
+    )
+
+    state = load_project_state(config, str(project["id"]))
+    state["status"] = "completed"
+    state["paused"] = False
+    state["finished_at"] = "2026-04-02T00:00:01+00:00"
+    state["updated_at"] = "2026-04-02T00:00:01+00:00"
+    state["log_path"] = str(log_path)
+    save_project_state(config, str(project["id"]), state)
+
+    refreshed = refresh_runtime_agent_task(config, task.id)
+    linked_session = get_orchestrator_session(config, session.id)
+
+    assert linked_session is not None
+    assert refreshed.output_artifact_id in linked_session.linked_artifact_ids
+    assert task_transcript_id("runtime_agent_task", task.id) in linked_session.linked_artifact_ids
 
 
 def test_wait_for_runtime_agent_task_mailbox_resolution_refreshes_terminal_task_without_prior_mailbox_event(

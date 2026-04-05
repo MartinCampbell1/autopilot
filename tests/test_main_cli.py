@@ -344,6 +344,8 @@ def test_review_command_passes_options(monkeypatch) -> None:
         *,
         project_id: str | None = None,
         base_branch: str | None = None,
+        judge_pack: str | None = "execution_claims",
+        github_markdown: bool = False,
         json_output: bool = False,
     ) -> None:
         captured.update(
@@ -351,6 +353,8 @@ def test_review_command_passes_options(monkeypatch) -> None:
                 "project_path": project_path,
                 "project_id": project_id,
                 "base_branch": base_branch,
+                "judge_pack": judge_pack,
+                "github_markdown": github_markdown,
                 "json_output": json_output,
             }
         )
@@ -366,6 +370,9 @@ def test_review_command_passes_options(monkeypatch) -> None:
             "proj_123",
             "--base-branch",
             "release",
+            "--judge-pack",
+            "tests",
+            "--github-markdown",
             "--json",
         ],
     )
@@ -375,6 +382,8 @@ def test_review_command_passes_options(monkeypatch) -> None:
         "project_path": "/tmp/project",
         "project_id": "proj_123",
         "base_branch": "release",
+        "judge_pack": "tests",
+        "github_markdown": True,
         "json_output": True,
     }
 
@@ -464,6 +473,153 @@ def test_github_command_passes_options(monkeypatch) -> None:
         "project_id": "proj_123",
         "install_workflow": False,
         "overwrite": True,
+        "json_output": True,
+    }
+
+
+def test_trace_command_passes_options(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_trace(
+        project_path: str = ".",
+        project_id: str | None = None,
+        limit: int = 50,
+        json_output: bool = False,
+        *,
+        story_id: int | None = None,
+        run_id: str | None = None,
+    ) -> None:
+        captured.update(
+            {
+                "project_path": project_path,
+                "project_id": project_id,
+                "limit": limit,
+                "json_output": json_output,
+                "story_id": story_id,
+                "run_id": run_id,
+            }
+        )
+
+    monkeypatch.setattr("autopilot.cli.trace.trace", fake_trace)
+
+    result = runner.invoke(
+        app,
+        [
+            "trace",
+            "/tmp/project",
+            "--project-id",
+            "proj_123",
+            "--limit",
+            "5",
+            "--story-id",
+            "7",
+            "--run-id",
+            "sess_trace",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert captured == {
+        "project_path": "/tmp/project",
+        "project_id": "proj_123",
+        "limit": 5,
+        "json_output": True,
+        "story_id": 7,
+        "run_id": "sess_trace",
+    }
+
+
+def test_audit_command_passes_options(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_audit(
+        project_path: str = ".",
+        project_id: str | None = None,
+        limit: int = 200,
+        json_output: bool = False,
+        *,
+        story_id: int | None = None,
+        run_id: str | None = None,
+        include_entries: bool = True,
+        export_path: str | None = None,
+        events_log: bool = False,
+    ) -> None:
+        captured.update(
+            {
+                "project_path": project_path,
+                "project_id": project_id,
+                "limit": limit,
+                "json_output": json_output,
+                "story_id": story_id,
+                "run_id": run_id,
+                "include_entries": include_entries,
+                "export_path": export_path,
+                "events_log": events_log,
+            }
+        )
+
+    monkeypatch.setattr("autopilot.cli.audit.audit", fake_audit)
+
+    result = runner.invoke(
+        app,
+        [
+            "audit",
+            "/tmp/project",
+            "--project-id",
+            "proj_123",
+            "--limit",
+            "12",
+            "--story-id",
+            "7",
+            "--run-id",
+            "sess_audit",
+            "--summary-only",
+            "--export",
+            "/tmp/audit.json",
+            "--events-log",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert captured == {
+        "project_path": "/tmp/project",
+        "project_id": "proj_123",
+        "limit": 12,
+        "json_output": True,
+        "story_id": 7,
+        "run_id": "sess_audit",
+        "include_entries": False,
+        "export_path": "/tmp/audit.json",
+        "events_log": True,
+    }
+
+
+def test_cost_command_passes_options(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_cost(
+        project_path: str = ".",
+        project_id: str | None = None,
+        json_output: bool = False,
+    ) -> None:
+        captured.update(
+            {
+                "project_path": project_path,
+                "project_id": project_id,
+                "json_output": json_output,
+            }
+        )
+
+    monkeypatch.setattr("autopilot.cli.cost.cost", fake_cost)
+
+    result = runner.invoke(app, ["cost", "/tmp/project", "--project-id", "proj_123", "--json"])
+
+    assert result.exit_code == 0
+    assert captured == {
+        "project_path": "/tmp/project",
+        "project_id": "proj_123",
         "json_output": True,
     }
 

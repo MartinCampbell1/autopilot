@@ -1,6 +1,7 @@
 "use client";
 
 import { BreakdownChips, SessionMetric } from "@/components/control-plane-display";
+import { ShadowAuditReviewSheet } from "@/components/shadow-audit-review-sheet";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -11,8 +12,11 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { sessionStatusClass } from "@/lib/control-plane-ui";
+import { useShadowAuditReviewController } from "@/lib/use-shadow-audit-review-controller";
 import type {
+  ExecutionShadowAuditRecord,
   OrchestratorControlPassSummary,
+  OrchestratorSessionDetail,
   OrchestratorSessionRecord,
   OrchestratorSessionSummary,
 } from "@/lib/types";
@@ -22,7 +26,12 @@ type ControlPlaneOverviewSectionsProps = {
   recentSessions: OrchestratorSessionRecord[];
   totalSessionCount: number;
   selectedSessionId: string;
+  selectedSession: OrchestratorSessionDetail | null;
+  busyActionKey: string;
+  formatTimestamp: (value?: string | null) => string;
   onSelectSession: (sessionId: string) => void;
+  onInspectShadowAudit?: (audit: ExecutionShadowAuditRecord) => void;
+  onResolveShadowAudit?: (audit: ExecutionShadowAuditRecord) => void;
   sessionSummary: OrchestratorSessionSummary;
 };
 
@@ -31,9 +40,33 @@ export function ControlPlaneOverviewSections({
   recentSessions,
   totalSessionCount,
   selectedSessionId,
+  selectedSession,
+  busyActionKey,
+  formatTimestamp,
   onSelectSession,
+  onInspectShadowAudit,
+  onResolveShadowAudit,
   sessionSummary,
 }: ControlPlaneOverviewSectionsProps) {
+  const {
+    queueAudits,
+    queueOpen,
+    setQueueOpen,
+    activeQueueAudit,
+    activeQueueAuditIndex,
+    reviewQueueLabel,
+    openReviewQueue: openRecentSessionShadowAuditQueue,
+    handleSelectNextQueuedAudit,
+    handleSelectPreviousQueuedAudit,
+    handleResolveQueuedShadowAudit,
+  } = useShadowAuditReviewController({
+    audits:
+      selectedSession?.shadow_audits?.filter((audit) => audit.open || audit.status === "open") ||
+      [],
+    onInspectShadowAudit,
+    onResolveShadowAudit,
+  });
+
   return (
     <>
       <Card className="border border-[#e5e5e3] bg-white shadow-[0_1px_3px_rgba(15,15,15,0.08),0_0_1px_rgba(15,15,15,0.04)]">
@@ -84,6 +117,11 @@ export function ControlPlaneOverviewSections({
             <div className="space-y-3">
               {recentSessions.map((session) => {
                 const selected = selectedSessionId === session.id;
+                const openShadowAudits =
+                  selected && selectedSession?.id === session.id
+                    ? queueAudits
+                    : [];
+                const primaryShadowAudit = openShadowAudits[0] || null;
 
                 return (
                   <div
@@ -106,6 +144,15 @@ export function ControlPlaneOverviewSections({
                           >
                             {session.status}
                           </Badge>
+                          {openShadowAudits.length > 0 ? (
+                            <Badge
+                              variant="outline"
+                              className="rounded-full border-[#f4e0c4] bg-[#fff6e8] px-2.5 py-1 text-[11px] font-medium text-[#9a6700]"
+                            >
+                              {openShadowAudits.length} shadow audit
+                              {openShadowAudits.length === 1 ? "" : "s"}
+                            </Badge>
+                          ) : null}
                         </div>
                         <p className="mt-2 text-[12px] text-[#787774]">
                           {session.orchestrator || "unknown orchestrator"}
@@ -129,6 +176,18 @@ export function ControlPlaneOverviewSections({
                         >
                           {selected ? "Selected" : "Open control"}
                         </Button>
+                        {primaryShadowAudit ? (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="mt-2 h-8 rounded-lg border-[#f4e0c4] bg-[#fff6e8] text-[12px] text-[#9a6700] hover:bg-[#fff0d9]"
+                            onClick={() => {
+                              openRecentSessionShadowAuditQueue(primaryShadowAudit.id);
+                            }}
+                          >
+                            {reviewQueueLabel}
+                          </Button>
+                        ) : null}
                       </div>
                     </div>
 
@@ -141,12 +200,33 @@ export function ControlPlaneOverviewSections({
                       <SessionMetric
                         label="Linked Objects"
                         value={`${session.linked_control_pass_ids.length} passes`}
-                        detail={`${session.linked_run_ids.length} runs · ${session.linked_issue_ids.length} issues`}
+                        detail={
+                          openShadowAudits.length > 0
+                            ? `${session.linked_run_ids.length} runs · ${openShadowAudits.length} shadow audit${openShadowAudits.length === 1 ? "" : "s"} open`
+                            : `${session.linked_run_ids.length} runs · ${session.linked_issue_ids.length} issues`
+                        }
                       />
                     </div>
                   </div>
                 );
               })}
+              {activeQueueAudit ? (
+                <ShadowAuditReviewSheet
+                  audit={activeQueueAudit}
+                  open={queueOpen}
+                  onOpenChange={setQueueOpen}
+                  hideTrigger
+                  busyActionKey={busyActionKey}
+                  formatTimestamp={formatTimestamp}
+                  onResolveShadowAudit={handleResolveQueuedShadowAudit}
+                  queueState={{
+                    currentIndex: Math.max(activeQueueAuditIndex, 0),
+                    totalCount: queueAudits.length,
+                    onSelectNext: handleSelectNextQueuedAudit,
+                    onSelectPrevious: handleSelectPreviousQueuedAudit,
+                  }}
+                />
+              ) : null}
             </div>
           )}
         </CardContent>

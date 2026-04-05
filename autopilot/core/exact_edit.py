@@ -60,6 +60,10 @@ def find_actual_string(content: str, target: str, *, replace_all: bool = False) 
     return matches[0]
 
 
+def _write_with_snapshot_encoding(path: Path, snapshot: FileSnapshot, content: str) -> None:
+    path.write_text(content, encoding=snapshot.encoding)
+
+
 def apply_exact_edit(
     path: Path,
     snapshot: FileSnapshot,
@@ -80,7 +84,7 @@ def apply_exact_edit(
 
     updated = snapshot.content.replace(actual_old_string, new_string, -1 if replace_all else 1)
     assert_no_obvious_secrets(updated, path=path)
-    path.write_text(updated)
+    _write_with_snapshot_encoding(path, snapshot, updated)
     return updated
 
 
@@ -90,7 +94,7 @@ def append_with_snapshot(path: Path, snapshot: FileSnapshot, suffix: str) -> str
     ensure_snapshot_is_current(path, snapshot)
     updated = f"{snapshot.content}{suffix}"
     assert_no_obvious_secrets(updated, path=path)
-    path.write_text(updated)
+    _write_with_snapshot_encoding(path, snapshot, updated)
     return updated
 
 
