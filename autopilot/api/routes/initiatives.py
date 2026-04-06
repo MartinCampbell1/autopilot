@@ -10,7 +10,6 @@ from autopilot.api.deps import get_config
 from autopilot.core.initiative_lineage import (
     build_initiative_aggregate,
     list_initiative_lineages,
-    load_initiative_lineage,
     upsert_initiative_lineage,
 )
 
@@ -38,7 +37,7 @@ async def list_initiatives() -> dict[str, Any]:
     return {
         "status": "ok",
         "count": len(lineages),
-        "initiatives": [l.model_dump(mode="json") for l in lineages],
+        "initiatives": [lineage.model_dump(mode="json") for lineage in lineages],
     }
 
 

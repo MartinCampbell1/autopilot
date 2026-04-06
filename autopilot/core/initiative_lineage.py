@@ -15,8 +15,6 @@ from pathlib import Path
 from typing import Any
 
 from founderos_contracts.lifecycle import (
-    FounderMode,
-    InitiativeLifecycleState,
     InitiativeLineage,
 )
 
@@ -98,7 +96,7 @@ def build_initiative_aggregate(
     if lineage.project_id:
         try:
             from autopilot.core.project_store import build_project_detail
-            project = build_project_detail(config, lineage.project_id, include_archived=True)
+            project = build_project_detail(config, lineage.project_id)
             if project:
                 aggregate["project"] = project
         except Exception:
