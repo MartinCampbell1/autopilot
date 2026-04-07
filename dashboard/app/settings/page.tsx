@@ -111,7 +111,8 @@ export default function SettingsPage() {
                 <span className="rounded-full bg-[#f1f1ef] px-2.5 py-1">4. Launch with runtime profile</span>
               </div>
               <p className="mt-4 text-[12px] leading-relaxed text-[#787774]">
-                Canonical examples live in `README.md` and `docs/local-first-runtime.md` inside the repo.
+                Keep provider settings in `config.yaml`, refresh the runtime inventory, then launch from
+                Intake with the target profile.
               </p>
             </section>
           </div>

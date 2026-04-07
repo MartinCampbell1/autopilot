@@ -913,6 +913,88 @@ def test_headless_control_can_get_runtime_agent_task_and_artifacts(tmp_path: Pat
     assert "Runtime Agent Task Transcript" in transcript_response.response.response["transcript"]["content"]
 
 
+def test_headless_control_can_get_live_runtime_agent_task_output_and_project_runtime_log(tmp_path: Path) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    project = _create_project(config, tmp_path / "project")
+    log_path = config.autopilot_home / "logs" / "headless-live-task.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path.write_text("line 1\nline 2\nline 3\n", encoding="utf-8")
+
+    task = create_or_reuse_runtime_agent_task(
+        config,
+        project_id=str(project["id"]),
+        command="launch",
+        actor="founderos",
+        reason="Launch background work.",
+        orchestrator_session_id="sess_headless",
+        runtime_agent_ids=["proj_headless_runtime:1:worker:a"],
+        output_path=str(log_path),
+    )
+    save_project_state(
+        config,
+        str(project["id"]),
+        {
+            "status": "running",
+            "paused": False,
+            "runtime_session_id": "sess_headless",
+            "log_path": str(log_path),
+        },
+    )
+    refreshed = refresh_runtime_agent_task(config, task.id)
+    session = create_headless_control_session(config, project_entry=project, session_id="sess_headless")
+
+    output_response = session.handle_request(
+        {
+            "type": "control_request",
+            "request_id": "req_get_runtime_agent_task_output_live",
+            "request": {
+                "subtype": "get_runtime_agent_task_output_live",
+                "task_id": refreshed.id,
+                "tail_lines": 2,
+            },
+            "session_id": "sess_headless",
+        }
+    )
+    runtime_log_response = session.handle_request(
+        {
+            "type": "control_request",
+            "request_id": "req_get_project_runtime_log",
+            "request": {
+                "subtype": "get_project_runtime_log",
+                "offset": 7,
+                "max_bytes": 6,
+            },
+            "session_id": "sess_headless",
+        }
+    )
+
+    assert output_response.response.subtype == "success"
+    output_payload = output_response.response.response["output"]
+    assert output_payload["task_id"] == refreshed.id
+    assert output_payload["status"] == "live"
+    assert output_payload["task_status"] == "running"
+    assert output_payload["content_live"] is True
+    assert output_payload["content_source"] == "source_log"
+    assert output_payload["source_path"] == str(log_path)
+    assert "line 1" not in output_payload["content"]
+    assert "line 2" in output_payload["content"]
+    assert "line 3" in output_payload["content"]
+    assert output_payload["content_window_truncated"] is True
+
+    assert runtime_log_response.response.subtype == "success"
+    runtime_log_payload = runtime_log_response.response.response["runtime_log"]
+    assert runtime_log_payload["project_id"] == str(project["id"])
+    assert runtime_log_payload["status"] == "live"
+    assert runtime_log_payload["project_status"] == "running"
+    assert runtime_log_payload["paused"] is False
+    assert runtime_log_payload["log_path"] == str(log_path)
+    assert runtime_log_payload["content"] == "line 2"
+    assert runtime_log_payload["content_offset"] == 7
+    assert runtime_log_payload["content_next_offset"] == 13
+    assert runtime_log_payload["content_total_bytes"] == len(log_path.read_text(encoding="utf-8").encode("utf-8"))
+    assert runtime_log_payload["content_window_truncated"] is True
+
+
 def test_headless_control_blocks_quarantined_runtime_agent_task_output(tmp_path: Path) -> None:
     config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
     project = _create_project(config, tmp_path / "project")
@@ -958,6 +1040,14 @@ def test_headless_control_blocks_quarantined_runtime_agent_task_output(tmp_path:
             "session_id": "sess_headless",
         }
     )
+    live_output_response = session.handle_request(
+        {
+            "type": "control_request",
+            "request_id": "req_get_runtime_agent_task_output_shadow_live",
+            "request": {"subtype": "get_runtime_agent_task_output_live", "task_id": task.id, "tail_lines": 20},
+            "session_id": "sess_headless",
+        }
+    )
 
     assert output_response.response.subtype == "success"
     payload = output_response.response.response["output"]
@@ -965,6 +1055,153 @@ def test_headless_control_blocks_quarantined_runtime_agent_task_output(tmp_path:
     assert payload["content"] == ""
     assert payload["content_blocked"] is True
     assert payload["quarantined"] is True
+    assert payload["shadow_audits"][0]["source_kind"] == "runtime_agent_task_output"
+    assert live_output_response.response.subtype == "success"
+    live_payload = live_output_response.response.response["output"]
+    assert live_payload["status"] == "quarantined"
+    assert live_payload["content"] == ""
+    assert live_payload["content_blocked"] is True
+    assert live_payload["quarantined"] is True
+    assert live_payload["shadow_audits"][0]["source_kind"] == "runtime_agent_task_output"
+
+
+def test_headless_control_can_read_runtime_agent_task_live_output_and_project_runtime_log(tmp_path: Path) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    project = _create_project(config, tmp_path / "project")
+    task_log_path = config.autopilot_home / "logs" / "headless-task-live.log"
+    task_log_path.parent.mkdir(parents=True, exist_ok=True)
+    task_log_path.write_text("line 1\nline 2\nline 3\n", encoding="utf-8")
+
+    task = create_or_reuse_runtime_agent_task(
+        config,
+        project_id=str(project["id"]),
+        command="launch",
+        actor="founderos",
+        reason="Launch background work.",
+        orchestrator_session_id="sess_headless",
+        runtime_agent_ids=["proj_headless_runtime:1:worker:a"],
+        output_path=str(task_log_path),
+    )
+    save_project_state(
+        config,
+        str(project["id"]),
+        {
+            "status": "running",
+            "paused": False,
+            "started_at": "2026-04-02T00:00:00+00:00",
+            "updated_at": "2026-04-02T00:01:00+00:00",
+            "log_path": str(task_log_path),
+        },
+    )
+    refreshed = refresh_runtime_agent_task(config, task.id)
+    session = create_headless_control_session(config, project_entry=project, session_id="sess_headless")
+
+    output_response = session.handle_request(
+        {
+            "type": "control_request",
+            "request_id": "req_get_runtime_agent_task_output_live",
+            "request": {
+                "subtype": "get_runtime_agent_task_output_live",
+                "task_id": refreshed.id,
+                "tail_lines": 2,
+            },
+            "session_id": "sess_headless",
+        }
+    )
+    runtime_log_response = session.handle_request(
+        {
+            "type": "control_request",
+            "request_id": "req_get_project_runtime_log",
+            "request": {
+                "subtype": "get_project_runtime_log",
+                "offset": 7,
+                "max_bytes": 6,
+            },
+            "session_id": "sess_headless",
+        }
+    )
+
+    assert output_response.response.subtype == "success"
+    output_payload = output_response.response.response["output"]
+    assert output_payload["task_id"] == refreshed.id
+    assert output_payload["status"] == "live"
+    assert output_payload["content_source"] == "source_log"
+    assert output_payload["source_path"] == str(task_log_path)
+    assert "line 1" not in output_payload["content"]
+    assert "line 2" in output_payload["content"]
+    assert "line 3" in output_payload["content"]
+    assert output_payload["content_window_truncated"] is True
+
+    assert runtime_log_response.response.subtype == "success"
+    runtime_log_payload = runtime_log_response.response.response["runtime_log"]
+    assert runtime_log_payload["project_id"] == str(project["id"])
+    assert runtime_log_payload["status"] == "live"
+    assert runtime_log_payload["project_status"] == "running"
+    assert runtime_log_payload["log_path"] == str(task_log_path)
+    assert runtime_log_payload["content"] == "line 2"
+    assert runtime_log_payload["content_offset"] == 7
+    assert runtime_log_payload["content_next_offset"] == 13
+    assert runtime_log_payload["content_total_bytes"] == len(task_log_path.read_text(encoding="utf-8").encode("utf-8"))
+    assert runtime_log_payload["content_window_truncated"] is True
+
+
+def test_headless_control_blocks_quarantined_runtime_agent_task_live_output(tmp_path: Path) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    project = _create_project(config, tmp_path / "project")
+    log_path = config.autopilot_home / "logs" / "headless-task-shadow-live.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path.write_text("launch started\nlaunch finished cleanly\n", encoding="utf-8")
+
+    task = create_or_reuse_runtime_agent_task(
+        config,
+        project_id=str(project["id"]),
+        command="launch",
+        actor="founderos",
+        reason="Launch background work.",
+        orchestrator_session_id="sess_headless",
+        runtime_agent_ids=["proj_headless_runtime:1:worker:a"],
+        output_path=str(log_path),
+        metadata={
+            "shadow_audit": {
+                "action": "quarantine",
+                "summary": "Background task output requires explicit review before handoff.",
+                "findings": ["unverified_subagent_output"],
+            }
+        },
+    )
+    save_project_state(
+        config,
+        str(project["id"]),
+        {
+            "status": "completed",
+            "paused": False,
+            "finished_at": "2026-04-02T00:01:00+00:00",
+            "log_path": str(log_path),
+        },
+    )
+    refresh_runtime_agent_task(config, task.id)
+    session = create_headless_control_session(config, project_entry=project, session_id="sess_headless")
+
+    output_response = session.handle_request(
+        {
+            "type": "control_request",
+            "request_id": "req_get_runtime_agent_task_output_live_shadow",
+            "request": {
+                "subtype": "get_runtime_agent_task_output_live",
+                "task_id": task.id,
+                "tail_lines": 20,
+            },
+            "session_id": "sess_headless",
+        }
+    )
+
+    assert output_response.response.subtype == "success"
+    payload = output_response.response.response["output"]
+    assert payload["status"] == "quarantined"
+    assert payload["content"] == ""
+    assert payload["content_blocked"] is True
+    assert payload["quarantined"] is True
+    assert payload["content_source"] == "blocked"
     assert payload["shadow_audits"][0]["source_kind"] == "runtime_agent_task_output"
 
 

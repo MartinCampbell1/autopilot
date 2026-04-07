@@ -279,7 +279,7 @@ class TestAccountManager:
             profile,
             base_env={
                 "PATH": "/opt/bin",
-                "HOME": "/Users/example",
+                "HOME": "/Users/tester",
                 "TERM": "xterm-256color",
                 "RANDOM_SECRET": "do-not-forward",
             },
@@ -288,5 +288,5 @@ class TestAccountManager:
         assert env["PATH"] == "/opt/bin"
         assert env["TERM"] == "xterm-256color"
         assert env["CODEX_HOME"] == str(profile_dir)
-        assert env["HOME"] == "/Users/example"
+        assert env["HOME"] == "/Users/tester"
         assert "RANDOM_SECRET" not in env

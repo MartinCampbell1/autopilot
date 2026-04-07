@@ -153,6 +153,14 @@ class ControlGetRuntimeAgentTaskOutputRequest(BaseModel):
     task_id: str
 
 
+class ControlGetRuntimeAgentTaskOutputLiveRequest(BaseModel):
+    subtype: Literal["get_runtime_agent_task_output_live"]
+    task_id: str
+    offset: int | None = Field(default=None, ge=0)
+    max_bytes: int | None = Field(default=None, ge=1, le=262144)
+    tail_lines: int | None = Field(default=None, ge=1, le=2000)
+
+
 class ControlListRuntimeAgentTasksRequest(BaseModel):
     subtype: Literal["list_runtime_agent_tasks"]
     orchestrator_session_id: str | None = None
@@ -165,6 +173,13 @@ class ControlListRuntimeAgentTasksRequest(BaseModel):
 class ControlGetRuntimeAgentTaskTranscriptRequest(BaseModel):
     subtype: Literal["get_runtime_agent_task_transcript"]
     task_id: str
+
+
+class ControlGetProjectRuntimeLogRequest(BaseModel):
+    subtype: Literal["get_project_runtime_log"]
+    offset: int | None = Field(default=None, ge=0)
+    max_bytes: int | None = Field(default=None, ge=1, le=262144)
+    tail_lines: int | None = Field(default=None, ge=1, le=2000)
 
 
 class ControlCancelRuntimeAgentTaskRequest(BaseModel):
@@ -211,7 +226,9 @@ ControlRequestPayload = Annotated[
     | ControlListRuntimeAgentActionRunsRequest
     | ControlListRuntimeAgentTasksRequest
     | ControlGetRuntimeAgentTaskOutputRequest
+    | ControlGetRuntimeAgentTaskOutputLiveRequest
     | ControlGetRuntimeAgentTaskTranscriptRequest
+    | ControlGetProjectRuntimeLogRequest
     | ControlCancelRuntimeAgentTaskRequest
     | ControlListToolPermissionRuntimesRequest
     | ControlGetToolPermissionRuntimeRequest

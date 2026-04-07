@@ -52,8 +52,10 @@ from autopilot.core.execution_plane import (
     list_execution_plane_tool_permission_runtimes,
     get_execution_plane_runtime_agent_task,
     get_execution_plane_runtime_agent_task_output,
+    get_execution_plane_runtime_agent_task_output_live,
     get_execution_plane_runtime_agent_task_transcript,
     get_execution_plane_tool_permission_runtime,
+    get_execution_plane_project_runtime_log,
     resolve_execution_plane_shadow_audit,
     summarize_execution_plane_orchestrator_session_actions,
     summarize_execution_plane_orchestrator_session_control_passes,
@@ -857,6 +859,7 @@ async def list_execution_agent_action_runs(
     dry_run: bool | None = Query(default=None),
     status: str | None = Query(default=None),
     idempotency_key: str | None = Query(default=None),
+    summary: bool = Query(default=False),
 ) -> dict[str, list[dict]]:
     config = get_config()
     return {
@@ -871,6 +874,7 @@ async def list_execution_agent_action_runs(
             dry_run=dry_run,
             status=status,
             idempotency_key=idempotency_key,
+            summary=summary,
         )
     }
 
@@ -1011,6 +1015,28 @@ async def get_execution_runtime_agent_task_output(task_id: str) -> dict[str, obj
         raise HTTPException(404, f"Runtime agent task {task_id} not found") from exc
     except FileNotFoundError as exc:
         raise HTTPException(404, f"Runtime agent task {task_id} has no output artifact") from exc
+
+
+@router.get("/agents/tasks/{task_id}/output/live")
+async def get_execution_runtime_agent_task_output_live(
+    task_id: str,
+    offset: int | None = Query(default=None, ge=0),
+    max_bytes: int = Query(default=65536, ge=1, le=262144),
+    tail_lines: int | None = Query(default=None, ge=1, le=2000),
+) -> dict[str, object]:
+    config = get_config()
+    try:
+        return get_execution_plane_runtime_agent_task_output_live(
+            config,
+            task_id,
+            offset=offset,
+            max_bytes=max_bytes,
+            tail_lines=tail_lines,
+        )
+    except KeyError as exc:
+        raise HTTPException(404, f"Runtime agent task {task_id} not found") from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(404, f"Runtime agent task {task_id} has no readable live output source") from exc
 
 
 @router.get("/agents/tasks/{task_id}/transcript")
@@ -1238,6 +1264,28 @@ async def get_execution_project(project_id: str) -> dict:
         return build_execution_plane_project_detail(config, project_id)
     except KeyError as exc:
         raise HTTPException(404, f"Project {project_id} not found") from exc
+
+
+@router.get("/projects/{project_id}/runtime-log")
+async def get_execution_project_runtime_log(
+    project_id: str,
+    offset: int | None = Query(default=None, ge=0),
+    max_bytes: int = Query(default=65536, ge=1, le=262144),
+    tail_lines: int | None = Query(default=None, ge=1, le=2000),
+) -> dict[str, object]:
+    config = get_config()
+    try:
+        return get_execution_plane_project_runtime_log(
+            config,
+            project_id,
+            offset=offset,
+            max_bytes=max_bytes,
+            tail_lines=tail_lines,
+        )
+    except KeyError as exc:
+        raise HTTPException(404, f"Project {project_id} not found") from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(404, f"Project {project_id} has no runtime log available") from exc
 
 
 @router.get("/projects/{project_id}/agents")

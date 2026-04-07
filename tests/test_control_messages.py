@@ -117,6 +117,55 @@ def test_parse_control_message_supports_runtime_agent_task_artifact_requests() -
     assert parsed.session_id == "sess_1"
 
 
+def test_parse_control_message_supports_runtime_agent_task_live_output_requests() -> None:
+    parsed = parse_control_message(
+        {
+            "type": "control_request",
+            "requestId": "req_task_output_live",
+            "request": {
+                "subtype": "get_runtime_agent_task_output_live",
+                "taskId": "rat_123",
+                "offset": 64,
+                "maxBytes": 1024,
+                "tailLines": 25,
+            },
+            "sessionId": "sess_1",
+        }
+    )
+
+    assert parsed is not None
+    assert parsed.type == "control_request"
+    assert parsed.request.subtype == "get_runtime_agent_task_output_live"
+    assert parsed.request.task_id == "rat_123"
+    assert parsed.request.offset == 64
+    assert parsed.request.max_bytes == 1024
+    assert parsed.request.tail_lines == 25
+    assert parsed.session_id == "sess_1"
+
+
+def test_parse_control_message_supports_project_runtime_log_requests() -> None:
+    parsed = parse_control_message(
+        {
+            "type": "control_request",
+            "requestId": "req_project_runtime_log",
+            "request": {
+                "subtype": "get_project_runtime_log",
+                "offset": 32,
+                "maxBytes": 2048,
+            },
+            "sessionId": "sess_1",
+        }
+    )
+
+    assert parsed is not None
+    assert parsed.type == "control_request"
+    assert parsed.request.subtype == "get_project_runtime_log"
+    assert parsed.request.offset == 32
+    assert parsed.request.max_bytes == 2048
+    assert parsed.request.tail_lines is None
+    assert parsed.session_id == "sess_1"
+
+
 def test_parse_control_message_supports_runtime_agent_task_wait_requests() -> None:
     parsed = parse_control_message(
         {

@@ -10,7 +10,11 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from autopilot.api.routes import events as events_routes
-from autopilot.api.routes.events import _event_generator, _resolve_replay_sequence
+from autopilot.api.routes.events import (
+    _event_generator,
+    _event_matches_filters,
+    _resolve_replay_sequence,
+)
 from autopilot.core.audit_chain import append_jsonl_audit_record
 from autopilot.core.config import AutopilotConfig
 
@@ -127,6 +131,150 @@ def test_event_generator_replays_only_frames_after_last_event_id(tmp_path: Path)
     assert "id: req_1:response" in frame
     assert "event: control_response" in frame
     assert '"accepted": true' in frame
+
+
+def test_event_matches_filters_supports_execution_identifiers() -> None:
+    payload = {
+        "event": "execution_plane_agent_action_run_completed",
+        "project_id": "proj_1",
+        "runtime_agent_id": "agent_primary",
+        "runtime_agent_ids": ["agent_primary", "agent_secondary"],
+        "orchestrator_session_id": "sess_exec",
+    }
+
+    assert _event_matches_filters(payload, project_id="proj_1") is True
+    assert _event_matches_filters(payload, runtime_agent_id="agent_secondary") is True
+    assert _event_matches_filters(payload, orchestrator_session_id="sess_exec") is True
+    assert _event_matches_filters(payload, project_id="proj_2") is False
+    assert _event_matches_filters(payload, runtime_agent_id="agent_missing") is False
+    assert _event_matches_filters(payload, orchestrator_session_id="sess_other") is False
+
+
+def test_event_matches_filters_supports_initiative_and_orchestrator_snapshots() -> None:
+    payload = {
+        "event": "execution_plane_project_updated",
+        "project_id": "proj_1",
+    }
+    snapshot_index = {
+        "proj_1": {
+            "initiative": {"id": "initiative_alpha"},
+            "orchestration": {"orchestrator": "specialist"},
+        }
+    }
+
+    assert _event_matches_filters(
+        payload,
+        initiative_id="initiative_alpha",
+        snapshot_index=snapshot_index,
+    ) is True
+    assert _event_matches_filters(
+        payload,
+        orchestrator="specialist",
+        snapshot_index=snapshot_index,
+    ) is True
+    assert _event_matches_filters(
+        payload,
+        initiative_id="initiative_beta",
+        snapshot_index=snapshot_index,
+    ) is False
+    assert _event_matches_filters(
+        payload,
+        orchestrator="codex",
+        snapshot_index=snapshot_index,
+    ) is False
+
+
+def test_event_generator_replays_only_matching_project_events(tmp_path: Path) -> None:
+    log_path = tmp_path / "events.jsonl"
+    _write_event_log(
+        log_path,
+        {"event": "project_created", "project_id": "proj_1"},
+        {"event": "run_started", "project_id": "proj_2"},
+    )
+
+    async def _collect_one() -> str:
+        generator = _event_generator(log_path, structured=False, from_sequence=0, project_id="proj_2")
+        try:
+            return await generator.__anext__()
+        finally:
+            await generator.aclose()
+
+    frame = asyncio.run(_collect_one())
+
+    assert "event: run_started" in frame
+    assert '"project_id": "proj_2"' in frame
+    assert "project_created" not in frame
+
+
+def test_event_generator_replays_only_matching_runtime_agent_events(tmp_path: Path) -> None:
+    log_path = tmp_path / "events.jsonl"
+    _write_event_log(
+        log_path,
+        {
+            "event": "execution_plane_issue_opened",
+            "project_id": "proj_1",
+            "runtime_agent_ids": ["agent_a"],
+        },
+        {
+            "event": "execution_plane_issue_opened",
+            "project_id": "proj_1",
+            "runtime_agent_ids": ["agent_b"],
+        },
+    )
+
+    async def _collect_one() -> str:
+        generator = _event_generator(
+            log_path,
+            structured=False,
+            from_sequence=0,
+            runtime_agent_id="agent_b",
+        )
+        try:
+            return await generator.__anext__()
+        finally:
+            await generator.aclose()
+
+    frame = asyncio.run(_collect_one())
+
+    assert '"runtime_agent_ids": ["agent_b"]' in frame
+    assert "agent_a" not in frame
+
+
+def test_event_generator_structured_frames_include_execution_context(tmp_path: Path) -> None:
+    log_path = tmp_path / "events.jsonl"
+    _write_event_log(
+        log_path,
+        {
+            "event": "run_started",
+            "project_id": "proj_1",
+            "timestamp": "2026-04-03T00:00:00+00:00",
+        },
+    )
+    snapshot_index = {
+        "proj_1": {
+            "name": "Project One",
+            "initiative": {"id": "initiative_alpha", "title": "Alpha"},
+            "orchestration": {"orchestrator": "specialist", "project_ref": "proj-ref"},
+        }
+    }
+
+    async def _collect_one() -> str:
+        generator = _event_generator(
+            log_path,
+            structured=True,
+            from_sequence=0,
+            snapshot_index=snapshot_index,
+        )
+        try:
+            return await generator.__anext__()
+        finally:
+            await generator.aclose()
+
+    frame = asyncio.run(_collect_one())
+
+    assert '"project_name": "Project One"' in frame
+    assert '"initiative": {"id": "initiative_alpha", "title": "Alpha"}' in frame
+    assert '"orchestration": {"orchestrator": "specialist", "project_ref": "proj-ref"}' in frame
 
 
 def test_event_generator_dedupes_duplicate_event_ids_during_replay(tmp_path: Path) -> None:

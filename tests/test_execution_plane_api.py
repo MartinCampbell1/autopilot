@@ -1406,6 +1406,127 @@ def test_command_policy_route_can_allow_parallel_launch_without_approval(
     assert f"Task ID: {tasks[0]['id']}" in transcript_response.json()["content"]
 
 
+@patch("autopilot.core.execution_plane.launch_project_run")
+@patch("autopilot.core.execution_plane.generate_prd_from_spec")
+def test_execution_plane_runtime_agent_task_output_live_reads_running_source_log(
+    mock_generate_prd_from_spec,
+    mock_launch_project_run,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    client = _build_client(config, monkeypatch)
+    mock_generate_prd_from_spec.return_value = {
+        "title": "FounderOS Copilot",
+        "description": "Execution-ready FounderOS project.",
+        "stories": [{"id": 1, "title": "Bootstrap", "description": "Create the app shell"}],
+    }
+    log_path = config.autopilot_home / "logs" / "task-live.log"
+    mock_launch_project_run.return_value = (
+        True,
+        log_path,
+        "Background run started.",
+    )
+
+    created = _create_execution_project(client, tmp_path / "async-task-live-output-project")
+    project_id = created["project"]["project_id"]
+
+    patch_response = client.patch(
+        f"/api/execution-plane/projects/{project_id}/command-policy",
+        json={
+            "parallel_launch_requires_approval": False,
+            "max_parallel_stories_without_approval": 3,
+        },
+    )
+    assert patch_response.status_code == 200
+
+    command_response = client.post(
+        f"/api/execution-plane/projects/{project_id}/commands/launch",
+        json={
+            "requested_by": "founderos",
+            "launch_profile": {
+                "preset": "parallel",
+                "story_execution_mode": "team",
+                "project_concurrency_mode": "parallel",
+                "max_parallel_stories": 2,
+            },
+        },
+    )
+    assert command_response.status_code == 200
+    task_id = command_response.json()["async_task"]["id"]
+
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path.write_text("line 1\nline 2\nline 3\n", encoding="utf-8")
+
+    live_output_response = client.get(
+        f"/api/execution-plane/agents/tasks/{task_id}/output/live",
+        params={"tail_lines": 2},
+    )
+
+    assert live_output_response.status_code == 200
+    live_output = live_output_response.json()
+    assert live_output["task_id"] == task_id
+    assert live_output["status"] == "live"
+    assert live_output["task_status"] == "running"
+    assert live_output["content_source"] == "source_log"
+    assert live_output["source_path"] == str(log_path)
+    assert "line 1" not in live_output["content"]
+    assert "line 2" in live_output["content"]
+    assert "line 3" in live_output["content"]
+    assert live_output["content_next_offset"] == live_output["content_total_bytes"]
+    assert live_output["content_window_truncated"] is True
+
+
+@patch("autopilot.core.execution_plane.generate_prd_from_spec")
+def test_execution_plane_project_runtime_log_route_reads_windowed_log_content(
+    mock_generate_prd_from_spec,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    client = _build_client(config, monkeypatch)
+    mock_generate_prd_from_spec.return_value = {
+        "title": "FounderOS Copilot",
+        "description": "Execution-ready FounderOS project.",
+        "stories": [{"id": 1, "title": "Bootstrap", "description": "Create the app shell"}],
+    }
+
+    created = _create_execution_project(client, tmp_path / "project-runtime-log-project")
+    project_id = created["project"]["project_id"]
+    log_path = config.autopilot_home / "logs" / "project-runtime.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path.write_text("0123456789abcdef", encoding="utf-8")
+    save_project_state(
+        config,
+        project_id,
+        {
+            "status": "running",
+            "paused": False,
+            "started_at": "2026-04-02T00:00:00+00:00",
+            "updated_at": "2026-04-02T00:01:00+00:00",
+            "log_path": str(log_path),
+        },
+    )
+
+    runtime_log_response = client.get(
+        f"/api/execution-plane/projects/{project_id}/runtime-log",
+        params={"offset": 4, "max_bytes": 4},
+    )
+
+    assert runtime_log_response.status_code == 200
+    runtime_log = runtime_log_response.json()
+    assert runtime_log["project_id"] == project_id
+    assert runtime_log["status"] == "live"
+    assert runtime_log["project_status"] == "running"
+    assert runtime_log["paused"] is False
+    assert runtime_log["log_path"] == str(log_path)
+    assert runtime_log["content"] == "4567"
+    assert runtime_log["content_offset"] == 4
+    assert runtime_log["content_next_offset"] == 8
+    assert runtime_log["content_total_bytes"] == 16
+    assert runtime_log["content_window_truncated"] is True
+
+
 @patch("autopilot.core.execution_plane.generate_prd_from_spec")
 def test_execution_plane_orchestrator_session_tracks_async_tasks_honestly(
     mock_generate_prd_from_spec,
@@ -3058,12 +3179,23 @@ def test_execution_plane_runtime_agent_task_output_shadow_audit_requires_explici
     blocked_output = blocked_output_response.json()
     audit_id = blocked_output["shadow_audits"][0]["id"]
 
+    blocked_live_output_response = client.get(
+        f"/api/execution-plane/agents/tasks/{task.id}/output/live",
+        params={"tail_lines": 20},
+    )
+    assert blocked_live_output_response.status_code == 200
+    blocked_live_output = blocked_live_output_response.json()
+
     assert blocked_output["status"] == "quarantined"
     assert blocked_output["content"] == ""
     assert blocked_output["content_blocked"] is True
     assert blocked_output["quarantined"] is True
     assert blocked_output["shadow_audits"][0]["source_kind"] == "runtime_agent_task_output"
     assert blocked_output["shadow_audits"][0]["blocked_artifact_ref"] == f"/api/execution-plane/agents/tasks/{task.id}/output"
+    assert blocked_live_output["status"] == "quarantined"
+    assert blocked_live_output["content"] == ""
+    assert blocked_live_output["content_blocked"] is True
+    assert blocked_live_output["quarantined"] is True
 
     task_detail_response = client.get(f"/api/execution-plane/agents/tasks/{task.id}")
     assert task_detail_response.status_code == 200
@@ -3538,6 +3670,26 @@ def test_execution_plane_agent_action_run_surfaces_quarantined_linked_async_hand
     assert quarantined["async_tasks"][0]["output_quarantined"] is True
     assert quarantined["shadow_audits"][0]["source_kind"] == "runtime_agent_task_output"
     assert "require explicit review" in quarantined["completion_message"]
+
+    summary_runs_response = client.get(
+        "/api/execution-plane/agents/action-runs",
+        params={"project_id": project_id, "summary": True},
+    )
+    assert summary_runs_response.status_code == 200
+    summary_runs = summary_runs_response.json()["runs"]
+    summary_run = next(item for item in summary_runs if item["id"] == run.id)
+    assert summary_run["completion_state"] == "quarantined"
+    assert summary_run["handoff_blocked"] is True
+    assert summary_run["open_shadow_audit_count"] == 1
+    assert summary_run["summary"]["selected_count"] == 1
+    assert summary_run["shadow_audits"][0]["id"] == audit_id
+    assert "results" not in summary_run
+    assert "async_tasks" not in summary_run
+    assert "resume_contracts" not in summary_run
+    assert "selection" not in summary_run
+    assert "policy" not in summary_run
+    assert "diff_summary" not in summary_run
+    assert "patch_bundle" not in summary_run
 
     summary_response = client.get("/api/execution-plane/agents/action-runs/summary", params={"project_id": project_id})
     assert summary_response.status_code == 200

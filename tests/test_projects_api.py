@@ -784,7 +784,7 @@ def test_create_project_from_execution_brief(
                 "execution": {
                     "mvp_scope": ["ingest corpus", "graph retrieval", "chat workflow"],
                     "required_connectors": ["web_docs", "github"],
-                    "existing_repos": ["/Users/example/Desktop/Projects/graphrag-affiliate"],
+                    "existing_repos": ["/workspace/graphrag-affiliate"],
                 },
                 "monetization": {
                     "revenue_model": "subscription",

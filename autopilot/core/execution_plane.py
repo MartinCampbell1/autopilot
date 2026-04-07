@@ -135,7 +135,11 @@ from autopilot.core.runtime_agent_tasks import (
 )
 from autopilot.core.runtime_budgets import ensure_budget_state
 from autopilot.core.runtime_control import list_project_work_item_leases
-from autopilot.core.task_output import get_task_output, read_task_output_text
+from autopilot.core.task_output import (
+    get_task_output,
+    read_task_output_text,
+    read_text_window_from_path,
+)
 from autopilot.core.task_transcript import (
     get_task_transcript,
     read_task_transcript_text,
@@ -1589,6 +1593,59 @@ def _collect_execution_plane_agent_action_run_async_tasks(
     return async_tasks
 
 
+def _collect_execution_plane_agent_action_run_async_task_summaries(
+    config: AutopilotConfig,
+    record: AgentActionBatchRunRecord,
+) -> list[dict[str, Any]]:
+    task_ids: list[str] = []
+    seen: set[str] = set()
+
+    def _remember_task_id(value: Any) -> None:
+        task_id = str(value or "").strip()
+        if not task_id or task_id in seen:
+            return
+        seen.add(task_id)
+        task_ids.append(task_id)
+
+    for result in record.results or []:
+        async_task = result.get("async_task")
+        if isinstance(async_task, dict):
+            _remember_task_id(async_task.get("id"))
+        _remember_task_id(result.get("async_task_id"))
+
+    for task_id in record.active_async_task_ids or []:
+        _remember_task_id(task_id)
+
+    for task in list_runtime_agent_tasks(config, agent_action_run_id=record.id):
+        _remember_task_id(task.id)
+
+    task_summaries: list[dict[str, Any]] = []
+    for task_id in task_ids:
+        task = get_runtime_agent_task(config, task_id)
+        if task is None:
+            continue
+        refreshed = refresh_runtime_agent_task(config, task)
+        output_artifact_id = str(refreshed.output_artifact_id or "").strip()
+        task_summaries.append(
+            {
+                "id": refreshed.id,
+                "status": refreshed.status,
+                "completed_at": refreshed.completed_at,
+                "shadow_audits": (
+                    _list_shadow_audits_for_artifact(config, output_artifact_id, status="open")
+                    if output_artifact_id
+                    else []
+                ),
+            }
+        )
+
+    task_summaries.sort(
+        key=lambda item: (str(item.get("completed_at") or ""), str(item.get("id") or "")),
+        reverse=True,
+    )
+    return task_summaries
+
+
 def _parse_execution_plane_timestamp(value: Any) -> datetime | None:
     raw = str(value or "").strip()
     if not raw:
@@ -1813,6 +1870,68 @@ def _refresh_execution_plane_agent_action_run_record(
     return record
 
 
+def _refresh_execution_plane_agent_action_run_summary_record(
+    config: AutopilotConfig,
+    record: AgentActionBatchRunRecord,
+) -> tuple[AgentActionBatchRunRecord, list[dict[str, Any]]]:
+    linked_async_tasks = _collect_execution_plane_agent_action_run_async_task_summaries(
+        config,
+        record,
+    )
+    completion = _derive_execution_plane_agent_action_run_completion(
+        record.results,
+        linked_async_tasks=linked_async_tasks,
+    )
+    updated = False
+
+    if record.completion_state != completion["completion_state"]:
+        record.completion_state = str(completion["completion_state"])
+        updated = True
+    if record.completion_message != completion["completion_message"]:
+        record.completion_message = str(completion["completion_message"])
+        updated = True
+    if dict(record.async_task_status_counts or {}) != dict(completion["async_task_status_counts"]):
+        record.async_task_status_counts = dict(completion["async_task_status_counts"])
+        updated = True
+    if list(record.active_async_task_ids or []) != list(completion["active_async_task_ids"]):
+        record.active_async_task_ids = list(completion["active_async_task_ids"])
+        updated = True
+
+    desired_completed_at = completion["completed_at"]
+    if str(completion["completion_state"]) == "pending_async":
+        if record.completed_at is not None:
+            record.completed_at = None
+            updated = True
+    elif desired_completed_at:
+        if record.completed_at != desired_completed_at:
+            record.completed_at = desired_completed_at
+            updated = True
+    elif not record.completed_at:
+        record.completed_at = record.created_at
+        updated = True
+
+    if updated:
+        record = save_agent_action_batch_run(config, record)
+    return record, linked_async_tasks
+
+
+def _aggregated_shadow_audits_for_execution_plane_agent_action_run(
+    task_payloads: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    aggregated_shadow_audits: list[dict[str, Any]] = []
+    seen_shadow_audit_ids: set[str] = set()
+    for task_payload in task_payloads:
+        for shadow_audit in task_payload.get("shadow_audits") or []:
+            if not isinstance(shadow_audit, dict):
+                continue
+            shadow_audit_id = str(shadow_audit.get("id") or "").strip()
+            if not shadow_audit_id or shadow_audit_id in seen_shadow_audit_ids:
+                continue
+            seen_shadow_audit_ids.add(shadow_audit_id)
+            aggregated_shadow_audits.append(dict(shadow_audit))
+    return aggregated_shadow_audits
+
+
 def _materialize_execution_plane_agent_action_run_record(
     config: AutopilotConfig,
     record: AgentActionBatchRunRecord,
@@ -1867,22 +1986,54 @@ def _materialize_execution_plane_agent_action_run_record(
     )
     payload.setdefault("diff_summary", {})
     payload.setdefault("patch_bundle", {})
-    aggregated_shadow_audits: list[dict[str, Any]] = []
-    seen_shadow_audit_ids: set[str] = set()
-    for async_task in async_tasks:
-        for shadow_audit in async_task.get("shadow_audits") or []:
-            if not isinstance(shadow_audit, dict):
-                continue
-            shadow_audit_id = str(shadow_audit.get("id") or "").strip()
-            if not shadow_audit_id or shadow_audit_id in seen_shadow_audit_ids:
-                continue
-            seen_shadow_audit_ids.add(shadow_audit_id)
-            aggregated_shadow_audits.append(dict(shadow_audit))
+    aggregated_shadow_audits = _aggregated_shadow_audits_for_execution_plane_agent_action_run(async_tasks)
     payload["shadow_audits"] = aggregated_shadow_audits
     payload["open_shadow_audit_count"] = len(aggregated_shadow_audits)
     payload["handoff_state"] = "quarantined" if aggregated_shadow_audits else "clear"
     payload["handoff_blocked"] = bool(aggregated_shadow_audits)
     return payload
+
+
+def _summarize_execution_plane_agent_action_run_record(
+    config: AutopilotConfig,
+    record: AgentActionBatchRunRecord,
+) -> dict[str, Any]:
+    record, async_task_summaries = _refresh_execution_plane_agent_action_run_summary_record(
+        config,
+        record,
+    )
+    shadow_audits = _aggregated_shadow_audits_for_execution_plane_agent_action_run(
+        async_task_summaries
+    )
+    approval_required = bool(record.approval_required) or _execution_plane_agent_action_run_requires_approval(
+        [],
+        list(record.results or []),
+    )
+    return {
+        "id": record.id,
+        "run_kind": record.run_kind,
+        "orchestrator_session_id": record.orchestrator_session_id,
+        "actor": record.actor,
+        "mode": record.mode,
+        "reason": record.reason,
+        "dry_run": record.dry_run,
+        "policy_profile": record.policy_profile,
+        "summary": dict(record.summary or {}),
+        "approval_required": approval_required,
+        "status": record.status,
+        "completion_state": record.completion_state,
+        "completion_message": record.completion_message,
+        "shadow_audits": shadow_audits,
+        "open_shadow_audit_count": len(shadow_audits),
+        "handoff_state": "quarantined" if shadow_audits else "clear",
+        "handoff_blocked": bool(shadow_audits),
+        "project_ids": list(record.project_ids),
+        "orchestrators": list(record.orchestrators),
+        "runtime_agent_ids": list(record.runtime_agent_ids),
+        "created_at": record.created_at,
+        "updated_at": record.updated_at,
+        "completed_at": record.completed_at,
+    }
 
 
 def _execution_plane_agent_action_batch_run_response(
@@ -3247,24 +3398,29 @@ def list_execution_plane_agent_action_runs(
     dry_run: bool | None = None,
     status: str | None = None,
     idempotency_key: str | None = None,
+    summary: bool = False,
 ) -> list[dict[str, Any]]:
     """List persisted runtime-agent batch run reports."""
 
-    return [
-        _materialize_execution_plane_agent_action_run_record(config, record)
-        for record in list_agent_action_batch_runs(
-            config,
-            run_kind=run_kind,
-            orchestrator_session_id=orchestrator_session_id,
-            project_id=project_id,
-            initiative_id=initiative_id,
-            orchestrator=orchestrator,
-            actor=actor,
-            dry_run=dry_run,
-            status=status,
-            idempotency_key=idempotency_key,
-        )
-    ]
+    runs: list[dict[str, Any]] = []
+    for record in list_agent_action_batch_runs(
+        config,
+        run_kind=run_kind,
+        orchestrator_session_id=orchestrator_session_id,
+        project_id=project_id,
+        initiative_id=initiative_id,
+        orchestrator=orchestrator,
+        actor=actor,
+        dry_run=dry_run,
+        status=status,
+        idempotency_key=idempotency_key,
+    ):
+        if summary:
+            runs.append(_summarize_execution_plane_agent_action_run_record(config, record))
+            continue
+        payload = _materialize_execution_plane_agent_action_run_record(config, record)
+        runs.append(payload)
+    return runs
 
 
 def summarize_execution_plane_agent_action_runs(
@@ -3686,6 +3842,137 @@ def get_execution_plane_runtime_agent_task_output(
         "content_blocked": False,
         "quarantined": False,
         "shadow_audits": shadow_audits,
+    }
+
+
+def _runtime_agent_task_output_source_path(
+    task: RuntimeAgentTaskRecord,
+    output_record: Any | None,
+) -> str:
+    if str(task.output_path or "").strip():
+        return str(task.output_path or "").strip()
+    if str((task.result_payload or {}).get("output_source_path") or "").strip():
+        return str((task.result_payload or {}).get("output_source_path") or "").strip()
+    if output_record is not None and str(output_record.source_path).strip():
+        return str(output_record.source_path).strip()
+    return ""
+
+
+def get_execution_plane_runtime_agent_task_output_live(
+    config: AutopilotConfig,
+    task_id: str,
+    *,
+    offset: int | None = None,
+    max_bytes: int = 65536,
+    tail_lines: int | None = None,
+) -> dict[str, Any]:
+    """Read one live or windowed view over a runtime-agent task output source."""
+
+    task = get_runtime_agent_task(config, task_id)
+    if task is None:
+        raise KeyError(task_id)
+    task = refresh_runtime_agent_task(config, task)
+    output_artifact_id = str(task.output_artifact_id or "").strip()
+    output_record = get_task_output(config, output_artifact_id) if output_artifact_id else None
+    shadow_audits = _list_shadow_audits_for_artifact(config, output_artifact_id) if output_artifact_id else []
+    open_shadow_audits = [record for record in shadow_audits if bool(record.get("open"))]
+    if open_shadow_audits:
+        return {
+            **(output_record.model_dump() if output_record is not None else {}),
+            "task_id": task.id,
+            "artifact_ref": f"/api/execution-plane/agents/tasks/{task.id}/output",
+            "status": "quarantined",
+            "task_status": task.status,
+            "content": "",
+            "content_blocked": True,
+            "quarantined": True,
+            "content_live": False,
+            "content_source": "blocked",
+            "content_offset": 0,
+            "content_next_offset": 0,
+            "content_total_bytes": 0,
+            "content_window_truncated": False,
+            "message": "Runtime-agent task output was quarantined by shadow audit and is blocked until resolved.",
+            "shadow_audits": shadow_audits,
+        }
+
+    source_path = _runtime_agent_task_output_source_path(task, output_record)
+    content_source = "source_log"
+    if source_path and Path(source_path).exists():
+        path = Path(source_path)
+    elif output_record is not None:
+        path = Path(output_record.content_path)
+        source_path = str(path)
+        content_source = "artifact"
+    else:
+        raise FileNotFoundError(task_id)
+
+    window = read_text_window_from_path(
+        path,
+        offset=offset,
+        max_bytes=max_bytes,
+        tail_lines=tail_lines,
+    )
+    payload = output_record.model_dump() if output_record is not None else {}
+    return {
+        **payload,
+        "task_id": task.id,
+        "artifact_ref": f"/api/execution-plane/agents/tasks/{task.id}/output",
+        "status": "live" if task.status in {"queued", "running"} else "ok",
+        "task_status": task.status,
+        "content": window.content,
+        "content_blocked": False,
+        "quarantined": False,
+        "content_live": task.status in {"queued", "running"},
+        "content_source": content_source,
+        "content_offset": window.offset,
+        "content_next_offset": window.next_offset,
+        "content_total_bytes": window.total_bytes,
+        "content_window_truncated": window.truncated,
+        "source_path": source_path,
+        "tail_lines": tail_lines,
+        "shadow_audits": shadow_audits,
+    }
+
+
+def get_execution_plane_project_runtime_log(
+    config: AutopilotConfig,
+    project_id: str,
+    *,
+    offset: int | None = None,
+    max_bytes: int = 65536,
+    tail_lines: int | None = None,
+) -> dict[str, Any]:
+    """Read one live window over a project's runtime log."""
+
+    project = get_project_entry(config, project_id=project_id, include_archived=True)
+    if project is None:
+        raise KeyError(project_id)
+    project_state = ensure_project_state(config, project, seed_mode="migrate")
+    log_path = str(project_state.get("log_path") or "").strip()
+    if not log_path:
+        raise FileNotFoundError(project_id)
+    path = Path(log_path)
+    window = read_text_window_from_path(
+        path,
+        offset=offset,
+        max_bytes=max_bytes,
+        tail_lines=tail_lines,
+    )
+    project_status = str(project_state.get("status") or "").strip() or "idle"
+    paused = bool(project_state.get("paused"))
+    return {
+        "project_id": project_id,
+        "status": "live" if project_status == "running" and not paused else "ok",
+        "project_status": project_status,
+        "paused": paused,
+        "log_path": log_path,
+        "content": window.content,
+        "content_offset": window.offset,
+        "content_next_offset": window.next_offset,
+        "content_total_bytes": window.total_bytes,
+        "content_window_truncated": window.truncated,
+        "tail_lines": tail_lines,
     }
 
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import uuid
+from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -16,6 +17,8 @@ from autopilot.core.config import AutopilotConfig
 
 TASK_OUTPUT_MAX_CHARS = 65536
 TASK_OUTPUT_PREVIEW_CHARS = 4000
+TASK_OUTPUT_WINDOW_MAX_BYTES = 65536
+TASK_OUTPUT_WINDOW_HARD_LIMIT_BYTES = 262144
 
 
 def _utcnow_iso() -> str:
@@ -64,6 +67,16 @@ class TaskOutputRecord(BaseModel):
     updated_at: str
 
 
+class TaskOutputWindow(BaseModel):
+    """One windowed view over a text artifact or live log."""
+
+    offset: int
+    next_offset: int
+    total_bytes: int
+    truncated: bool = False
+    content: str = ""
+
+
 def task_output_metadata_path(config: AutopilotConfig, output_id: str) -> Path:
     """Return metadata path for one output artifact."""
 
@@ -101,6 +114,82 @@ def read_task_output_text(config: AutopilotConfig, output_id: str) -> str:
     if not path.exists():
         return ""
     return path.read_text(encoding="utf-8")
+
+
+def _clamp_window_bytes(max_bytes: int) -> int:
+    normalized = int(max_bytes)
+    if normalized < 1:
+        return 1
+    return min(normalized, TASK_OUTPUT_WINDOW_HARD_LIMIT_BYTES)
+
+
+def _read_window_bytes(path: Path, *, offset: int | None = None, max_bytes: int = TASK_OUTPUT_WINDOW_MAX_BYTES) -> TaskOutputWindow:
+    total_bytes = path.stat().st_size if path.exists() else 0
+    clamped_max_bytes = _clamp_window_bytes(max_bytes)
+    start_offset = min(max(int(offset or 0), 0), total_bytes)
+    with path.open("rb") as handle:
+        handle.seek(start_offset)
+        payload = handle.read(clamped_max_bytes)
+    next_offset = start_offset + len(payload)
+    return TaskOutputWindow(
+        offset=start_offset,
+        next_offset=next_offset,
+        total_bytes=total_bytes,
+        truncated=next_offset < total_bytes,
+        content=payload.decode("utf-8", errors="replace"),
+    )
+
+
+def _read_tail_bytes(
+    path: Path,
+    *,
+    tail_lines: int,
+    max_bytes: int = TASK_OUTPUT_WINDOW_MAX_BYTES,
+) -> TaskOutputWindow:
+    total_bytes = path.stat().st_size if path.exists() else 0
+    clamped_max_bytes = _clamp_window_bytes(max_bytes)
+    if total_bytes <= 0:
+        return TaskOutputWindow(offset=0, next_offset=0, total_bytes=0, truncated=False, content="")
+
+    lines = max(int(tail_lines), 1)
+    collected: deque[bytes] = deque(maxlen=lines)
+    with path.open("rb") as handle:
+        for line in handle:
+            collected.append(line)
+    payload = b"".join(collected)
+    if len(payload) > clamped_max_bytes:
+        payload = payload[-clamped_max_bytes:]
+    start_offset = max(total_bytes - len(payload), 0)
+    return TaskOutputWindow(
+        offset=start_offset,
+        next_offset=total_bytes,
+        total_bytes=total_bytes,
+        truncated=start_offset > 0,
+        content=payload.decode("utf-8", errors="replace"),
+    )
+
+
+def read_text_window_from_path(
+    path: Path,
+    *,
+    offset: int | None = None,
+    max_bytes: int = TASK_OUTPUT_WINDOW_MAX_BYTES,
+    tail_lines: int | None = None,
+) -> TaskOutputWindow:
+    """Read one bounded text window from a file path."""
+
+    if not path.exists() or not path.is_file():
+        raise FileNotFoundError(str(path))
+
+    if tail_lines is not None and offset is None:
+        return _read_tail_bytes(path, tail_lines=tail_lines, max_bytes=max_bytes)
+
+    if offset is None:
+        total_bytes = path.stat().st_size
+        start_offset = max(total_bytes - _clamp_window_bytes(max_bytes), 0)
+        return _read_window_bytes(path, offset=start_offset, max_bytes=max_bytes)
+
+    return _read_window_bytes(path, offset=offset, max_bytes=max_bytes)
 
 
 def persist_task_output(
@@ -176,10 +265,14 @@ def load_text_from_source(source_path: str) -> str:
 __all__ = [
     "TASK_OUTPUT_MAX_CHARS",
     "TASK_OUTPUT_PREVIEW_CHARS",
+    "TASK_OUTPUT_WINDOW_HARD_LIMIT_BYTES",
+    "TASK_OUTPUT_WINDOW_MAX_BYTES",
     "TaskOutputRecord",
+    "TaskOutputWindow",
     "get_task_output",
     "load_text_from_source",
     "persist_task_output",
+    "read_text_window_from_path",
     "read_task_output_text",
     "task_output_content_path",
     "task_output_metadata_path",

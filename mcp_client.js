@@ -1,6 +1,12 @@
 const { spawn } = require('child_process');
+const apiKey = process.env.MAGIC21ST_API_KEY;
+
+if (!apiKey) {
+  throw new Error('Set MAGIC21ST_API_KEY before running this script.');
+}
+
 const server = spawn('npx', ['-y', '@21st-dev/magic@latest', '--stdio'], {
-  env: { ...process.env, API_KEY: 'an_sk_aa5877ab1f8ffc5b55930b2aa639f5bb35695ec7ae0119f464bc791e28332f22' }
+  env: { ...process.env, API_KEY: apiKey }
 });
 
 let messageId = 0;
@@ -30,8 +36,8 @@ server.stdout.on('data', (data) => {
           arguments: {
             message: "Generate a lightweight fast login button",
             searchQuery: "login button react tailwind",
-            absolutePathToCurrentFile: "/Users/example/Desktop/autopilot/src/components/LoginForm.tsx",
-            absolutePathToProjectDirectory: "/Users/example/Desktop/autopilot",
+            absolutePathToCurrentFile: "/path/to/project/src/components/LoginForm.tsx",
+            absolutePathToProjectDirectory: "/path/to/project",
             standaloneRequestQuery: "login button"
           }
         });

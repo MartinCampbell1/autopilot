@@ -493,7 +493,7 @@ def build_execution_proof_bundle(
     # Trace / feedback data
     trace_entries = read_trace_entries(config, project_id, limit=4000)
     terminal_event = _latest_terminal_event(trace_entries)
-    run_id = _resolve_run_id(detail, terminal_event)
+    _resolve_run_id(detail, terminal_event)
     feedback_records = read_feedback_records(config, project_id, limit=800)
 
     # Changed files from trace

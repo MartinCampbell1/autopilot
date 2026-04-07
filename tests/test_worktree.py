@@ -25,8 +25,8 @@ from autopilot.core.worktree import (
 
 class TestWorktree:
     def test_worktree_path(self) -> None:
-        result = worktree_path(Path("/Users/example/project"), story_id=3)
-        assert result == Path("/Users/example/project-story-3")
+        result = worktree_path(Path("/tmp/project"), story_id=3)
+        assert result == Path("/tmp/project-story-3")
 
     @patch("autopilot.core.worktree.subprocess.run")
     def test_create_worktree(self, mock_run: MagicMock, tmp_path: Path) -> None:
@@ -90,9 +90,15 @@ class TestWorktree:
     @patch("autopilot.core.worktree.subprocess.run")
     def test_remove_worktree(self, mock_run: MagicMock) -> None:
         mock_run.return_value = MagicMock(returncode=0)
-        remove_worktree(Path("/Users/example/project"), Path("/Users/example/project-story-3"))
+        remove_worktree(Path("/tmp/project"), Path("/tmp/project-story-3"))
         assert mock_run.call_count == 2
-        assert mock_run.call_args_list[0][0][0] == ["git", "worktree", "remove", "/Users/example/project-story-3", "--force"]
+        assert mock_run.call_args_list[0][0][0] == [
+            "git",
+            "worktree",
+            "remove",
+            str(Path("/tmp/project-story-3").resolve()),
+            "--force",
+        ]
         assert mock_run.call_args_list[1][0][0] == ["git", "worktree", "prune"]
 
     @patch("autopilot.core.worktree.subprocess.run")
@@ -128,7 +134,7 @@ class TestWorktree:
 
     def test_remove_worktree_rejects_unsafe_path(self) -> None:
         try:
-            remove_worktree(Path("/Users/example/project"), Path("/tmp/not-this-project"))
+            remove_worktree(Path("/tmp/project"), Path("/var/tmp/not-this-project"))
         except ValueError as exc:
             assert "naming contract" in str(exc) or "parent directory" in str(exc)
         else:
@@ -158,15 +164,15 @@ class TestWorktree:
             MagicMock(returncode=0, stdout="", stderr=""),
         ]
         success = merge_worktree(
-            main_path=Path("/Users/example/project"),
-            worktree_path=Path("/Users/example/project-story-3"),
+            main_path=Path("/tmp/project"),
+            worktree_path=Path("/tmp/project-story-3"),
             branch_name="story-3",
         )
         assert success is True
         calls = [call.args[0] for call in mock_run.call_args_list]
         assert calls[0] == ["git", "status", "--porcelain"]
         assert calls[1] == ["git", "merge", "story-3", "--no-edit"]
-        assert calls[2] == ["git", "worktree", "remove", "/Users/example/project-story-3", "--force"]
+        assert calls[2] == ["git", "worktree", "remove", str(Path("/tmp/project-story-3").resolve()), "--force"]
         assert calls[3] == ["git", "worktree", "prune"]
         assert calls[4] == ["git", "branch", "--list", "story-3"]
         assert calls[5] == ["git", "branch", "-d", "story-3"]
@@ -184,8 +190,8 @@ class TestWorktree:
         ]
 
         success = merge_worktree(
-            main_path=Path("/Users/example/project"),
-            worktree_path=Path("/Users/example/project-story-3"),
+            main_path=Path("/tmp/project"),
+            worktree_path=Path("/tmp/project-story-3"),
             branch_name="story-3",
         )
 

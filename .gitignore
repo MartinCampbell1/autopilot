@@ -1,8 +1,7 @@
 __pycache__/
 *.pyc
-.DS_Store
 .venv/
-.venv 2
+.venv 2/
 *.egg-info/
 dist/
 .pytest_cache/
@@ -15,3 +14,4 @@ state.db
 dashboard/AGENTS.md
 dashboard/CLAUDE.md
 dashboard/screenshot.mjs
+docs/2026-*.md

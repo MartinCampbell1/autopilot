@@ -224,7 +224,7 @@ Modify the gateway layer to add a MiniMax client via OpenRouter.
 
 - [ ] **Step 1: Create orchestrator package**
 
-Create `/Users/example/multi-agent/orchestrator/__init__.py` and `models.py`.
+Create `/workspace/quorum/orchestrator/__init__.py` and `models.py`.
 
 - [ ] **Step 2: Verify imports**
 

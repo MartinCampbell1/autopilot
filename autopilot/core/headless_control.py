@@ -28,10 +28,12 @@ from autopilot.core.execution_plane import (
     cancel_execution_plane_agent_action_run_async_tasks,
     cancel_execution_plane_runtime_agent_task,
     get_execution_plane_agent_action_run,
+    get_execution_plane_project_runtime_log,
     list_execution_plane_agent_action_runs,
     list_execution_plane_runtime_agent_tasks,
     get_execution_plane_runtime_agent_task,
     get_execution_plane_runtime_agent_task_output,
+    get_execution_plane_runtime_agent_task_output_live,
     get_execution_plane_runtime_agent_task_transcript,
     summarize_execution_plane_agent_action_runs,
     wait_for_execution_plane_agent_action_run_async_settlement,
@@ -696,6 +698,23 @@ class HeadlessControlSession:
             raise KeyError(task_id)
         return {"output": get_execution_plane_runtime_agent_task_output(self.config, task_id)}
 
+    def get_runtime_agent_task_output_live_payload(self, request: Any) -> dict[str, Any]:
+        """Return one live runtime-agent task output window for the current headless project."""
+
+        task_id = str(request.task_id or "").strip()
+        task_payload = get_execution_plane_runtime_agent_task(self.config, task_id)
+        if str(task_payload.get("project_id") or "").strip() != self.project_id:
+            raise KeyError(task_id)
+        return {
+            "output": get_execution_plane_runtime_agent_task_output_live(
+                self.config,
+                task_id,
+                offset=request.offset,
+                max_bytes=int(request.max_bytes) if request.max_bytes is not None else 65536,
+                tail_lines=request.tail_lines,
+            )
+        }
+
     def get_runtime_agent_task_transcript_payload(self, request: Any) -> dict[str, Any]:
         """Return one runtime-agent task transcript artifact for the current headless project."""
 
@@ -704,6 +723,19 @@ class HeadlessControlSession:
         if str(task_payload.get("project_id") or "").strip() != self.project_id:
             raise KeyError(task_id)
         return {"transcript": get_execution_plane_runtime_agent_task_transcript(self.config, task_id)}
+
+    def get_project_runtime_log_payload(self, request: Any) -> dict[str, Any]:
+        """Return one live project runtime-log window for the current headless project."""
+
+        return {
+            "runtime_log": get_execution_plane_project_runtime_log(
+                self.config,
+                self.project_id,
+                offset=request.offset,
+                max_bytes=int(request.max_bytes) if request.max_bytes is not None else 65536,
+                tail_lines=request.tail_lines,
+            )
+        }
 
     def cancel_runtime_agent_task_payload(self, request: Any) -> dict[str, Any]:
         """Cancel one runtime-agent task for the current headless project."""
@@ -833,6 +865,26 @@ class HeadlessControlSession:
                 response=payload,
                 session_id=self.session_id,
             )
+        if subtype == "get_runtime_agent_task_output_live":
+            try:
+                payload = self.get_runtime_agent_task_output_live_payload(request.request)
+            except KeyError:
+                return make_control_error_response(
+                    request.request_id,
+                    error=f"Runtime-agent task `{request.request.task_id}` was not found in this session.",
+                    session_id=self.session_id,
+                )
+            except FileNotFoundError:
+                return make_control_error_response(
+                    request.request_id,
+                    error=f"Runtime-agent task `{request.request.task_id}` has no readable live output source.",
+                    session_id=self.session_id,
+                )
+            return make_control_success_response(
+                request.request_id,
+                response=payload,
+                session_id=self.session_id,
+            )
         if subtype == "list_runtime_agent_tasks":
             return make_control_success_response(
                 request.request_id,
@@ -852,6 +904,20 @@ class HeadlessControlSession:
                 return make_control_error_response(
                     request.request_id,
                     error=f"Runtime-agent task `{request.request.task_id}` has no transcript artifact.",
+                    session_id=self.session_id,
+                )
+            return make_control_success_response(
+                request.request_id,
+                response=payload,
+                session_id=self.session_id,
+            )
+        if subtype == "get_project_runtime_log":
+            try:
+                payload = self.get_project_runtime_log_payload(request.request)
+            except FileNotFoundError:
+                return make_control_error_response(
+                    request.request_id,
+                    error=f"Project `{self.project_id}` has no runtime log.",
                     session_id=self.session_id,
                 )
             return make_control_success_response(

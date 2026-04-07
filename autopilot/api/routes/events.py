@@ -19,6 +19,11 @@ from autopilot.core.control_messages import (
     parse_sse_replay_sequence,
     resolve_control_event_id,
 )
+from autopilot.core.execution_plane import (
+    _build_execution_plane_snapshot_index,
+    _enrich_execution_plane_event,
+    _event_runtime_agent_ids,
+)
 
 router = APIRouter()
 
@@ -52,6 +57,69 @@ def _render_sse_event(payload: dict, *, sequence: int, structured: bool) -> str:
     return format_sse_frame(event_name, data, event_id=event_id)
 
 
+def _structured_event_payload(
+    payload: dict,
+    *,
+    structured: bool,
+    snapshot_index: dict[str, dict] | None = None,
+) -> dict:
+    if not structured or snapshot_index is None:
+        return payload
+    return _enrich_execution_plane_event(payload, snapshot_index)
+
+
+def _normalize_filter(value: str | None) -> str:
+    return str(value or "").strip()
+
+
+def _event_matches_filters(
+    payload: dict,
+    *,
+    project_id: str | None = None,
+    runtime_agent_id: str | None = None,
+    orchestrator_session_id: str | None = None,
+    initiative_id: str | None = None,
+    orchestrator: str | None = None,
+    snapshot_index: dict[str, dict] | None = None,
+) -> bool:
+    normalized_project_id = _normalize_filter(project_id)
+    if normalized_project_id and _normalize_filter(str(payload.get("project_id") or "")) != normalized_project_id:
+        return False
+
+    normalized_runtime_agent_id = _normalize_filter(runtime_agent_id)
+    if normalized_runtime_agent_id and normalized_runtime_agent_id not in _event_runtime_agent_ids(payload):
+        return False
+
+    normalized_session_id = _normalize_filter(orchestrator_session_id)
+    if normalized_session_id:
+        payload_session_ids = {
+            _normalize_filter(str(payload.get("orchestrator_session_id") or "")),
+            _normalize_filter(str(payload.get("session_id") or "")),
+            _normalize_filter(str(payload.get("sessionId") or "")),
+        }
+        payload_session_ids.discard("")
+        if normalized_session_id not in payload_session_ids:
+            return False
+
+    normalized_initiative_id = _normalize_filter(initiative_id)
+    normalized_orchestrator = _normalize_filter(orchestrator)
+    if normalized_initiative_id or normalized_orchestrator:
+        event_project_id = _normalize_filter(str(payload.get("project_id") or ""))
+        snapshot = (snapshot_index or {}).get(event_project_id, {})
+        initiative = payload.get("initiative") if isinstance(payload.get("initiative"), dict) else snapshot.get("initiative", {})
+        orchestration = (
+            payload.get("orchestration")
+            if isinstance(payload.get("orchestration"), dict)
+            else snapshot.get("orchestration", {})
+        )
+        if normalized_initiative_id and _normalize_filter(str(initiative.get("id") or "")) != normalized_initiative_id:
+            return False
+        if normalized_orchestrator and _normalize_filter(str(orchestration.get("orchestrator") or "")) != normalized_orchestrator:
+            return False
+
+    return True
+
+
 def _resolve_replay_sequence(path: Path, *, from_sequence: int | None = None, last_event_id: str | None = None) -> int | None:
     if from_sequence is not None:
         return from_sequence
@@ -80,6 +148,12 @@ async def _event_generator(
     structured: bool = False,
     from_sequence: int | None = None,
     last_event_id: str | None = None,
+    project_id: str | None = None,
+    runtime_agent_id: str | None = None,
+    orchestrator_session_id: str | None = None,
+    initiative_id: str | None = None,
+    orchestrator: str | None = None,
+    snapshot_index: dict[str, dict] | None = None,
 ):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.touch(exist_ok=True)
@@ -103,11 +177,25 @@ async def _event_generator(
                 payload = _load_event_record(line)
                 if payload is None:
                     continue
+                if not _event_matches_filters(
+                    payload,
+                    project_id=project_id,
+                    runtime_agent_id=runtime_agent_id,
+                    orchestrator_session_id=orchestrator_session_id,
+                    initiative_id=initiative_id,
+                    orchestrator=orchestrator,
+                    snapshot_index=snapshot_index,
+                ):
+                    continue
                 event_id = resolve_control_event_id(payload, sequence)
                 if seen_event_ids.has(event_id):
                     continue
                 seen_event_ids.add(event_id)
-                yield _render_sse_event(payload, sequence=sequence, structured=structured)
+                yield _render_sse_event(
+                    _structured_event_payload(payload, structured=structured, snapshot_index=snapshot_index),
+                    sequence=sequence,
+                    structured=structured,
+                )
         while True:
             line = handle.readline()
             if not line:
@@ -119,26 +207,54 @@ async def _event_generator(
             payload = _load_event_record(line)
             if payload is None:
                 continue
+            if not _event_matches_filters(
+                payload,
+                project_id=project_id,
+                runtime_agent_id=runtime_agent_id,
+                orchestrator_session_id=orchestrator_session_id,
+                initiative_id=initiative_id,
+                orchestrator=orchestrator,
+                snapshot_index=snapshot_index,
+            ):
+                continue
             event_id = resolve_control_event_id(payload, sequence)
             if seen_event_ids.has(event_id):
                 continue
             seen_event_ids.add(event_id)
-            yield _render_sse_event(payload, sequence=sequence, structured=structured)
+            yield _render_sse_event(
+                _structured_event_payload(payload, structured=structured, snapshot_index=snapshot_index),
+                sequence=sequence,
+                structured=structured,
+            )
 
 
 @router.get("/")
 async def event_stream(
     structured: bool = Query(default=False),
     from_sequence: int | None = Query(default=None, ge=0),
+    project_id: str | None = Query(default=None),
+    runtime_agent_id: str | None = Query(default=None),
+    orchestrator_session_id: str | None = Query(default=None),
+    initiative_id: str | None = Query(default=None),
+    orchestrator: str | None = Query(default=None),
     last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
 ) -> StreamingResponse:
     config = get_config()
+    snapshot_index = None
+    if structured or _normalize_filter(initiative_id) or _normalize_filter(orchestrator):
+        snapshot_index = _build_execution_plane_snapshot_index(config)
     return StreamingResponse(
         _event_generator(
             config.events_log_path,
             structured=structured,
             from_sequence=from_sequence,
             last_event_id=last_event_id,
+            project_id=project_id,
+            runtime_agent_id=runtime_agent_id,
+            orchestrator_session_id=orchestrator_session_id,
+            initiative_id=initiative_id,
+            orchestrator=orchestrator,
+            snapshot_index=snapshot_index,
         ),
         media_type="text/event-stream",
         headers={
