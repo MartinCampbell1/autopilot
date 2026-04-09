@@ -163,6 +163,139 @@ def _shipped_artifacts(detail: dict[str, Any]) -> list[str]:
     return artifacts
 
 
+def _story_handoff_snapshots(detail: dict[str, Any]) -> list[dict[str, str]]:
+    snapshots: list[dict[str, str]] = []
+    for story in list(detail.get("stories") or []):
+        github_pr = dict(story.get("github_pr") or {})
+        ci_status = str(github_pr.get("ci_status") or "").strip()
+        review_status = str(github_pr.get("review_status") or "").strip()
+        handoff_status = str(github_pr.get("handoff_status") or "").strip()
+        if not any((ci_status, review_status, handoff_status)):
+            continue
+        title = str(story.get("title") or f"Story {story.get('id')}").strip()
+        snapshots.append(
+            {
+                "title": title,
+                "ci_status": ci_status,
+                "review_status": review_status,
+                "handoff_status": handoff_status,
+            }
+        )
+    return snapshots
+
+
+def _ci_summary(detail: dict[str, Any]) -> str:
+    parts: list[str] = []
+    for snapshot in _story_handoff_snapshots(detail):
+        statuses: list[str] = []
+        if snapshot["ci_status"]:
+            statuses.append(f"CI {snapshot['ci_status']}")
+        if snapshot["handoff_status"]:
+            statuses.append(f"handoff {snapshot['handoff_status']}")
+        if statuses:
+            parts.append(f"{snapshot['title']}: {', '.join(statuses)}")
+    if parts:
+        return "; ".join(parts[:3])
+    return "No linked CI status recorded for this run."
+
+
+def _review_summary(detail: dict[str, Any], feedback_records: list[dict[str, Any]]) -> str:
+    review_summaries: list[str] = []
+    for record in feedback_records:
+        kind = str(record.get("kind") or "")
+        summary = str(record.get("summary") or "").strip()
+        if kind == "review_phase" and summary and summary not in review_summaries:
+            review_summaries.append(summary)
+
+    if review_summaries:
+        return "; ".join(review_summaries[:3])
+
+    fallback: list[str] = []
+    for snapshot in _story_handoff_snapshots(detail):
+        if snapshot["review_status"]:
+            fallback.append(f"{snapshot['title']}: review {snapshot['review_status']}")
+    if fallback:
+        return "; ".join(fallback[:3])
+    return "No linked review status recorded for this run."
+
+
+def _unresolved_risks(
+    detail: dict[str, Any],
+    outcome: ExecutionOutcomeBundle | None,
+) -> list[str]:
+    risks: list[str] = []
+    if outcome is not None:
+        for item in outcome.failure_modes:
+            message = str(item or "").strip()
+            if message and message not in risks:
+                risks.append(message)
+
+    for snapshot in _story_handoff_snapshots(detail):
+        ci_status = snapshot["ci_status"].lower()
+        review_status = snapshot["review_status"].lower()
+        handoff_status = snapshot["handoff_status"].lower()
+        if ci_status in {"failed", "failure", "error"}:
+            risks.append(f"{snapshot['title']}: CI status is {snapshot['ci_status']}")
+        if review_status in {"changes_requested", "blocked"}:
+            risks.append(f"{snapshot['title']}: review status is {snapshot['review_status']}")
+        if handoff_status in {"ci_failed", "changes_requested", "blocked"}:
+            risks.append(f"{snapshot['title']}: handoff status is {snapshot['handoff_status']}")
+
+    if int(detail.get("pending_tool_permission_runtime_count") or 0) > 0:
+        risks.append("Pending tool approvals remain open for this project.")
+
+    deduped: list[str] = []
+    for risk in risks:
+        if risk not in deduped:
+            deduped.append(risk)
+    return deduped[:5]
+
+
+def _operator_summary(
+    detail: dict[str, Any],
+    terminal_event: dict[str, Any] | None,
+    outcome: ExecutionOutcomeBundle | None,
+) -> str:
+    terminal_message = str((terminal_event or {}).get("message") or "").strip()
+    if terminal_message:
+        return terminal_message
+
+    last_message = str(detail.get("last_message") or "").strip()
+    if last_message:
+        return last_message
+
+    if outcome is not None:
+        return f"Execution finished with status {outcome.status.value} and verdict {outcome.verdict.value}."
+    return "Execution proof bundle was generated without a terminal summary."
+
+
+def _next_recommended_action(
+    outcome: ExecutionOutcomeBundle | None,
+    unresolved_risks: list[str],
+) -> str:
+    if unresolved_risks:
+        return "Resolve the remaining risks before promoting this execution further."
+    if outcome is None:
+        return "Rebuild the execution outcome bundle before promoting this execution."
+    if outcome.status == IdeaOutcomeStatus.VALIDATED and outcome.verdict == VerdictStatus.PASS:
+        return "Promote the validated result or open the next bounded execution slice."
+    if outcome.status == IdeaOutcomeStatus.STALLED:
+        return "Resume the run or resolve the blocking issue before continuing."
+    if outcome.verdict == VerdictStatus.FAIL:
+        return "Revise the brief or implementation plan, then rerun a narrower recovery slice."
+    return "Address the review feedback and rerun the next bounded execution slice."
+
+
+def _scoped_trace_entries(
+    trace_entries: list[dict[str, Any]],
+    run_id: str,
+) -> list[dict[str, Any]]:
+    if not run_id:
+        return trace_entries
+    scoped = [entry for entry in trace_entries if str(entry.get("run_id") or "").strip() == run_id]
+    return scoped or trace_entries
+
+
 def _failure_modes(
     feedback_records: list[dict[str, Any]],
     trace_monitor: dict[str, Any],
@@ -180,7 +313,11 @@ def _failure_modes(
         if message and message not in messages:
             messages.append(message)
     terminal_message = str((terminal_event or {}).get("message") or "").strip()
-    if terminal_message and terminal_message not in messages and str((terminal_event or {}).get("event") or "") == "run_failed":
+    if (
+        terminal_message
+        and terminal_message not in messages
+        and str((terminal_event or {}).get("event") or "") == "run_failed"
+    ):
         messages.append(terminal_message)
     return messages[:10]
 
@@ -284,11 +421,7 @@ def build_execution_outcome_bundle(config: AutopilotConfig, brief_id: str) -> Ex
     run_id = _resolve_run_id(detail, terminal_event)
     feedback_records = read_feedback_records(config, str(project["id"]), limit=800)
     if run_id:
-        scoped_feedback = [
-            record
-            for record in feedback_records
-            if str(record.get("run_id") or "").strip() == run_id
-        ]
+        scoped_feedback = [record for record in feedback_records if str(record.get("run_id") or "").strip() == run_id]
         if scoped_feedback:
             feedback_records = scoped_feedback
 
@@ -423,6 +556,7 @@ def maybe_refresh_execution_outcome_bundle_for_event(
             try:
                 outcome_payload = dump_shared_contract(bundle)
                 project_name = str(project.get("name") or project.get("id") or "")
+
                 def _mark_learning_applied() -> None:
                     if not initiative_id:
                         return
@@ -464,9 +598,7 @@ def load_execution_outcome_bundle(config: AutopilotConfig, brief_id: str) -> Exe
 # ---------------------------------------------------------------------------
 
 
-def build_execution_proof_bundle(
-    config: AutopilotConfig, brief_id: str
-) -> dict[str, Any] | None:
+def build_execution_proof_bundle(config: AutopilotConfig, brief_id: str) -> dict[str, Any] | None:
     """Build a founder-facing ``ExecutionProofBundle`` from project state.
 
     Aggregates outcome bundle, project detail, approvals, issues, CI/review
@@ -493,14 +625,20 @@ def build_execution_proof_bundle(
     # Trace / feedback data
     trace_entries = read_trace_entries(config, project_id, limit=4000)
     terminal_event = _latest_terminal_event(trace_entries)
-    _resolve_run_id(detail, terminal_event)
+    run_id = _resolve_run_id(detail, terminal_event)
+    trace_entries = _scoped_trace_entries(trace_entries, run_id)
+    terminal_event = _latest_terminal_event(trace_entries)
     feedback_records = read_feedback_records(config, project_id, limit=800)
+    if run_id:
+        scoped_feedback = [record for record in feedback_records if str(record.get("run_id") or "").strip() == run_id]
+        if scoped_feedback:
+            feedback_records = scoped_feedback
 
     # Changed files from trace
     changed_files: list[str] = []
     for entry in trace_entries:
-        if str(entry.get("event") or "") == "file_changed":
-            path = str(entry.get("path") or "").strip()
+        for key in ("path", "file_path", "artifact_path", "relpath"):
+            path = str(entry.get(key) or "").strip()
             if path and path not in changed_files:
                 changed_files.append(path)
 
@@ -518,14 +656,6 @@ def build_execution_proof_bundle(
         elif status in ("stuck", "merge_blocked"):
             tests_failed += 1
 
-    # CI / review summaries from feedback
-    review_summaries: list[str] = []
-    for record in feedback_records:
-        kind = str(record.get("kind") or "")
-        summary = str(record.get("summary") or "").strip()
-        if kind == "review_phase" and summary:
-            review_summaries.append(summary)
-
     # Approvals
     approvals: list[str] = []
     v2_meta = get_execution_brief_v2_metadata(project)
@@ -535,10 +665,20 @@ def build_execution_proof_bundle(
     # Linked issues
     linked_issues: list[str] = []
     for entry in trace_entries:
-        if str(entry.get("event") or "") in ("issue_opened", "issue_linked"):
-            issue_ref = str(entry.get("issue_ref") or entry.get("url") or "").strip()
+        if str(entry.get("event") or "") in {
+            "execution_issue_created",
+            "execution_issue_resolved",
+            "issue_linked",
+        }:
+            issue_ref = str(entry.get("issue_id") or entry.get("issue_ref") or entry.get("url") or "").strip()
             if issue_ref and issue_ref not in linked_issues:
                 linked_issues.append(issue_ref)
+
+    ci_summary = _ci_summary(detail)
+    review_summary = _review_summary(detail, feedback_records)
+    unresolved_risks = _unresolved_risks(detail, outcome)
+    operator_summary = _operator_summary(detail, terminal_event, outcome)
+    next_recommended_action = _next_recommended_action(outcome, unresolved_risks)
 
     # Build proof bundle
     initiative_id = str(v2_meta.get("initiative_id") or metadata.get("initiative_id") or metadata.get("idea_id") or "")
@@ -554,17 +694,17 @@ def build_execution_proof_bundle(
         tests_executed=tests_executed,
         tests_passed=tests_passed,
         tests_failed=tests_failed,
-        ci_summary="",
-        review_summary="; ".join(review_summaries[:3]) if review_summaries else "",
+        ci_summary=ci_summary,
+        review_summary=review_summary,
         approvals=approvals,
         linked_issues=linked_issues,
-        unresolved_risks=[],
+        unresolved_risks=unresolved_risks,
         shipped_artifacts=outcome.shipped_artifacts if outcome else [],
         outcome_status=outcome.status.value if outcome else "",
         outcome_verdict=outcome.verdict.value if outcome else "",
         failure_modes=outcome.failure_modes if outcome else [],
         lessons_learned=outcome.lessons_learned if outcome else [],
-        operator_summary="",
-        next_recommended_action="",
+        operator_summary=operator_summary,
+        next_recommended_action=next_recommended_action,
     )
     return bundle.model_dump(mode="json")

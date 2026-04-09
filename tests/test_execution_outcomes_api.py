@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 from autopilot.api.routes import execution_outcomes as execution_outcomes_routes
 from autopilot.api.routes import projects as projects_routes
 from autopilot.core.config import AutopilotConfig
+from autopilot.core.evals.feedback import append_feedback_record
 from autopilot.core.execution_outcomes import execution_outcome_path
 from autopilot.core.initiative_lineage import load_initiative_lineage
 from autopilot.core.project_store import emit_project_event, load_project_state, save_project_state
@@ -202,7 +203,61 @@ def test_execution_outcome_and_proof_routes_support_v2_projects(
     state["cost_usage"]["project"]["estimated_cost_usd"] = 2.75
     state["cost_usage"]["run"]["estimated_cost_usd"] = 2.75
     state["story_state"]["1"]["status"] = "done"
+    state["story_state"]["1"]["github_pr"] = {
+        "number": 44,
+        "url": "https://github.com/example/repo/pull/44",
+        "ci_status": "success",
+        "review_status": "approved",
+        "handoff_status": "approved_and_green",
+    }
     save_project_state(config, project_id, state)
+
+    emit_project_event(
+        config,
+        project_id,
+        event="artifact_generated",
+        status="ok",
+        message="Generated src/app.py",
+        story_id=1,
+        extra={"path": "src/app.py"},
+    )
+
+    emit_project_event(
+        config,
+        project_id,
+        event="execution_issue_created",
+        status="high",
+        message="GitHub checks needed follow-up",
+        story_id=1,
+        extra={"issue_id": "iss_123"},
+    )
+
+    append_feedback_record(
+        config,
+        project_id,
+        {
+            "feedback_id": "fb-old-run",
+            "run_id": "sess_old_run",
+            "story_id": 1,
+            "iteration": 1,
+            "kind": "review_phase",
+            "summary": "Old run requested changes.",
+            "approved": False,
+        },
+    )
+    append_feedback_record(
+        config,
+        project_id,
+        {
+            "feedback_id": "fb-current-run",
+            "run_id": "sess_outcome_v2_1",
+            "story_id": 1,
+            "iteration": 2,
+            "kind": "review_phase",
+            "summary": "Current run approved for release.",
+            "approved": True,
+        },
+    )
 
     emit_project_event(
         config,
@@ -229,6 +284,12 @@ def test_execution_outcome_and_proof_routes_support_v2_projects(
     assert proof_bundle["brief_id"] == "brief_outcome_v2_1"
     assert proof_bundle["initiative_id"] == "idea_outcome_v2_1"
     assert proof_bundle["outcome_status"] == "validated"
+    assert "src/app.py" in proof_bundle["changed_files"]
+    assert "iss_123" in proof_bundle["linked_issues"]
+    assert "CI success" in proof_bundle["ci_summary"]
+    assert proof_bundle["review_summary"] == "Current run approved for release."
+    assert proof_bundle["operator_summary"] == "V2 run completed."
+    assert proof_bundle["next_recommended_action"]
 
     assert len(dispatched) == 1
     assert dispatched[0]["idea_id"] == "idea_outcome_v2_1"
