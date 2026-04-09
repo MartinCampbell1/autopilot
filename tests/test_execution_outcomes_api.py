@@ -11,11 +11,22 @@ from fastapi.testclient import TestClient
 
 from autopilot.api.routes import execution_outcomes as execution_outcomes_routes
 from autopilot.api.routes import projects as projects_routes
+from autopilot.cli.run import _mark_run_finished
+from autopilot.core.github_reactions import ingest_story_github_reaction, sync_story_github_pr
 from autopilot.core.config import AutopilotConfig
 from autopilot.core.evals.feedback import append_feedback_record
 from autopilot.core.execution_outcomes import execution_outcome_path
 from autopilot.core.initiative_lineage import load_initiative_lineage
-from autopilot.core.project_store import emit_project_event, load_project_state, save_project_state
+from autopilot.core.project_store import (
+    auto_pause_project_run,
+    emit_project_event,
+    load_project_state,
+    save_project_state,
+)
+from autopilot.core.runtime_agent_tasks import (
+    create_or_reuse_runtime_agent_task,
+    link_runtime_agent_task_run,
+)
 
 
 class _FakeManager:
@@ -320,3 +331,196 @@ def test_execution_outcome_and_proof_routes_support_v2_projects(
     assert lineage is not None
     assert lineage.lifecycle_state.value == "learning_applied"
     assert lineage.outcome_id == bundle["outcome_id"]
+
+
+@patch("autopilot.core.execution_plane.generate_prd_from_spec")
+def test_execution_proof_bundle_keeps_github_event_snapshots_when_agent_action_run_id_is_present(
+    mock_generate_prd_from_spec,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    client = _build_client(config, monkeypatch)
+    mock_generate_prd_from_spec.return_value = {
+        "title": "Execution Outcome Export Brief V2",
+        "description": "Project created from canonical V2 brief.",
+        "stories": [{"id": 1, "title": "Ship", "description": "Finish the project"}],
+    }
+
+    monkeypatch.setattr("autopilot.core.execution_outcomes.dispatch_learning_postback", lambda **kwargs: None)
+
+    create_response = client.post(
+        "/api/projects/from-brief-v2",
+        json={
+            "brief": _v2_brief_payload(),
+            "project_path": str(tmp_path / "execution-outcome-v2-agent-run-project"),
+            "priority": "high",
+            "launch": False,
+        },
+    )
+
+    assert create_response.status_code == 200, create_response.text
+    project_id = create_response.json()["project"]["project_id"]
+
+    state = load_project_state(config, project_id)
+    state["runtime_session_id"] = "sess_runtime_scope_1"
+    state["started_at"] = "2026-04-05T10:00:00+00:00"
+    state["cost_usage"]["project"]["estimated_cost_usd"] = 1.0
+    state["cost_usage"]["run"]["estimated_cost_usd"] = 1.0
+    state["story_state"]["1"]["status"] = "done"
+    save_project_state(config, project_id, state)
+
+    emit_project_event(
+        config,
+        project_id,
+        event="run_completed",
+        status="completed",
+        message="Runtime-scoped run completed.",
+        story_id=1,
+    )
+
+    sync_story_github_pr(
+        config,
+        project_id=project_id,
+        story_id=1,
+        payload={
+            "number": 55,
+            "url": "https://github.com/example/repo/pull/55",
+            "ci_status": "success",
+            "review_status": "approved",
+            "handoff_status": "approved_and_green",
+        },
+        actor="github",
+        agent_action_run_id="aar_123",
+        emit_event_record=True,
+    )
+
+    proof_response = client.get("/api/execution-outcomes/brief_outcome_v2_1/proof")
+    assert proof_response.status_code == 200, proof_response.text
+    proof_bundle = proof_response.json()["proof_bundle"]
+    assert "CI success" in proof_bundle["ci_summary"]
+    assert "approved" in proof_bundle["review_summary"]
+
+
+@patch("autopilot.core.execution_plane.generate_prd_from_spec")
+def test_execution_outcome_bundle_supports_cli_mark_run_finished_success_path(
+    mock_generate_prd_from_spec,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    client = _build_client(config, monkeypatch)
+    mock_generate_prd_from_spec.return_value = {
+        "title": "Execution Outcome Export Brief V2",
+        "description": "Project created from canonical V2 brief.",
+        "stories": [{"id": 1, "title": "Ship", "description": "Finish the project"}],
+    }
+
+    monkeypatch.setattr("autopilot.core.execution_outcomes.dispatch_learning_postback", lambda **kwargs: None)
+
+    create_response = client.post(
+        "/api/projects/from-brief-v2",
+        json={
+            "brief": _v2_brief_payload(),
+            "project_path": str(tmp_path / "execution-outcome-v2-cli-project"),
+            "priority": "high",
+            "launch": False,
+        },
+    )
+
+    assert create_response.status_code == 200, create_response.text
+    project_id = create_response.json()["project"]["project_id"]
+
+    state = load_project_state(config, project_id)
+    state["runtime_session_id"] = "sess_cli_finish_1"
+    state["started_at"] = "2026-04-05T11:00:00+00:00"
+    state["cost_usage"]["project"]["estimated_cost_usd"] = 3.5
+    state["cost_usage"]["run"]["estimated_cost_usd"] = 3.5
+    state["story_state"]["1"]["status"] = "done"
+    save_project_state(config, project_id, state)
+
+    _mark_run_finished(config, project_id, failed=False, message="All stories completed.")
+
+    outcome_response = client.get("/api/execution-outcomes/brief_outcome_v2_1")
+    assert outcome_response.status_code == 200, outcome_response.text
+    outcome_bundle = outcome_response.json()["bundle"]
+    assert outcome_bundle["status"] == "validated"
+    assert outcome_bundle["verdict"] == "pass"
+
+    proof_response = client.get("/api/execution-outcomes/brief_outcome_v2_1/proof")
+    assert proof_response.status_code == 200, proof_response.text
+    proof_bundle = proof_response.json()["proof_bundle"]
+    assert proof_bundle["operator_summary"] == "All stories completed."
+    assert proof_bundle["next_recommended_action"]
+
+
+@patch("autopilot.core.execution_plane.generate_prd_from_spec")
+def test_execution_proof_bundle_keeps_post_pause_github_issue_context_on_same_run(
+    mock_generate_prd_from_spec,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config = AutopilotConfig(autopilot_home_override=str(tmp_path / ".autopilot"))
+    client = _build_client(config, monkeypatch)
+    mock_generate_prd_from_spec.return_value = {
+        "title": "Execution Outcome Export Brief V2",
+        "description": "Project created from canonical V2 brief.",
+        "stories": [{"id": 1, "title": "Ship", "description": "Finish the project"}],
+    }
+
+    monkeypatch.setattr("autopilot.core.execution_outcomes.dispatch_learning_postback", lambda **kwargs: None)
+
+    create_response = client.post(
+        "/api/projects/from-brief-v2",
+        json={
+            "brief": _v2_brief_payload(),
+            "project_path": str(tmp_path / "execution-outcome-v2-paused-project"),
+            "priority": "high",
+            "launch": False,
+        },
+    )
+
+    assert create_response.status_code == 200, create_response.text
+    project_id = create_response.json()["project"]["project_id"]
+
+    state = load_project_state(config, project_id)
+    state["runtime_session_id"] = "sess_pause_scope_1"
+    state["started_at"] = "2026-04-05T12:00:00+00:00"
+    state["cost_usage"]["project"]["estimated_cost_usd"] = 4.0
+    state["cost_usage"]["run"]["estimated_cost_usd"] = 4.0
+    state["story_state"]["1"]["status"] = "in_progress"
+    save_project_state(config, project_id, state)
+
+    task = create_or_reuse_runtime_agent_task(
+        config,
+        project_id=project_id,
+        command="resume",
+        actor="github",
+        runtime_agent_ids=["agent-2"],
+    )
+    link_runtime_agent_task_run(config, task.id, agent_action_run_id="aar_pause_1")
+
+    auto_pause_project_run(
+        config,
+        project_id,
+        message="Budget exhausted for this run.",
+        story_id=1,
+    )
+
+    payload = ingest_story_github_reaction(
+        config,
+        project_id=project_id,
+        story_id=1,
+        reaction_type="approved_and_green",
+        actor="github",
+        agent_action_run_id="aar_pause_1",
+    )
+
+    proof_response = client.get("/api/execution-outcomes/brief_outcome_v2_1/proof")
+    assert proof_response.status_code == 200, proof_response.text
+    proof_bundle = proof_response.json()["proof_bundle"]
+    assert "CI green" in proof_bundle["ci_summary"]
+    assert payload["issue"] is not None
+    assert payload["issue"]["id"] in proof_bundle["linked_issues"]
+    assert payload["approval"] is not None
+    assert payload["approval"]["id"] in proof_bundle["approvals"]

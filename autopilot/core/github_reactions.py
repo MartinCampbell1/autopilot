@@ -19,6 +19,7 @@ from autopilot.core.project_store import (
     resume_project_run,
     update_story_runtime,
 )
+from autopilot.core.runtime_agent_tasks import list_runtime_agent_tasks
 from autopilot.core.runtime_agents import resolve_story_runtime_agent_id
 
 SUPPORTED_GITHUB_REACTION_TYPES = {
@@ -43,7 +44,11 @@ def _load_project_and_story(
         raise KeyError(project_id)
     state = ensure_project_state(config, project, seed_mode="migrate")
     story = next(
-        (item for item in load_project_prd(project, seed_mode="migrate").get("stories", []) if int(item["id"]) == int(story_id)),
+        (
+            item
+            for item in load_project_prd(project, seed_mode="migrate").get("stories", [])
+            if int(item["id"]) == int(story_id)
+        ),
         None,
     )
     if story is None:
@@ -83,6 +88,7 @@ def _github_event_extra(
     orchestrator_session_id: str,
     agent_action_run_id: str,
     runtime_agent_id: str,
+    run_id: str = "",
     details: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     extra = {
@@ -103,7 +109,8 @@ def _github_event_extra(
         extra["orchestrator_session_id"] = orchestrator_session_id.strip()
     if agent_action_run_id.strip():
         extra["agent_action_run_id"] = agent_action_run_id.strip()
-        extra["run_id"] = agent_action_run_id.strip()
+    if run_id.strip():
+        extra["run_id"] = run_id.strip()
     if runtime_agent_id.strip():
         extra["runtime_agent_id"] = runtime_agent_id.strip()
         extra["runtime_agent_ids"] = [runtime_agent_id.strip()]
@@ -151,6 +158,11 @@ def sync_story_github_pr(
     """Persist story-scoped GitHub PR metadata and optionally emit a sync event."""
 
     project, story, runtime_story = _load_project_and_story(config, project_id, story_id)
+    resolved_run_id = _resolve_project_run_id(
+        config,
+        project_id=project_id,
+        agent_action_run_id=agent_action_run_id,
+    )
     github_pr = normalize_story_github_pr(
         project["name"],
         story,
@@ -183,6 +195,7 @@ def sync_story_github_pr(
                 orchestrator_session_id=orchestrator_session_id,
                 agent_action_run_id=agent_action_run_id,
                 runtime_agent_id=resolved_runtime_agent_id,
+                run_id=resolved_run_id,
             ),
         )
     _link_session_entities(
@@ -200,24 +213,31 @@ def _reaction_payload(reaction_type: str, details: dict[str, Any] | None = None)
         "latest_event": reaction_type,
         "updated_at": _utcnow_iso(),
     }
-    payload.update({key: value for key, value in details.items() if key in {
-        "number",
-        "url",
-        "title",
-        "state",
-        "base_branch",
-        "head_branch",
-        "draft",
-        "author",
-        "labels",
-        "comment_count",
-        "review_comment_count",
-        "last_commit_sha",
-        "checks_url",
-        "opened_at",
-        "merged_at",
-        "closed_at",
-    }})
+    payload.update(
+        {
+            key: value
+            for key, value in details.items()
+            if key
+            in {
+                "number",
+                "url",
+                "title",
+                "state",
+                "base_branch",
+                "head_branch",
+                "draft",
+                "author",
+                "labels",
+                "comment_count",
+                "review_comment_count",
+                "last_commit_sha",
+                "checks_url",
+                "opened_at",
+                "merged_at",
+                "closed_at",
+            }
+        }
+    )
     if reaction_type == "ci_failed":
         payload.update({"ci_status": "red", "merge_state": "blocked"})
     elif reaction_type == "review_comment_received":
@@ -255,7 +275,13 @@ def _reaction_message(reaction_type: str, github_pr: dict[str, Any], summary: st
         message = f"GitHub review requested changes for {target}."
     else:
         message = f"GitHub {target} is approved and green."
-    status = "error" if reaction_type == "ci_failed" else "warning" if reaction_type in {"review_comment_received", "changes_requested"} else "ok"
+    status = (
+        "error"
+        if reaction_type == "ci_failed"
+        else "warning"
+        if reaction_type in {"review_comment_received", "changes_requested"}
+        else "ok"
+    )
     return message, status
 
 
@@ -276,6 +302,27 @@ def _matching_story_issue_ids(
         for issue in list_issues(config, project_id=project_id)
         if issue.story_id == story_id and issue.category in categories
     ]
+
+
+def _resolve_project_run_id(
+    config: AutopilotConfig,
+    *,
+    project_id: str,
+    agent_action_run_id: str = "",
+) -> str:
+    normalized_agent_action_run_id = str(agent_action_run_id or "").strip()
+    if normalized_agent_action_run_id:
+        for task in list_runtime_agent_tasks(
+            config,
+            project_id=project_id,
+            agent_action_run_id=normalized_agent_action_run_id,
+        ):
+            task_run_id = str((task.metadata or {}).get("project_runtime_session_id") or "").strip()
+            if task_run_id:
+                return task_run_id
+
+    state = load_project_state(config, project_id)
+    return str(state.get("runtime_session_id") or state.get("last_runtime_session_id") or "").strip()
 
 
 def ingest_story_github_reaction(
@@ -301,6 +348,11 @@ def ingest_story_github_reaction(
         )
 
     project, story, runtime_story = _load_project_and_story(config, project_id, story_id)
+    resolved_run_id = _resolve_project_run_id(
+        config,
+        project_id=project_id,
+        agent_action_run_id=agent_action_run_id,
+    )
     resolved_runtime_agent_id = _resolve_runtime_agent_id(
         project_id,
         story_id,
@@ -331,6 +383,7 @@ def ingest_story_github_reaction(
             orchestrator_session_id=orchestrator_session_id,
             agent_action_run_id=agent_action_run_id,
             runtime_agent_id=resolved_runtime_agent_id,
+            run_id=resolved_run_id,
             details=dict(details or {}),
         ),
     )
@@ -372,6 +425,7 @@ def ingest_story_github_reaction(
                     orchestrator_session_id=orchestrator_session_id,
                     agent_action_run_id=agent_action_run_id,
                     runtime_agent_id=resolved_runtime_agent_id,
+                    run_id=resolved_run_id,
                 ),
             )
         else:
@@ -379,15 +433,14 @@ def ingest_story_github_reaction(
             if founder_gate_error:
                 policy_reasons.append(founder_gate_error)
             else:
-                policy_reasons.append(
-                    "GitHub approved-and-green auto-resume is disabled by project policy."
-                )
+                policy_reasons.append("GitHub approved-and-green auto-resume is disabled by project policy.")
             issue = create_execution_command_issue(
                 config,
                 project_id=project_id,
                 command="resume",
                 requested_by=actor,
-                reason=founder_gate_error or "GitHub PR is approved and green, but project resume still requires operator approval.",
+                reason=founder_gate_error
+                or "GitHub PR is approved and green, but project resume still requires operator approval.",
                 policy_reasons=policy_reasons,
                 runtime_agent_ids=[resolved_runtime_agent_id] if resolved_runtime_agent_id else [],
             )
@@ -417,6 +470,7 @@ def ingest_story_github_reaction(
                         orchestrator_session_id=orchestrator_session_id,
                         agent_action_run_id=agent_action_run_id,
                         runtime_agent_id=resolved_runtime_agent_id,
+                        run_id=resolved_run_id,
                     ),
                     "issue_id": issue["id"],
                     "approval_id": approval["id"],

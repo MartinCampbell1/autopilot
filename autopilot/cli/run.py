@@ -246,9 +246,7 @@ def _write_team_context(
                 **runtime_plan,
                 "shared_discoveries": discovery_board,
                 "shared_discovery_summary": kind_counts,
-                "team_messages_path": str(
-                    team_messages_path(project_path).relative_to(project_path)
-                ),
+                "team_messages_path": str(team_messages_path(project_path).relative_to(project_path)),
                 "shared_message_summary": message_counts,
                 "communication_law": {
                     "explicit_teammate_channel": ".ralph/team-messages.json",
@@ -608,9 +606,12 @@ def _emit_worker_progress(
 
 def _mark_run_finished(config, project_id: str, *, failed: bool, message: str) -> None:
     state = load_project_state(config, project_id)
+    run_id = str(state.get("runtime_session_id") or "").strip()
+    finished_at = state.get("finished_at") or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     state.update(
         {
             "pid": None,
+            "last_runtime_session_id": run_id,
             "runtime_session_id": "",
             "paused": False,
             "active_worker": None,
@@ -619,16 +620,17 @@ def _mark_run_finished(config, project_id: str, *, failed: bool, message: str) -
             "current_iteration": 0,
             "parallel_story_ids": [],
             "status": "failed" if failed else "completed",
-            "finished_at": state.get("finished_at") or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "finished_at": finished_at,
         }
     )
     save_project_state(config, project_id, state)
     emit_project_event(
         config,
         project_id,
-        event="run_failed" if failed else "run_finished",
+        event="run_failed" if failed else "run_completed",
         status="failed" if failed else "completed",
         message=message,
+        extra={"run_id": run_id, "finished_at": finished_at} if run_id else {"finished_at": finished_at},
     )
 
 
@@ -856,7 +858,9 @@ def _run_impl(
         with state_lock:
             return update_story_runtime(config, project_id, story_id, **fields)
 
-    def record_costs(story_id: int, worker_label: str, critic_label: str, orchestrator: Orchestrator) -> dict[str, Any] | None:
+    def record_costs(
+        story_id: int, worker_label: str, critic_label: str, orchestrator: Orchestrator
+    ) -> dict[str, Any] | None:
         if not orchestrator.iteration_history:
             return None
         with state_lock:
@@ -908,7 +912,9 @@ def _run_impl(
         except Exception:
             pass
 
-    def sync_event(*, event: str, status: str, message: str, story_id: int | None = None, extra: dict[str, Any] | None = None) -> dict[str, Any]:
+    def sync_event(
+        *, event: str, status: str, message: str, story_id: int | None = None, extra: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
         with state_lock:
             return emit_project_event(
                 config,
@@ -1012,8 +1018,7 @@ def _run_impl(
             if worker_profile is None:
                 return None
             critic_profile = (
-                account_mgr.get_next(selected_provider, preferred_name=selected_provider_config_id)
-                or worker_profile
+                account_mgr.get_next(selected_provider, preferred_name=selected_provider_config_id) or worker_profile
             )
             return worker_profile, critic_profile
 
@@ -1063,7 +1068,11 @@ def _run_impl(
 
     def unregister_parallel_story(story_id: int) -> None:
         current_state = load_project_state(config, project_id)
-        active_ids = [active_story_id for active_story_id in (current_state.get("parallel_story_ids") or []) if active_story_id != story_id]
+        active_ids = [
+            active_story_id
+            for active_story_id in (current_state.get("parallel_story_ids") or [])
+            if active_story_id != story_id
+        ]
         sync_project(
             parallel_story_ids=active_ids,
             current_story_id=active_ids[0] if active_ids else None,
@@ -1368,10 +1377,7 @@ def _run_impl(
 
         def story_github_pr(**incoming: Any) -> dict[str, Any]:
             existing = (
-                load_project_state(config, project_id)
-                .get("story_state", {})
-                .get(str(story_id), {})
-                .get("github_pr")
+                load_project_state(config, project_id).get("story_state", {}).get(str(story_id), {}).get("github_pr")
                 or {}
             )
             return normalize_story_github_pr(
@@ -1470,7 +1476,9 @@ def _run_impl(
                         "role": story_lease.role,
                         "owner": story_lease.owner,
                         "acquired_at": story_lease.acquired_at,
-                    } if story_lease is not None else None,
+                    }
+                    if story_lease is not None
+                    else None,
                     github_pr=story_github_pr(
                         head_branch=planned_story_branch,
                         merge_state="blocked",
@@ -1531,7 +1539,9 @@ def _run_impl(
                 "role": story_lease.role,
                 "owner": story_lease.owner,
                 "acquired_at": story_lease.acquired_at,
-            } if story_lease is not None else None,
+            }
+            if story_lease is not None
+            else None,
             github_pr=story_github_pr(
                 head_branch=branch_name or planned_story_branch,
                 merge_state="not_ready",
@@ -1548,7 +1558,9 @@ def _run_impl(
         sync_project(
             status="running",
             paused=False,
-            current_story_id=story_id if not parallel_slot else load_project_state(config, project_id).get("current_story_id"),
+            current_story_id=story_id
+            if not parallel_slot
+            else load_project_state(config, project_id).get("current_story_id"),
             current_iteration=0,
             active_worker=None,
             active_critic=None,
@@ -1598,7 +1610,9 @@ def _run_impl(
                 completed_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                 last_error=message,
                 ownership=None,
-                checkout=None if execution_path != project else {
+                checkout=None
+                if execution_path != project
+                else {
                     "mode": planned_checkout_mode,
                     "path": str(execution_path),
                     "branch_name": branch_name,
@@ -1639,7 +1653,7 @@ def _run_impl(
             return "stuck"
 
         story_project_entry = {**project_entry, "path": str(execution_path)}
-        story_quality_policy = (load_project_state(config, project_id).get("quality_policy") or {})
+        story_quality_policy = load_project_state(config, project_id).get("quality_policy") or {}
         story_orchestrator = Orchestrator(
             project_path=execution_path,
             config=config,
@@ -1799,7 +1813,13 @@ def _run_impl(
                     review_phases=runtime_plan.get("review_phases") or [],
                     retry_only=iteration > 1,
                     ralph_prd_path=ralph_prd_path,
-                    progress_callback=lambda elapsed_sec, detail, *, _story_id=story_id, _iteration=iteration, _worker=worker_label, _critic=critic_label: (
+                    progress_callback=lambda elapsed_sec,
+                    detail,
+                    *,
+                    _story_id=story_id,
+                    _iteration=iteration,
+                    _worker=worker_label,
+                    _critic=critic_label: (
                         touch_story_lease(status="active"),
                         _emit_worker_progress(
                             config,
@@ -1894,7 +1914,10 @@ def _run_impl(
                         ),
                         pipeline_state=_set_pipeline_stage_status(
                             _set_pipeline_stage_status(
-                                load_project_state(config, project_id).get("story_state", {}).get(str(story_id), {}).get("pipeline_state")
+                                load_project_state(config, project_id)
+                                .get("story_state", {})
+                                .get(str(story_id), {})
+                                .get("pipeline_state")
                                 or _pipeline_state_for_runtime_plan(runtime_plan),
                                 stage="implement",
                                 status="completed",
@@ -1909,7 +1932,9 @@ def _run_impl(
                         checkout=None,
                     )
                     sync_project(
-                        current_story_id=None if not parallel_slot else load_project_state(config, project_id).get("current_story_id"),
+                        current_story_id=None
+                        if not parallel_slot
+                        else load_project_state(config, project_id).get("current_story_id"),
                         current_iteration=0,
                         active_worker=None,
                         active_critic=None,
@@ -1971,7 +1996,10 @@ def _run_impl(
                         last_error=message,
                         pipeline_state=_set_pipeline_stage_status(
                             _set_pipeline_stage_status(
-                                load_project_state(config, project_id).get("story_state", {}).get(str(story_id), {}).get("pipeline_state")
+                                load_project_state(config, project_id)
+                                .get("story_state", {})
+                                .get(str(story_id), {})
+                                .get("pipeline_state")
                                 or _pipeline_state_for_runtime_plan(runtime_plan),
                                 stage="implement",
                                 status="failed",
@@ -2052,13 +2080,9 @@ def _run_impl(
                         extra=iteration_extra,
                     )
                     sync_project(last_error=message)
-                    current_pipeline_state = (
-                        load_project_state(config, project_id)
-                        .get("story_state", {})
-                        .get(str(story_id), {})
-                        .get("pipeline_state")
-                        or _pipeline_state_for_runtime_plan(runtime_plan)
-                    )
+                    current_pipeline_state = load_project_state(config, project_id).get("story_state", {}).get(
+                        str(story_id), {}
+                    ).get("pipeline_state") or _pipeline_state_for_runtime_plan(runtime_plan)
                     if outcome == StoryOutcome.CRITIC_REJECTED:
                         next_pipeline_state = _set_pipeline_stage_status(
                             _set_pipeline_stage_status(
@@ -2240,9 +2264,7 @@ def _run_impl(
 
             if not open_stories:
                 stories = state.get("story_state", {}).values()
-                has_stuck = any(
-                    story_state.get("status") in {"stuck", "merge_blocked"} for story_state in stories
-                )
+                has_stuck = any(story_state.get("status") in {"stuck", "merge_blocked"} for story_state in stories)
                 has_blocked = any(
                     story_state.get("status", "open") == "open" and story_state.get("blocked_on")
                     for story_state in stories
@@ -2291,14 +2313,27 @@ def _run_impl(
                 break
     except Exception as exc:  # pragma: no cover - defensive top-level sync
         failure = exc
-        update_project_runtime(config, project_id, status="failed", last_error=str(exc), pid=None, runtime_session_id="")
+        failure_state = load_project_state(config, project_id)
+        failed_run_id = str((failure_state or {}).get("runtime_session_id") or "").strip()
+        update_project_runtime(
+            config,
+            project_id,
+            status="failed",
+            last_error=str(exc),
+            pid=None,
+            runtime_session_id="",
+            last_runtime_session_id=failed_run_id,
+        )
         emit_project_event(
             config,
             project_id,
             event="run_failed",
             status="failed",
             message=str(exc),
-            extra={"exception_type": type(exc).__name__},
+            extra={
+                "exception_type": type(exc).__name__,
+                **({"run_id": failed_run_id} if failed_run_id else {}),
+            },
         )
         _emit_runtime_message(
             headless=headless,

@@ -1,6 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useRef, type Dispatch, type SetStateAction } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  type Dispatch,
+  type SetStateAction,
+} from "react";
 import {
   fetchAccountsHealth,
   fetchExecutionPlaneAgentDetail,
@@ -49,12 +55,23 @@ const OVERVIEW_REFRESH_EVENTS = new Set([
   "project_created",
   "project_archived",
   "run_started",
+  "run_completed",
   "run_finished",
   "run_failed",
   "paused",
   "resumed",
   "budget_paused",
   "interrupt_paused",
+  "github_pr_synced",
+  "github_pr_merged",
+  "github_ci_failed",
+  "github_review_comment_received",
+  "github_changes_requested",
+  "github_approved_and_green",
+  "github_auto_resumed",
+  "github_auto_resume_approval_requested",
+  "execution_issue_created",
+  "execution_issue_resolved",
   "execution_plane_orchestrator_session_created",
   "execution_plane_orchestrator_session_updated",
   "execution_plane_orchestrator_session_recommendation_applied",
@@ -90,7 +107,7 @@ const CONTROL_PLANE_SSE_EVENT_TYPES = Array.from(
     ...OVERVIEW_REFRESH_EVENTS,
     ...SESSION_DETAIL_REFRESH_EVENTS,
     ...AGENT_DETAIL_REFRESH_EVENTS,
-  ])
+  ]),
 );
 
 const REFRESH_COALESCE_DELAY_MS = 300;
@@ -107,7 +124,9 @@ function stringValue(value: unknown): string {
 
 function stringArray(value: unknown): string[] {
   return Array.isArray(value)
-    ? value.map((item) => (typeof item === "string" ? item.trim() : "")).filter(Boolean)
+    ? value
+        .map((item) => (typeof item === "string" ? item.trim() : ""))
+        .filter(Boolean)
     : [];
 }
 
@@ -129,13 +148,21 @@ function eventReferencesAgent(data: unknown, runtimeAgentId: string): boolean {
   return stringArray(payload.runtime_agent_ids).includes(runtimeAgentId);
 }
 
-function shouldRefreshSelectedSession(event: string, data: unknown, sessionId: string): boolean {
+function shouldRefreshSelectedSession(
+  event: string,
+  data: unknown,
+  sessionId: string,
+): boolean {
   if (!sessionId || !SESSION_DETAIL_REFRESH_EVENTS.has(event)) return false;
   if (eventReferencesSession(data, sessionId)) return true;
   return false;
 }
 
-function shouldRefreshSelectedAgent(event: string, data: unknown, runtimeAgentId: string): boolean {
+function shouldRefreshSelectedAgent(
+  event: string,
+  data: unknown,
+  runtimeAgentId: string,
+): boolean {
   if (!runtimeAgentId || !AGENT_DETAIL_REFRESH_EVENTS.has(event)) return false;
   return eventReferencesAgent(data, runtimeAgentId);
 }
@@ -152,13 +179,23 @@ type UseControlPlaneDataLoaderArgs = {
   setHealth: Dispatch<SetStateAction<AccountHealth | null>>;
   setProjects: Dispatch<SetStateAction<ProjectSummary[]>>;
   setControlPasses: Dispatch<SetStateAction<OrchestratorControlPassRecord[]>>;
-  setControlSummary: Dispatch<SetStateAction<OrchestratorControlPassSummary | null>>;
+  setControlSummary: Dispatch<
+    SetStateAction<OrchestratorControlPassSummary | null>
+  >;
   setSessions: Dispatch<SetStateAction<OrchestratorSessionRecord[]>>;
-  setSessionSummary: Dispatch<SetStateAction<OrchestratorSessionSummary | null>>;
-  setControlProfiles: Dispatch<SetStateAction<OrchestratorSessionControlProfile[]>>;
+  setSessionSummary: Dispatch<
+    SetStateAction<OrchestratorSessionSummary | null>
+  >;
+  setControlProfiles: Dispatch<
+    SetStateAction<OrchestratorSessionControlProfile[]>
+  >;
   setErrorMessage: Dispatch<SetStateAction<string>>;
-  setSelectedSession: Dispatch<SetStateAction<OrchestratorSessionDetail | null>>;
-  setSelectedAgent: Dispatch<SetStateAction<ExecutionRuntimeAgentDetail | null>>;
+  setSelectedSession: Dispatch<
+    SetStateAction<OrchestratorSessionDetail | null>
+  >;
+  setSelectedAgent: Dispatch<
+    SetStateAction<ExecutionRuntimeAgentDetail | null>
+  >;
   setSelectedRunId: Dispatch<SetStateAction<string>>;
   setSelectedPassId: Dispatch<SetStateAction<string>>;
 };
@@ -181,13 +218,23 @@ export function useControlPlaneDataLoader({
   setSelectedRunId,
   setSelectedPassId,
 }: UseControlPlaneDataLoaderArgs) {
-  const projectIdsRef = useRef<string[]>(projects.map((project) => project.id).filter(Boolean));
-  const sessionIdsRef = useRef<string[]>(sessions.map((session) => session.id).filter(Boolean));
+  const projectIdsRef = useRef<string[]>(
+    projects.map((project) => project.id).filter(Boolean),
+  );
+  const sessionIdsRef = useRef<string[]>(
+    sessions.map((session) => session.id).filter(Boolean),
+  );
   const selectedSessionIdRef = useRef(selectedSessionId);
   const selectedAgentIdRef = useRef(selectedAgentId);
-  const overviewRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const sessionRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const agentRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const overviewRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
+  const sessionRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
+  const agentRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
   const scheduleOverviewRefreshRef = useRef<() => void>(() => {});
   const scheduleSessionRefreshRef = useRef<() => void>(() => {});
   const scheduleAgentRefreshRef = useRef<() => void>(() => {});
@@ -199,11 +246,15 @@ export function useControlPlaneDataLoader({
   const agentRefreshQueuedRef = useRef(false);
 
   useEffect(() => {
-    projectIdsRef.current = projects.map((project) => project.id).filter(Boolean);
+    projectIdsRef.current = projects
+      .map((project) => project.id)
+      .filter(Boolean);
   }, [projects]);
 
   useEffect(() => {
-    sessionIdsRef.current = sessions.map((session) => session.id).filter(Boolean);
+    sessionIdsRef.current = sessions
+      .map((session) => session.id)
+      .filter(Boolean);
   }, [sessions]);
 
   useEffect(() => {
@@ -235,14 +286,23 @@ export function useControlPlaneDataLoader({
       ]);
       setHealth(healthData);
       setProjects((projectData.projects || []) as ProjectSummary[]);
-      setControlPasses((controlPassData.control_passes || []) as OrchestratorControlPassRecord[]);
+      setControlPasses(
+        (controlPassData.control_passes ||
+          []) as OrchestratorControlPassRecord[],
+      );
       setControlSummary(controlPassSummaryData);
       setSessions((sessionData.sessions || []) as OrchestratorSessionRecord[]);
       setSessionSummary(sessionSummaryData);
-      setControlProfiles((profileData.profiles || []) as OrchestratorSessionControlProfile[]);
+      setControlProfiles(
+        (profileData.profiles || []) as OrchestratorSessionControlProfile[],
+      );
       setErrorMessage("");
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : "Failed to load control plane.");
+      setErrorMessage(
+        error instanceof Error
+          ? error.message
+          : "Failed to load control plane.",
+      );
     }
   }, [
     setControlPasses,
@@ -257,7 +317,9 @@ export function useControlPlaneDataLoader({
 
   const loadSessionDetail = useCallback(
     async (sessionId: string) => {
-      const detail = await fetchExecutionPlaneOrchestratorSession(sessionId, { eventLimit: 12 });
+      const detail = await fetchExecutionPlaneOrchestratorSession(sessionId, {
+        eventLimit: 12,
+      });
       if (selectedSessionIdRef.current !== sessionId) {
         return detail;
       }
@@ -269,25 +331,32 @@ export function useControlPlaneDataLoader({
         return detail.runs[0]?.id ?? "";
       });
       setSelectedPassId((current) => {
-        if (current && detail.control_passes.some((controlPass) => controlPass.id === current)) {
+        if (
+          current &&
+          detail.control_passes.some(
+            (controlPass) => controlPass.id === current,
+          )
+        ) {
           return current;
         }
         return detail.control_passes[0]?.id ?? current;
       });
       return detail;
     },
-    [setSelectedPassId, setSelectedRunId, setSelectedSession]
+    [setSelectedPassId, setSelectedRunId, setSelectedSession],
   );
 
   const loadAgentDetail = useCallback(
     async (runtimeAgentId: string) => {
-      const detail = await fetchExecutionPlaneAgentDetail(runtimeAgentId, { eventLimit: 12 });
+      const detail = await fetchExecutionPlaneAgentDetail(runtimeAgentId, {
+        eventLimit: 12,
+      });
       if (selectedAgentIdRef.current === runtimeAgentId) {
         setSelectedAgent(detail);
       }
       return detail;
     },
-    [setSelectedAgent]
+    [setSelectedAgent],
   );
 
   const scheduleOverviewRefresh = useCallback(() => {
@@ -328,7 +397,10 @@ export function useControlPlaneDataLoader({
       sessionRefreshInFlightRef.current = true;
       void loadSessionDetail(sessionId)
         .catch((error) => {
-          if (isNotFoundError(error) && selectedSessionIdRef.current === sessionId) {
+          if (
+            isNotFoundError(error) &&
+            selectedSessionIdRef.current === sessionId
+          ) {
             setSelectedSession(null);
             setSelectedRunId("");
             setSelectedPassId("");
@@ -344,7 +416,12 @@ export function useControlPlaneDataLoader({
           }
         });
     }, REFRESH_COALESCE_DELAY_MS);
-  }, [loadSessionDetail, setSelectedPassId, setSelectedRunId, setSelectedSession]);
+  }, [
+    loadSessionDetail,
+    setSelectedPassId,
+    setSelectedRunId,
+    setSelectedSession,
+  ]);
 
   const scheduleAgentRefresh = useCallback(() => {
     if (agentRefreshTimerRef.current) {
@@ -363,7 +440,10 @@ export function useControlPlaneDataLoader({
       agentRefreshInFlightRef.current = true;
       void loadAgentDetail(runtimeAgentId)
         .catch((error) => {
-          if (isNotFoundError(error) && selectedAgentIdRef.current === runtimeAgentId) {
+          if (
+            isNotFoundError(error) &&
+            selectedAgentIdRef.current === runtimeAgentId
+          ) {
             setSelectedAgent(null);
             return;
           }
@@ -406,46 +486,55 @@ export function useControlPlaneDataLoader({
 
   useEffect(() => {
     return () => {
-      if (overviewRefreshTimerRef.current) clearTimeout(overviewRefreshTimerRef.current);
-      if (sessionRefreshTimerRef.current) clearTimeout(sessionRefreshTimerRef.current);
-      if (agentRefreshTimerRef.current) clearTimeout(agentRefreshTimerRef.current);
+      if (overviewRefreshTimerRef.current)
+        clearTimeout(overviewRefreshTimerRef.current);
+      if (sessionRefreshTimerRef.current)
+        clearTimeout(sessionRefreshTimerRef.current);
+      if (agentRefreshTimerRef.current)
+        clearTimeout(agentRefreshTimerRef.current);
     };
   }, []);
 
   useSSE(
-    useCallback((event, data) => {
-      const payload = asEventRecord(data);
-      const eventProjectId = stringValue(payload?.project_id);
-      const eventSessionId =
-        stringValue(payload?.orchestrator_session_id) || stringValue(payload?.session_id);
-      const knownProjectIds = new Set(projectIdsRef.current);
-      const knownSessionIds = new Set(sessionIdsRef.current);
-      const shouldRefreshOverview =
-        OVERVIEW_REFRESH_EVENTS.has(event) &&
-        (
-          event === "project_created" ||
-          event === "project_archived" ||
-          (eventProjectId && knownProjectIds.has(eventProjectId)) ||
-          (eventSessionId && knownSessionIds.has(eventSessionId))
-        );
+    useCallback(
+      (event, data) => {
+        const payload = asEventRecord(data);
+        const eventProjectId = stringValue(payload?.project_id);
+        const eventSessionId =
+          stringValue(payload?.orchestrator_session_id) ||
+          stringValue(payload?.session_id);
+        const knownProjectIds = new Set(projectIdsRef.current);
+        const knownSessionIds = new Set(sessionIdsRef.current);
+        const shouldRefreshOverview =
+          OVERVIEW_REFRESH_EVENTS.has(event) &&
+          (event === "project_created" ||
+            event === "project_archived" ||
+            (eventProjectId && knownProjectIds.has(eventProjectId)) ||
+            (eventSessionId && knownSessionIds.has(eventSessionId)));
 
-      if (shouldRefreshOverview) {
-        scheduleOverviewRefresh();
-      }
-      if (shouldRefreshSelectedSession(event, data, selectedSessionIdRef.current)) {
-        scheduleSessionRefresh();
-      }
-      if (shouldRefreshSelectedAgent(event, data, selectedAgentIdRef.current)) {
-        scheduleAgentRefresh();
-      }
-    }, [
-      scheduleAgentRefresh,
-      scheduleOverviewRefresh,
-      scheduleSessionRefresh,
-    ]),
+        if (shouldRefreshOverview) {
+          scheduleOverviewRefresh();
+        }
+        if (
+          shouldRefreshSelectedSession(
+            event,
+            data,
+            selectedSessionIdRef.current,
+          )
+        ) {
+          scheduleSessionRefresh();
+        }
+        if (
+          shouldRefreshSelectedAgent(event, data, selectedAgentIdRef.current)
+        ) {
+          scheduleAgentRefresh();
+        }
+      },
+      [scheduleAgentRefresh, scheduleOverviewRefresh, scheduleSessionRefresh],
+    ),
     {
       eventTypes: CONTROL_PLANE_SSE_EVENT_TYPES,
-    }
+    },
   );
 
   return {

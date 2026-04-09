@@ -131,7 +131,11 @@ def list_issues(
             continue
         if approval_id and issue.approval_id != approval_id:
             continue
-        if runtime_agent_id and runtime_agent_id != issue.runtime_agent_id and runtime_agent_id not in issue.runtime_agent_ids:
+        if (
+            runtime_agent_id
+            and runtime_agent_id != issue.runtime_agent_id
+            and runtime_agent_id not in issue.runtime_agent_ids
+        ):
             continue
         issues.append(issue)
 
@@ -157,6 +161,7 @@ def create_issue(
     permission_sync_key: str = "",
     dedupe_key: str = "",
     context: dict[str, Any] | None = None,
+    run_id: str = "",
 ) -> ExecutionIssueRecord:
     """Create a new issue, or reuse an open issue with the same dedupe key."""
 
@@ -221,6 +226,7 @@ def create_issue(
             "related_command": related_command,
             "runtime_agent_id": runtime_agent_id,
             "runtime_agent_ids": list(runtime_agent_ids or []),
+            **({"run_id": run_id} if str(run_id or "").strip() else {}),
         },
     )
     if issue.permission_sync_key:
@@ -555,13 +561,16 @@ def _resolve_runtime_issue_agent_id(
         if role == "critic"
         else str(story_context.get("agent") or "").strip()
     ) or None
-    return resolve_story_runtime_agent_id(
-        str(project["id"]),
-        resolved_story_id,
-        role=role,
-        team_members=story_context.get("team_members") or [],
-        runtime_label=runtime_label,
-    ) or ""
+    return (
+        resolve_story_runtime_agent_id(
+            str(project["id"]),
+            resolved_story_id,
+            role=role,
+            team_members=story_context.get("team_members") or [],
+            runtime_label=runtime_label,
+        )
+        or ""
+    )
 
 
 def _derive_runtime_root_cause(event: str, message: str, context: dict[str, Any]) -> str:
@@ -576,12 +585,15 @@ def _derive_runtime_root_cause(event: str, message: str, context: dict[str, Any]
         return ""
 
     if event == "worker_failed":
-        return first_text(
-            event_extra.get("worker_error"),
-            event_extra.get("critic_feedback"),
-            story_context.get("last_error"),
-            message,
-        ) or "Worker execution failed."
+        return (
+            first_text(
+                event_extra.get("worker_error"),
+                event_extra.get("critic_feedback"),
+                story_context.get("last_error"),
+                message,
+            )
+            or "Worker execution failed."
+        )
     if event == "story_gate_failed":
         gate_failures = event_extra.get("gate_failures") or []
         if gate_failures and isinstance(gate_failures[0], dict):
@@ -591,24 +603,33 @@ def _derive_runtime_root_cause(event: str, message: str, context: dict[str, Any]
             if gate_output:
                 return f"{gate_name}: {gate_output}".strip()
             return f"{gate_name} failed.".strip()
-        return first_text(
-            event_extra.get("critic_feedback"),
-            story_context.get("last_error"),
-            message,
-        ) or "Quality gates failed."
+        return (
+            first_text(
+                event_extra.get("critic_feedback"),
+                story_context.get("last_error"),
+                message,
+            )
+            or "Quality gates failed."
+        )
     if event == "critic_rejected":
-        return first_text(
-            event_extra.get("critic_feedback"),
-            story_context.get("last_error"),
-            message,
-        ) or "Critic rejected the story output."
+        return (
+            first_text(
+                event_extra.get("critic_feedback"),
+                story_context.get("last_error"),
+                message,
+            )
+            or "Critic rejected the story output."
+        )
     if event == "story_stuck":
-        return first_text(
-            event_extra.get("stuck_summary"),
-            event_extra.get("error"),
-            story_context.get("last_error"),
-            message,
-        ) or "Story became stuck."
+        return (
+            first_text(
+                event_extra.get("stuck_summary"),
+                event_extra.get("error"),
+                story_context.get("last_error"),
+                message,
+            )
+            or "Story became stuck."
+        )
     if event == "story_merge_blocked":
         branch_name = event_extra.get("branch_name") or story_context.get("branch_name")
         if branch_name:
@@ -641,22 +662,31 @@ def _derive_runtime_root_cause(event: str, message: str, context: dict[str, Any]
             return f"{root_cause} ({exception_type})"
         return root_cause or "Project run failed."
     if event == "github_ci_failed":
-        return first_text(
-            event_extra.get("check_summary"),
-            event_extra.get("message"),
-            message,
-        ) or "GitHub CI failed."
+        return (
+            first_text(
+                event_extra.get("check_summary"),
+                event_extra.get("message"),
+                message,
+            )
+            or "GitHub CI failed."
+        )
     if event == "github_review_comment_received":
-        return first_text(
-            event_extra.get("review_comment"),
-            message,
-        ) or "GitHub review comment received."
+        return (
+            first_text(
+                event_extra.get("review_comment"),
+                message,
+            )
+            or "GitHub review comment received."
+        )
     if event == "github_changes_requested":
-        return first_text(
-            event_extra.get("review_comment"),
-            event_extra.get("review_state"),
-            message,
-        ) or "GitHub changes requested."
+        return (
+            first_text(
+                event_extra.get("review_comment"),
+                event_extra.get("review_state"),
+                message,
+            )
+            or "GitHub changes requested."
+        )
     return first_text(message) or "Execution issue detected."
 
 
@@ -713,9 +743,12 @@ def sync_runtime_issue_from_event(config: AutopilotConfig, event_record: dict[st
             source_event=event,
             story_id=story_id,
             runtime_agent_id=runtime_agent_id,
-            runtime_agent_ids=[runtime_agent_id] if runtime_agent_id else list(context.get("event", {}).get("extra", {}).get("runtime_agent_ids") or []),
+            runtime_agent_ids=[runtime_agent_id]
+            if runtime_agent_id
+            else list(context.get("event", {}).get("extra", {}).get("runtime_agent_ids") or []),
             dedupe_key=f"{project_id}:{spec['category']}:{dedupe_scope}",
             context=context,
+            run_id=str(event_record.get("run_id") or "").strip(),
         )
         return
 
@@ -749,7 +782,7 @@ def sync_runtime_issue_from_event(config: AutopilotConfig, event_record: dict[st
         )
         return
 
-    if event in {"run_started", "resumed", "run_finished"}:
+    if event in {"run_started", "resumed", "run_finished", "run_completed"}:
         resolve_matching_issues(
             config,
             project_id=project_id,

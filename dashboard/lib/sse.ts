@@ -19,11 +19,22 @@ export const STRUCTURED_REPLAYABLE_EVENT_TYPES = [
   "resumed",
   "guidance_added",
   "story_skipped",
+  "run_completed",
   "run_finished",
   "run_failed",
   "project_archived",
   "budget_paused",
   "interrupt_paused",
+  "github_pr_synced",
+  "github_pr_merged",
+  "github_ci_failed",
+  "github_review_comment_received",
+  "github_changes_requested",
+  "github_approved_and_green",
+  "github_auto_resumed",
+  "github_auto_resume_approval_requested",
+  "execution_issue_created",
+  "execution_issue_resolved",
   "execution_plane_orchestrator_session_created",
   "execution_plane_orchestrator_session_updated",
   "execution_plane_orchestrator_session_recommendation_applied",
@@ -104,7 +115,10 @@ function parseSSEFrame(frame: string): ParsedSSEFrame | null {
     if (!line || line.startsWith(":")) continue;
     const separatorIndex = line.indexOf(":");
     const field = separatorIndex === -1 ? line : line.slice(0, separatorIndex);
-    const value = separatorIndex === -1 ? "" : line.slice(separatorIndex + 1).replace(/^ /, "");
+    const value =
+      separatorIndex === -1
+        ? ""
+        : line.slice(separatorIndex + 1).replace(/^ /, "");
     if (field === "event" && value) {
       event = value;
       continue;
@@ -130,8 +144,14 @@ function parseSSEFrame(frame: string): ParsedSSEFrame | null {
 
 function normalizeStructuredPayload(
   frame: ParsedSSEFrame,
-  structured: boolean
-): { event: string; data: unknown; eventId: string | null; sequence: number | null; raw: unknown } {
+  structured: boolean,
+): {
+  event: string;
+  data: unknown;
+  eventId: string | null;
+  sequence: number | null;
+  raw: unknown;
+} {
   const raw = parseMaybeJson(frame.data);
   if (!structured || !isRecord(raw)) {
     return {
@@ -148,7 +168,9 @@ function normalizeStructuredPayload(
       event: raw.event,
       data: raw.data ?? raw,
       eventId: typeof raw.event_id === "string" ? raw.event_id : frame.eventId,
-      sequence: parseSequenceValue(raw.sequence) ?? parseSequenceFromEventId(frame.eventId),
+      sequence:
+        parseSequenceValue(raw.sequence) ??
+        parseSequenceFromEventId(frame.eventId),
       raw,
     };
   }
@@ -157,7 +179,9 @@ function normalizeStructuredPayload(
     event: frame.event || (typeof raw.type === "string" ? raw.type : "message"),
     data: raw,
     eventId: frame.eventId,
-    sequence: parseSequenceValue(raw.sequence) ?? parseSequenceFromEventId(frame.eventId),
+    sequence:
+      parseSequenceValue(raw.sequence) ??
+      parseSequenceFromEventId(frame.eventId),
     raw,
   };
 }
@@ -166,7 +190,7 @@ function rememberEventId(
   eventId: string,
   seenEventIds: string[],
   seenEventIdSet: Set<string>,
-  maxTrackedEventIds: number
+  maxTrackedEventIds: number,
 ): void {
   if (!eventId) return;
   if (seenEventIdSet.has(eventId)) return;
@@ -182,7 +206,7 @@ function rememberEventId(
 
 export function useSSE(
   onEvent: (event: string, data: unknown, meta?: SSEEventMeta) => void,
-  options?: SSEOptions
+  options?: SSEOptions,
 ) {
   const onEventRef = useRef(onEvent);
   const optionsRef = useRef<SSEOptions>({
@@ -204,12 +228,13 @@ export function useSSE(
     optionsRef.current = {
       eventTypes:
         options && Object.prototype.hasOwnProperty.call(options, "eventTypes")
-          ? options.eventTypes ?? null
+          ? (options.eventTypes ?? null)
           : STRUCTURED_REPLAYABLE_EVENT_TYPES,
       structured: options?.structured ?? true,
       replay: options?.replay ?? true,
       reconnectDelayMs: options?.reconnectDelayMs ?? DEFAULT_RECONNECT_DELAY_MS,
-      maxTrackedEventIds: options?.maxTrackedEventIds ?? DEFAULT_MAX_TRACKED_EVENT_IDS,
+      maxTrackedEventIds:
+        options?.maxTrackedEventIds ?? DEFAULT_MAX_TRACKED_EVENT_IDS,
     };
   }, [options]);
 
@@ -223,7 +248,10 @@ export function useSSE(
       if (reconnectTimer) {
         clearTimeout(reconnectTimer);
       }
-      reconnectTimer = setTimeout(connect, optionsRef.current.reconnectDelayMs ?? DEFAULT_RECONNECT_DELAY_MS);
+      reconnectTimer = setTimeout(
+        connect,
+        optionsRef.current.reconnectDelayMs ?? DEFAULT_RECONNECT_DELAY_MS,
+      );
     };
 
     const connect = async () => {
@@ -244,12 +272,14 @@ export function useSSE(
             headers: { Accept: "text/event-stream" },
             cache: "no-store",
             signal: abortController.signal,
-          }
+          },
         );
         if (!response.ok || !response.body) {
           throw new Error(`SSE request failed with status ${response.status}`);
         }
-        const eventTypes = currentOptions.eventTypes ? new Set(currentOptions.eventTypes) : null;
+        const eventTypes = currentOptions.eventTypes
+          ? new Set(currentOptions.eventTypes)
+          : null;
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
         let buffer = "";
@@ -259,7 +289,9 @@ export function useSSE(
           if (done) {
             break;
           }
-          buffer += normalizeChunkLineEndings(decoder.decode(value, { stream: true }));
+          buffer += normalizeChunkLineEndings(
+            decoder.decode(value, { stream: true }),
+          );
 
           let boundaryIndex = buffer.indexOf("\n\n");
           while (boundaryIndex !== -1) {
@@ -272,12 +304,18 @@ export function useSSE(
             }
             const normalized = normalizeStructuredPayload(
               frame,
-              currentOptions.structured !== false
+              currentOptions.structured !== false,
             );
             if (normalized.sequence !== null) {
-              lastSequenceRef.current = Math.max(lastSequenceRef.current, normalized.sequence);
+              lastSequenceRef.current = Math.max(
+                lastSequenceRef.current,
+                normalized.sequence,
+              );
             }
-            if (normalized.eventId && seenEventIdSetRef.current.has(normalized.eventId)) {
+            if (
+              normalized.eventId &&
+              seenEventIdSetRef.current.has(normalized.eventId)
+            ) {
               continue;
             }
             if (normalized.eventId) {
@@ -285,7 +323,8 @@ export function useSSE(
                 normalized.eventId,
                 seenEventIdsRef.current,
                 seenEventIdSetRef.current,
-                currentOptions.maxTrackedEventIds ?? DEFAULT_MAX_TRACKED_EVENT_IDS
+                currentOptions.maxTrackedEventIds ??
+                  DEFAULT_MAX_TRACKED_EVENT_IDS,
               );
             }
             if (eventTypes && !eventTypes.has(normalized.event)) {
@@ -300,7 +339,10 @@ export function useSSE(
           }
         }
       } catch (error) {
-        if (isClosed || (error instanceof DOMException && error.name === "AbortError")) {
+        if (
+          isClosed ||
+          (error instanceof DOMException && error.name === "AbortError")
+        ) {
           return;
         }
       }

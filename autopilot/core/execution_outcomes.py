@@ -146,20 +146,19 @@ def _critic_pass_rate(trace_monitor: dict[str, Any], run_id: str, verdict: Verdi
     return 0.5
 
 
-def _shipped_artifacts(detail: dict[str, Any]) -> list[str]:
+def _shipped_artifacts(trace_entries: list[dict[str, Any]]) -> list[str]:
     artifacts: list[str] = []
-    delivery_loop = dict(detail.get("delivery_loop") or {})
-    artifact = dict(delivery_loop.get("artifact") or {})
-    handoff = dict(delivery_loop.get("handoff") or {})
-
-    for candidate in (
-        str(artifact.get("path") or "").strip(),
-        str(artifact.get("url") or "").strip(),
-        str((artifact.get("handoff") or {}).get("url") or "").strip(),
-        str(handoff.get("url") or "").strip(),
-    ):
-        if candidate and candidate not in artifacts:
-            artifacts.append(candidate)
+    for entry in trace_entries:
+        handoff = dict(entry.get("handoff") or {})
+        for candidate in (
+            str(entry.get("path") or "").strip(),
+            str(entry.get("artifact_path") or "").strip(),
+            str(entry.get("url") or "").strip(),
+            str(handoff.get("url") or "").strip(),
+            str(handoff.get("head_branch") or "").strip(),
+        ):
+            if candidate and candidate not in artifacts:
+                artifacts.append(candidate)
     return artifacts
 
 
@@ -304,6 +303,34 @@ def _scoped_trace_entries(
     return [entry for entry in trace_entries if str(entry.get("run_id") or "").strip() == run_id]
 
 
+def _scoped_story_summaries(
+    detail: dict[str, Any],
+    trace_entries: list[dict[str, Any]],
+) -> list[dict[str, str]]:
+    story_by_id = {
+        str(story.get("id") or "").strip(): dict(story)
+        for story in list(detail.get("stories") or [])
+        if str(story.get("id") or "").strip()
+    }
+    ordered_story_ids: list[str] = []
+    for entry in trace_entries:
+        story_id = str(entry.get("story_id") or "").strip()
+        if story_id and story_id in story_by_id and story_id not in ordered_story_ids:
+            ordered_story_ids.append(story_id)
+
+    summaries: list[dict[str, str]] = []
+    for story_id in ordered_story_ids:
+        story = story_by_id[story_id]
+        summaries.append(
+            {
+                "title": str(story.get("title") or f"Story {story_id}").strip(),
+                "status": str(story.get("status") or "").strip(),
+                "handoff_artifact_path": str(((story.get("handoff_artifact") or {}).get("path") or "")).strip(),
+            }
+        )
+    return summaries
+
+
 def _failure_modes(
     feedback_records: list[dict[str, Any]],
     trace_monitor: dict[str, Any],
@@ -436,8 +463,12 @@ def build_execution_outcome_bundle(config: AutopilotConfig, brief_id: str) -> Ex
         feedback_records = [record for record in feedback_records if str(record.get("run_id") or "").strip() == run_id]
 
     trace_monitor = build_trace_monitor(trace_entries)
-    stories_attempted, stories_passed, stories_failed = _stories_summary(list(detail.get("stories") or []))
-    shipped_artifacts = _shipped_artifacts(detail)
+    scoped_story_summaries = _scoped_story_summaries(detail, trace_entries)
+    if scoped_story_summaries:
+        stories_attempted, stories_passed, stories_failed = _stories_summary(scoped_story_summaries)
+    else:
+        stories_attempted, stories_passed, stories_failed = _stories_summary(list(detail.get("stories") or []))
+    shipped_artifacts = _shipped_artifacts(trace_entries)
     verdict = _resolve_verdict(feedback_records, terminal_event)
     failure_modes = _failure_modes(feedback_records, trace_monitor, terminal_event)
     lessons_learned = _lessons_learned(feedback_records, failure_modes)
@@ -644,6 +675,7 @@ def build_execution_proof_bundle(config: AutopilotConfig, brief_id: str) -> dict
     if run_id:
         feedback_records = [record for record in feedback_records if str(record.get("run_id") or "").strip() == run_id]
     handoff_snapshots = _story_handoff_snapshots(trace_entries)
+    scoped_story_summaries = _scoped_story_summaries(detail, trace_entries)
 
     # Changed files from trace
     changed_files: list[str] = []
@@ -652,17 +684,25 @@ def build_execution_proof_bundle(config: AutopilotConfig, brief_id: str) -> dict
             path = str(entry.get(key) or "").strip()
             if path and path not in changed_files:
                 changed_files.append(path)
+        handoff = dict(entry.get("handoff") or {})
+        handoff_path = str(handoff.get("path") or "").strip()
+        if handoff_path and handoff_path not in changed_files:
+            changed_files.append(handoff_path)
+    for story in scoped_story_summaries:
+        handoff_artifact_path = str(story.get("handoff_artifact_path") or "").strip()
+        if handoff_artifact_path and handoff_artifact_path not in changed_files:
+            changed_files.append(handoff_artifact_path)
     if outcome is not None:
         for artifact in outcome.shipped_artifacts:
             path = str(artifact or "").strip()
             if path and not path.startswith(("http://", "https://")) and path not in changed_files:
                 changed_files.append(path)
 
-    # Tests from stories and feedback
+    # Tests from current-run story activity and feedback
     tests_executed: list[str] = []
     tests_passed = 0
     tests_failed = 0
-    for story in list(detail.get("stories") or []):
+    for story in scoped_story_summaries:
         title = str(story.get("title") or "").strip()
         status = str(story.get("status") or "").strip()
         if title:
@@ -677,6 +717,10 @@ def build_execution_proof_bundle(config: AutopilotConfig, brief_id: str) -> dict
     v2_meta = get_execution_brief_v2_metadata(project)
     if v2_meta.get("brief_approval_status") == "approved":
         approvals.append(f"Brief approved (V2): {v2_meta.get('brief_id', '')}")
+    for entry in trace_entries:
+        approval_id = str(entry.get("approval_id") or "").strip()
+        if approval_id and approval_id not in approvals:
+            approvals.append(approval_id)
 
     # Linked issues
     linked_issues: list[str] = []
@@ -685,6 +729,7 @@ def build_execution_proof_bundle(config: AutopilotConfig, brief_id: str) -> dict
             "execution_issue_created",
             "execution_issue_resolved",
             "issue_linked",
+            "github_auto_resume_approval_requested",
         }:
             issue_ref = str(entry.get("issue_id") or entry.get("issue_ref") or entry.get("url") or "").strip()
             if issue_ref and issue_ref not in linked_issues:
