@@ -198,6 +198,26 @@ def test_execution_outcome_and_proof_routes_support_v2_projects(
     project_id = project["project_id"]
 
     state = load_project_state(config, project_id)
+    state["runtime_session_id"] = "sess_old_run"
+    state["story_state"]["1"]["github_pr"] = {
+        "number": 43,
+        "url": "https://github.com/example/repo/pull/43",
+        "ci_status": "failed",
+        "review_status": "changes_requested",
+        "handoff_status": "ci_failed",
+    }
+    save_project_state(config, project_id, state)
+
+    emit_project_event(
+        config,
+        project_id,
+        event="story_progressed",
+        status="ok",
+        message="Old run handoff snapshot.",
+        story_id=1,
+    )
+
+    state = load_project_state(config, project_id)
     state["runtime_session_id"] = "sess_outcome_v2_1"
     state["started_at"] = "2026-04-05T09:00:00+00:00"
     state["cost_usage"]["project"]["estimated_cost_usd"] = 2.75
@@ -287,7 +307,9 @@ def test_execution_outcome_and_proof_routes_support_v2_projects(
     assert "src/app.py" in proof_bundle["changed_files"]
     assert "iss_123" in proof_bundle["linked_issues"]
     assert "CI success" in proof_bundle["ci_summary"]
+    assert "failed" not in proof_bundle["ci_summary"]
     assert proof_bundle["review_summary"] == "Current run approved for release."
+    assert "changes_requested" not in proof_bundle["review_summary"]
     assert proof_bundle["operator_summary"] == "V2 run completed."
     assert proof_bundle["next_recommended_action"]
 

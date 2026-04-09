@@ -163,30 +163,35 @@ def _shipped_artifacts(detail: dict[str, Any]) -> list[str]:
     return artifacts
 
 
-def _story_handoff_snapshots(detail: dict[str, Any]) -> list[dict[str, str]]:
-    snapshots: list[dict[str, str]] = []
-    for story in list(detail.get("stories") or []):
-        github_pr = dict(story.get("github_pr") or {})
-        ci_status = str(github_pr.get("ci_status") or "").strip()
-        review_status = str(github_pr.get("review_status") or "").strip()
-        handoff_status = str(github_pr.get("handoff_status") or "").strip()
+def _story_handoff_snapshots(trace_entries: list[dict[str, Any]]) -> list[dict[str, str]]:
+    snapshots_by_story: dict[str, dict[str, str]] = {}
+    for entry in trace_entries:
+        handoff = dict(entry.get("handoff") or {})
+        if not handoff:
+            continue
+
+        ci_status = str(handoff.get("ci_status") or "").strip()
+        review_status = str(handoff.get("review_status") or "").strip()
+        handoff_status = str(handoff.get("handoff_status") or "").strip()
         if not any((ci_status, review_status, handoff_status)):
             continue
-        title = str(story.get("title") or f"Story {story.get('id')}").strip()
-        snapshots.append(
-            {
-                "title": title,
-                "ci_status": ci_status,
-                "review_status": review_status,
-                "handoff_status": handoff_status,
-            }
-        )
-    return snapshots
+
+        story_key = str(handoff.get("story_id") or entry.get("story_id") or "").strip()
+        if not story_key:
+            story_key = str(len(snapshots_by_story) + 1)
+
+        snapshots_by_story[story_key] = {
+            "title": str(handoff.get("story_title") or f"Story {story_key}").strip(),
+            "ci_status": ci_status,
+            "review_status": review_status,
+            "handoff_status": handoff_status,
+        }
+    return list(snapshots_by_story.values())
 
 
-def _ci_summary(detail: dict[str, Any]) -> str:
+def _ci_summary(snapshots: list[dict[str, str]]) -> str:
     parts: list[str] = []
-    for snapshot in _story_handoff_snapshots(detail):
+    for snapshot in snapshots:
         statuses: list[str] = []
         if snapshot["ci_status"]:
             statuses.append(f"CI {snapshot['ci_status']}")
@@ -199,7 +204,10 @@ def _ci_summary(detail: dict[str, Any]) -> str:
     return "No linked CI status recorded for this run."
 
 
-def _review_summary(detail: dict[str, Any], feedback_records: list[dict[str, Any]]) -> str:
+def _review_summary(
+    snapshots: list[dict[str, str]],
+    feedback_records: list[dict[str, Any]],
+) -> str:
     review_summaries: list[str] = []
     for record in feedback_records:
         kind = str(record.get("kind") or "")
@@ -211,7 +219,7 @@ def _review_summary(detail: dict[str, Any], feedback_records: list[dict[str, Any
         return "; ".join(review_summaries[:3])
 
     fallback: list[str] = []
-    for snapshot in _story_handoff_snapshots(detail):
+    for snapshot in snapshots:
         if snapshot["review_status"]:
             fallback.append(f"{snapshot['title']}: review {snapshot['review_status']}")
     if fallback:
@@ -221,6 +229,7 @@ def _review_summary(detail: dict[str, Any], feedback_records: list[dict[str, Any
 
 def _unresolved_risks(
     detail: dict[str, Any],
+    snapshots: list[dict[str, str]],
     outcome: ExecutionOutcomeBundle | None,
 ) -> list[str]:
     risks: list[str] = []
@@ -230,7 +239,7 @@ def _unresolved_risks(
             if message and message not in risks:
                 risks.append(message)
 
-    for snapshot in _story_handoff_snapshots(detail):
+    for snapshot in snapshots:
         ci_status = snapshot["ci_status"].lower()
         review_status = snapshot["review_status"].lower()
         handoff_status = snapshot["handoff_status"].lower()
@@ -292,8 +301,7 @@ def _scoped_trace_entries(
 ) -> list[dict[str, Any]]:
     if not run_id:
         return trace_entries
-    scoped = [entry for entry in trace_entries if str(entry.get("run_id") or "").strip() == run_id]
-    return scoped or trace_entries
+    return [entry for entry in trace_entries if str(entry.get("run_id") or "").strip() == run_id]
 
 
 def _failure_modes(
@@ -419,11 +427,13 @@ def build_execution_outcome_bundle(config: AutopilotConfig, brief_id: str) -> Ex
     trace_entries = read_trace_entries(config, str(project["id"]), limit=4000)
     terminal_event = _latest_terminal_event(trace_entries)
     run_id = _resolve_run_id(detail, terminal_event)
+    scoped_trace_entries = _scoped_trace_entries(trace_entries, run_id)
+    if scoped_trace_entries:
+        trace_entries = scoped_trace_entries
+        terminal_event = _latest_terminal_event(trace_entries)
     feedback_records = read_feedback_records(config, str(project["id"]), limit=800)
     if run_id:
-        scoped_feedback = [record for record in feedback_records if str(record.get("run_id") or "").strip() == run_id]
-        if scoped_feedback:
-            feedback_records = scoped_feedback
+        feedback_records = [record for record in feedback_records if str(record.get("run_id") or "").strip() == run_id]
 
     trace_monitor = build_trace_monitor(trace_entries)
     stories_attempted, stories_passed, stories_failed = _stories_summary(list(detail.get("stories") or []))
@@ -626,13 +636,14 @@ def build_execution_proof_bundle(config: AutopilotConfig, brief_id: str) -> dict
     trace_entries = read_trace_entries(config, project_id, limit=4000)
     terminal_event = _latest_terminal_event(trace_entries)
     run_id = _resolve_run_id(detail, terminal_event)
-    trace_entries = _scoped_trace_entries(trace_entries, run_id)
-    terminal_event = _latest_terminal_event(trace_entries)
+    scoped_trace_entries = _scoped_trace_entries(trace_entries, run_id)
+    if scoped_trace_entries:
+        trace_entries = scoped_trace_entries
+        terminal_event = _latest_terminal_event(trace_entries)
     feedback_records = read_feedback_records(config, project_id, limit=800)
     if run_id:
-        scoped_feedback = [record for record in feedback_records if str(record.get("run_id") or "").strip() == run_id]
-        if scoped_feedback:
-            feedback_records = scoped_feedback
+        feedback_records = [record for record in feedback_records if str(record.get("run_id") or "").strip() == run_id]
+    handoff_snapshots = _story_handoff_snapshots(trace_entries)
 
     # Changed files from trace
     changed_files: list[str] = []
@@ -640,6 +651,11 @@ def build_execution_proof_bundle(config: AutopilotConfig, brief_id: str) -> dict
         for key in ("path", "file_path", "artifact_path", "relpath"):
             path = str(entry.get(key) or "").strip()
             if path and path not in changed_files:
+                changed_files.append(path)
+    if outcome is not None:
+        for artifact in outcome.shipped_artifacts:
+            path = str(artifact or "").strip()
+            if path and not path.startswith(("http://", "https://")) and path not in changed_files:
                 changed_files.append(path)
 
     # Tests from stories and feedback
@@ -674,9 +690,9 @@ def build_execution_proof_bundle(config: AutopilotConfig, brief_id: str) -> dict
             if issue_ref and issue_ref not in linked_issues:
                 linked_issues.append(issue_ref)
 
-    ci_summary = _ci_summary(detail)
-    review_summary = _review_summary(detail, feedback_records)
-    unresolved_risks = _unresolved_risks(detail, outcome)
+    ci_summary = _ci_summary(handoff_snapshots)
+    review_summary = _review_summary(handoff_snapshots, feedback_records)
+    unresolved_risks = _unresolved_risks(detail, handoff_snapshots, outcome)
     operator_summary = _operator_summary(detail, terminal_event, outcome)
     next_recommended_action = _next_recommended_action(outcome, unresolved_risks)
 
