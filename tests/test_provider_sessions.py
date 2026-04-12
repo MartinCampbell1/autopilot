@@ -49,6 +49,7 @@ class TestProviderSessions:
     def test_provider_login_command(self) -> None:
         assert provider_login_command("codex") == ["codex", "login"]
         assert provider_login_command("claude") == ["claude", "auth", "login"]
+        assert provider_login_command("gemini") == ["gemini"]
         assert provider_login_command("ollama") == []
         assert provider_login_command("openai_compatible") == []
         assert provider_login_command("local_command") == []

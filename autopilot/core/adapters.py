@@ -779,7 +779,7 @@ class GeminiLocalAdapter(_ManagedHomeCliAdapter):
     adapter_id = "gemini_local"
     provider_family = "gemini"
     cli_name = "gemini"
-    install_hint = "npm i -g @anthropic-ai/gemini"
+    install_hint = "npm i -g @google/gemini-cli"
     session_copy_targets = ((".config/gemini", ".config/gemini"), (".gemini", ".gemini"))
 
     def check_installed_command(self) -> list[str]:

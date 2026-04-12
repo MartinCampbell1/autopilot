@@ -34,7 +34,7 @@ class TestProviders:
 
     def test_gemini_command(self) -> None:
         cmd = build_cli_command("gemini", "do the thing", model=None)
-        assert cmd[0] == "gemini"
+        assert cmd == ["gemini", "-p", "do the thing"]
 
     def test_ollama_command(self) -> None:
         cmd = build_cli_command("ollama", "do the thing", model="llama3.2")
